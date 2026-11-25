@@ -3,12 +3,12 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const {fixture} = require('./native_pc_frida_probe_fixture.js');
 
-const fp = value => BigInt(value) * 4294967296n;
+const fp = value => BigInt(Math.round(value * 4294967296));
 const plain = value => JSON.parse(JSON.stringify(value));
 
-function scenario(platform, raw = false, eid = 'enemy_test') {
+function scenario(platform, raw = false, eid = 'enemy_test', shared = null, {initialHp=100,maxHp=1000,scopeObserver=true} = {}) {
   const adapter = platform === 'native_pc' ? 'event_probe_native_pc.js' : 'event_probe_android2791.js';
-  const f = fixture({platform, enemyHpState: true, sourcePath: path.join(__dirname, '..', adapter),
+  const f = shared?.f ?? fixture({platform, enemyHpState: true, sourcePath: path.join(process.env.ARKDPS_PROBE_FIXTURE_ROOT ?? path.join(__dirname, '..'), adapter),
     globals: raw ? {arkdpsCoalesceEnemyHp: false} : {}});
   let phase = 4, mode = 'local', stamps = 0;
   f.context.observeScope = when => {
@@ -17,12 +17,12 @@ function scenario(platform, raw = false, eid = 'enemy_test') {
       frame: when.frame, game_time: when.game_time, scope_key: 'synthetic:round:8',
       phase, round: 8, collection_mode: mode};
   };
-  f.vm.runInContext('probeAdapter.stampClock = observeScope', f.context);
+  if(scopeObserver)f.vm.runInContext('probeAdapter.stampClock = observeScope', f.context);
 
-  const enemy = f.unit(eid, 12), attributes = f.alloc(), cache = f.alloc();
+  const enemy = f.unit(eid, shared ? ++shared.nextUid : 12), attributes = f.alloc(), cache = f.alloc();
   const maxHpSlot = cache.add(0x20);
   f.write(enemy, f.enemyClass);
-  f.write(enemy.add(0x40), fp(100));
+  f.write(enemy.add(0x40), fp(initialHp));
   f.write(enemy.add(0x25), 0);
   f.write(enemy.add(0x26), 0);
   f.write(enemy.add(0x360), f.alloc());
@@ -30,7 +30,7 @@ function scenario(platform, raw = false, eid = 'enemy_test') {
   f.write(attributes.add(0x68), cache);
   f.write(cache.add(0x18), 1);
   f.write(maxHpSlot, 0n);
-  f.write(maxHpSlot.add(8), fp(1000));
+  f.write(maxHpSlot.add(8), fp(maxHp));
   f.write(maxHpSlot.add(0x10), 1);
 
   f.clock(1, 0n);
@@ -40,8 +40,8 @@ function scenario(platform, raw = false, eid = 'enemy_test') {
   birth.onLeave.call(birthCall);
   f.clock(30, fp(1));
 
-  function setHp(hp, change = () => {}, method = 'SetHpInternal') {
-    const callback = f.callback(method, f.entity), call = {};
+  function setHp(hp, change = () => {}, method = 'SetHpInternal', threadId = 1) {
+    const callback = f.callback(method, f.entity), call = {threadId};
     const before = stamps;
     callback.onEnter.call(call, [enemy]);
     f.write(enemy.add(0x40), fp(hp));
@@ -62,7 +62,7 @@ function scenario(platform, raw = false, eid = 'enemy_test') {
     assert.equal(mark.active, 0);
     return plain(f.context.rpc.exports.readEvents(0, mark.sequence));
   }
-  return {f, enemy, setHp, setMaxHp, read,
+  return {f, enemy, setHp, setMaxHp, read, nextUid:12,
     setPhase: value => {phase = value;}, setMode: value => {mode = value;}};
 }
 
@@ -157,3 +157,5 @@ for (const platform of ['native_pc', 'mumu']) {
     assert.deepEqual(batch.events.filter(event => event.kind === 'enemy_hp').map(event => event.hp_after), [110, 120]);
   }
 }
+
+module.exports={scenario};

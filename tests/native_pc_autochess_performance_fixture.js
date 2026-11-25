@@ -66,6 +66,38 @@ check('native_lazy_arguments_preserve_production_callback_batches_and_ack',()=>{
  };
  assert.deepEqual(observe(true),observe(false));
 });
+check('scope_container_version_recovery_is_bounded_and_does_not_walk_actors',()=>{
+ for(const platform of ['native_pc','mumu'])for(const container of ['dict','players']){
+  const f=owned({platform}),original=f.stamp().native_autochess_scope;
+  const oldBody=vm.runInContext('nativeAutoBodyCache',f.context),parse=f.fullReads;
+  const version=(container==='dict'?f.dict.add(0x2c):f.playerList.add(0x1c));
+  f.write(version,version.readS32()+1);
+  // Invalid actor-list memory would fail a full body read. Scope recovery must
+  // only establish the existing root/account graph and leave body proof alone.
+  f.write(f.roleList.add(0x18),9999);
+  const recovered=f.stamp().native_autochess_scope;
+  assert.equal(recovered.status,'available');assert.equal(recovered.scope_key,original.scope_key);
+  assert.equal(f.fullReads,parse);assert.equal(vm.runInContext('nativeAutoBodyCache',f.context),oldBody);
+  assert.equal(vm.runInContext('nativeAutoOwners',f.context),null);
+  assert.equal(f.stamp().native_autochess_scope.status,'available','next callback cannot stay cache-unavailable');
+ }
+});
+check('scope_recovery_never_rebinds_changed_accounts_slots_roots_or_manager',()=>{
+ for(const change of ['account','slot','root','manager','second_manager']){
+  const f=owned();
+  const version=f.playerList.add(0x1c);f.write(version,version.readS32()+1);
+  if(change==='account')f.write(f.players[0][1].add(0x18),f.text('different-account'));
+  if(change==='slot')f.write(f.playerList.add(0x10).readPointer().add(0x28),f.players[1][1]);
+  if(change==='root')f.write(f.controller.add(0x160),f.ptr(0));
+  const entries=f.dict.add(0x18).readPointer();
+  if(change==='manager')f.write(entries.add(0x30),f.ptr(0));
+  if(change==='second_manager'){
+   f.write(f.dict.add(0x20),2);f.write(entries.add(0x18),2);
+   f.write(entries.add(0x38),123);f.write(entries.add(0x40),f.alloc());f.write(entries.add(0x48),f.manager);
+  }
+  assert.equal(f.stamp().native_autochess_scope.status,'unknown',change);
+ }
+});
 check('late_event_does_not_blind_following_defense_or_assist_events',()=>{
  for(const phase of [4,5]){
   const f=world();f.write(f.machine.add(0x5c),phase);f.mark();
@@ -88,8 +120,8 @@ for(const roles of [32,40]){
   return {first,mark,drain,ack};
  },{rolesPerPlayer:roles/4}));
  check('warm_'+roles+'_read_budgets_and_callback_event_equivalence',()=>{
-  for(const [name,budget,call]of [['scope',78,f=>f.stamp()],['mark',roles===32?973:1133,f=>f.mark()],
-   ['10_output_pairs',2180,f=>modifierPairs(f,false)],['10_unlogged_pairs',1830,f=>modifierPairs(f,true)]]){
+  for(const [name,budget,call]of [['scope',66,f=>f.stamp()],['mark',roles===32?948:1108,f=>f.mark()],
+   ['10_output_pairs',1900,f=>modifierPairs(f,false)],['10_unlogged_pairs',1550,f=>modifierPairs(f,true)]]){
    const f=owned({rolesPerPlayer:roles/4}),measured=readCount(f,()=>call(f));
    assert.equal(measured.reads,budget,name+' native-read budget');
    assert.equal(f.fullReads,1,'unchanged warm body must avoid parsing another full roster');
@@ -100,7 +132,7 @@ for(const roles of [32,40]){
   const android=owned({platform:'mumu',rolesPerPlayer:roles/4});
   const scope=readCount(android,()=>android.stamp());
   assert.equal(scope.result.native_autochess_scope.status,'available');
-  assert.equal(scope.reads,118,'Android scope native-read budget');
+  assert.equal(scope.reads,106,'Android scope native-read budget');
   androidScopeReads.push({roles,reads:scope.reads});
  });
 }

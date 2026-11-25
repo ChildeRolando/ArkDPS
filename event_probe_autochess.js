@@ -646,19 +646,68 @@ function finishAutoChess(result,identity,frame,fixed){
  // A reused body has passed both live guard passes. Keep the plan of what to
  // read on it, while each event must still read and compare every guard.
  result.scopeGuards??=scopeGuardPlan(result);
- nativeAutoCache={addresses:header.addresses,identity:{...identity},fingerprint,headerKey,roots,scopeGuards:result.scopeGuards};
+ nativeAutoCache={addresses:header.addresses,identity:{...identity},fingerprint,headerKey,roots,scopeGuards:result.scopeGuards,scopeWitness:{header:result.header,playerList:result.playerList,playerItems:result.playerItems,ownerRefs:result.ownerRefs}};
  autoCollectionOwners(result,scope_key,collection_mode,frame,Number(BigInt(fixed))/4294967296);
  return {protocol_version:1,status:'available',verified_same_frame:true,frame,
   game_time:Number(BigInt(fixed))/4294967296,scope_key,phase:header.phase,round:header.round,
   self_player_index:header.self,players,memberships,unknown_memberships:unknown,collection_mode,
   match_key:header.manager.toString()+':'+header.center.toString()};
 }
-function stampAutoChessClock(when){
+// A container version can change without changing the battle/account graph.
+// Re-prove just that graph once, without walking character/token membership.
+// This slow path never publishes/replaces a body or its actor ownership map.
+function refreshAutoChessScope(cached,when){
+ const before=currentNativeIdentity(),stage=nativeAutoStage;
+ if(!before||Object.keys(before).some(k=>before[k]!==cached.identity[k]))return false;
+ const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
+ if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time)return false;
+ if(!stage?.enabled||!stage.stageAddress.readPointer().equals(stage.stagePointer))return false;
+ validateScopeStage(stage,before.level,stage.stagePointer);
+ const read=autoRead(),header=autoHeader(before,read),model=read.p(read.at(header.center,'playerDataModel'));
+ read.object(model,'AutoChessPlayerDataModel',AUTO_NS,17,[[0,'m_allPlayerDatas',0x18,[21]]]);
+ const playerList=read.p(read.at(model,'m_allPlayerDatas')),pairs=autoPairs(playerList,8,read,[18]);
+ if(!pairs.length)return false;
+ const playerItems=read.p(read.at(playerList,'_items')),playerVersion=read.i(read.at(playerList,'_version'));
+ const players=[],ownerRefs=[],indexes=new Set(),uids=new Set();
+ for(const [index,value]of pairs){
+  read.object(value,'ScenePlayerData','',37,[[0,'index',0x10,[8]],[1,'uid',0x18,[14]]]);
+  const actual=read.i(read.at(value,'index')),uidRef=read.p(read.at(value,'uid')),uid=read.text(uidRef);
+  if(actual!==index||index<0||indexes.has(index)||!uid||uids.has(uid))return false;
+  indexes.add(index);uids.add(uid);players.push({index,uid});
+  ownerRefs.push({value,index,uidRef,slot:playerItems.add(0x20+16*ownerRefs.length),
+   indexAddress:read.at(value,'index'),uidAddress:read.at(value,'uid')});
+ }
+ const fingerprint=JSON.stringify(players.map(p=>[p.index,p.uid]).sort((a,b)=>a[0]-b[0]));
+ const old=cached.scopeWitness;
+ if(!old||fingerprint!==cached.fingerprint||!playerList.equals(old.playerList)||!playerItems.equals(old.playerItems)||
+    ownerRefs.length!==old.ownerRefs.length||ownerRefs.some((owner,index)=>{
+     const prior=old.ownerRefs[index];
+     return owner.index!==prior.index||!owner.value.equals(prior.value)||!owner.uidRef.equals(prior.uidRef)||!owner.slot.equals(prior.slot);
+    })||['host','dict','dictEntries','managerSlot','manager','status','model','machine','center'].some(k=>!header[k].equals(old.header[k])))return false;
+ // Independent live closing witnesses, including text/slot/account values.
+ read.validate();read.validate();
+ validateScopeStage(stage,before.level,stage.stagePointer);
+ const after=currentNativeIdentity();
+ if(!after||Object.keys(before).some(k=>before[k]!==after[k])||
+    !stage.stageAddress.readPointer().equals(stage.stagePointer)||clock.readU32()!==frame||
+    clock.add(4).readS64().toString()!==fixed)return false;
+ const result={header,model,playerList,playerItems,playerVersion,ownerRefs,
+  playerAddresses:{list:read.at(model,'m_allPlayerDatas'),items:read.at(playerList,'_items'),
+   count:read.at(playerList,'_size'),version:read.at(playerList,'_version')}};
+ nativeAutoCache={...cached,addresses:header.addresses,scopeGuards:scopeGuardPlan(result),scopeWitness:result};
+ // The full body was not revalidated here; no old actor map may prune events.
+ nativeAutoOwners=null;
+ return true;
+}
+function stampAutoChessClock(when,allowRefresh=true){
  if(!nativeAutoStage?.enabled)return;
  const unknown=reason=>{when.native_autochess_scope={protocol_version:1,status:'unknown',
   verified_same_frame:false,frame:when.frame,game_time:when.game_time,reason};};
+ let guardFailed=false;
+ const cached=nativeAutoCache;
+ const guard=()=>{try{validateScopeGuards(cached.scopeGuards);}catch(e){guardFailed=true;throw e;}};
  try{
-  const cached=nativeAutoCache,before=currentNativeIdentity();
+  const before=currentNativeIdentity();
   if(!before)throw new Error('AutoChess scope cache unavailable');
   const stagePointer=nativeAutoStage.stageAddress.readPointer();
   if(!stagePointer.equals(nativeAutoStage.stagePointer)){
@@ -673,10 +722,10 @@ function stampAutoChessClock(when){
   }
   const {phase:phaseAddress,round:roundAddress}=cached.addresses;
   validateScopeStage(nativeAutoStage,before.level,stagePointer);
-  validateScopeGuards(cached.scopeGuards);
+  guard();
   const phase=phaseAddress.readS32(),round=roundAddress.readS32();
   if(![0,1,2,3,4,5,6,7,8,9,100,101,102,103,104].includes(phase)||round<0)throw new Error('AutoChess event phase/round');
-  validateScopeGuards(cached.scopeGuards);
+  guard();
   validateScopeStage(nativeAutoStage,before.level,stagePointer);
   if(phaseAddress.readS32()!==phase||roundAddress.readS32()!==round||
      !nativeAutoStage.stageAddress.readPointer().equals(stagePointer))throw new Error('AutoChess changed during read');
@@ -688,7 +737,12 @@ function stampAutoChessClock(when){
   const scope_key=autoScope(cached.roots,phase,round,frame,fixed,cached.fingerprint,cached.headerKey);
   when.native_autochess_scope={protocol_version:1,status:'available',verified_same_frame:true,
    frame,game_time:when.game_time,scope_key,phase,round,collection_mode:autoCollectionMode(scope_key,phase)};
- }catch(e){nativeAutoCache=null;unknown(String(e));}
+ }catch(e){
+  if(allowRefresh&&guardFailed&&cached){
+   try{if(refreshAutoChessScope(cached,when))return stampAutoChessClock(when,false);}catch(refreshError){/* Preserve the original failure. */}
+  }
+  nativeAutoCache=null;nativeAutoOwners=null;unknown(String(e));
+ }
 }
 const AUTO_PRESENCE_SLOT_LIMIT=4096,AUTO_PRESENCE_CHARACTER_LIMIT=128;
 const autoPresenceLineages=new Map();

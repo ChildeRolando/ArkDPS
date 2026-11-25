@@ -629,8 +629,13 @@ function damageSettlementQuality(){
   damage_settlement_source_issues:[...damageSettlementSourceIssues.values()]};
 }
 function time(allowRetry = false, withEventScope = true) {
- const frame = clock.readU32();
- const game_time = fp(clock.add(4));
+ // One owned copy for the opening clock, followed by the same independent
+ // frame guard as before. Native PC pays one bridge call instead of two;
+ // no frame/time value survives this callback invocation.
+ const bytes=clock.readByteArray(12);
+ if(bytes===null||bytes.byteLength!==12)throw new Error('callback clock unavailable');
+ const view=new DataView(bytes),frame=view.getUint32(0,true);
+ const game_time=Number(view.getBigInt64(4,true))/4294967296;
  if (clock.readU32() !== frame) {
   if (allowRetry) return null;
   throw new Error('unstable callback clock');
@@ -1414,11 +1419,16 @@ function omitUnrelatedAutoChessEvent(event){
 // prove subsequent healing. An exactly contiguous, increasing tail with the
 // same verified MaxHP then contributes its last HP minus its first HP.
 const enemyHpBirths=new Map();
-let enemyHpRun=null;
+const ENEMY_HP_RUN_LIMIT=128;
+const enemyHpRuns=new Map();
+let enemyHpWindow=null;
 function flushCoalescedEnemyHp(){
- const tail=enemyHpRun?.tail;
- enemyHpRun=null;
- if(tail)enqueueEvent(null,'enemy_hp',0,tail.when,{method:tail.method},tail.evidence);
+ // Only unpublished tails are mutable. Every transport/authoritative boundary
+ // drains this bounded window before exposing a sequence. Targets are independent;
+ // within each target the first witness and all damage boundaries stay ordered.
+ const runs=[...enemyHpRuns.values()];
+ enemyHpRuns.clear();enemyHpWindow=null;
+ for(const {tail} of runs)if(tail)enqueueEvent(null,'enemy_hp',0,tail.when,{method:tail.method},tail.evidence);
 }
 function resetEnemyHpCoalescing(){
  if(!coalesceEnemyHp)return;
@@ -1543,7 +1553,11 @@ function recordEnemyHp(write,when,method,hp,maxHp){
      &&0<hpBefore&&hpBefore<hp&&hp<=maxHp){
    // Preserve the first +1 as an explicit continuity witness in the compact record.
    const unitTick=(eid==='enemy_1061_zomshd'||eid==='enemy_1061_zomshd_2')&&hp-hpBefore===1;
-   const run=enemyHpRun;
+   const window=enemyHpWindow;
+   if(window&&(window.thread!==write.thread||window.when.frame!==when.frame||
+      window.when.game_time!==when.game_time||window.when.settlementScope!==when.settlementScope||
+      !sameNativeEventScope(window.when,when)))flushCoalescedEnemyHp();
+   const run=enemyHpRuns.get(key);
    if(run&&run.unitTick===unitTick&&run.key===key&&run.uid===uid&&run.eid===eid&&run.maxHp===maxHp
       &&run.when.frame===when.frame&&run.when.game_time===when.game_time
       &&run.when.settlementScope===when.settlementScope
@@ -1556,12 +1570,18 @@ function recordEnemyHp(write,when,method,hp,maxHp){
     run.after=hp;
     return;
    }
-   flushCoalescedEnemyHp();
-   if(unitTick){
+   // A discontinuity for one target is a boundary for the entire window.
+   if(run||enemyHpRuns.size>=ENEMY_HP_RUN_LIMIT)flushCoalescedEnemyHp();
+   const witnessed=birth.healWitness;
+   const first=!witnessed||witnessed.maxHp!==maxHp||
+    witnessed.when.settlementScope!==when.settlementScope||!sameNativeEventScope(witnessed.when,when);
+   enemyHpWindow={thread:write.thread,when};
+   if(unitTick||!first){
     // Stage even the first tick so an already published sequence is immutable.
-    enemyHpRun={key,uid,eid,when,maxHp,after:hp,unitTick,tail:{when,method,evidence}};
+    enemyHpRuns.set(key,{key,uid,eid,when,maxHp,after:hp,unitTick,tail:{when,method,evidence}});
    }else if(enqueueEvent(null,'enemy_hp',0,when,{method},evidence)){
-    enemyHpRun={key,uid,eid,when,maxHp,after:hp,unitTick,tail:null};
+    enemyHpRuns.set(key,{key,uid,eid,when,maxHp,after:hp,unitTick,tail:null});
+    birth.healWitness={when,maxHp};
    }
    return;
   }
@@ -2380,7 +2400,7 @@ function installEnemyEntryHooks() {
      const object=args[0],uid=object.add(0x18).readU32();
       if(coalesceEnemyHp){
        const instance=String(uid);
-       if(enemyHpRun?.uid===instance)flushCoalescedEnemyHp();
+       if([...enemyHpRuns.values()].some(run=>run.uid===instance))flushCoalescedEnemyHp();
        enemyHpBirths.delete(instance);
       }
       // Retire an in-flight setter before the pooled pointer can be reused.
@@ -2493,6 +2513,12 @@ function installEnemyStateHooks() {
       if(enemy.isNull())return;
       const existing=enemyHpWrites.get(key);
       if(existing){
+       // Same-thread nested setters may implement the outer write. A concurrent
+       // writer cannot share its before/after certificate or coalescing tail.
+       if(existing.thread!==undefined&&this.threadId!==undefined&&existing.thread!==this.threadId){
+        if(coalesceEnemyHp)flushCoalescedEnemyHp();
+        existing.superseded=true;enemyStateUnknown=true;return;
+       }
        if(attributeChange&&existing.enemyTarget&&existing.maxHpBefore===null){
         if(coalesceEnemyHp)flushCoalescedEnemyHp();
         existing.maxHpBefore=fixedArg(args[2]);
@@ -2514,7 +2540,7 @@ function installEnemyStateHooks() {
       const evidence=enemyIdentity(enemy,uid),hpBefore=targetHp(enemy);
       if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
       const maxHpBefore=attributeChange?fixedArg(args[2]):null;
-      this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,deferScope,superseded:false};
+      this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,deferScope,thread:this.threadId,superseded:false};
       enemyHpWrites.set(key,this.write);
       beginEnemyHook(label);
      }catch(e){
@@ -3158,6 +3184,16 @@ let terminalBoundary=null,terminalGeneration=0;
 const terminalDiagnostics={destroy_entered:0,destroy_left:0,candidates:0,captured:0,rejected:0,invalidated:0,last_rejection:null};
 function countTerminalDiagnostic(key){terminalDiagnostics[key]=Math.min(1000000,terminalDiagnostics[key]+1);}
 function rejectTerminal(reason){countTerminalDiagnostic('rejected');terminalDiagnostics.last_rejection=reason;}
+// IL2CPP class metadata is immutable for this attached process. Cache only
+// its name, never object class pointers, owners, roots or gameplay fields.
+const terminalClassNames=new Map();
+function terminalClassName(klass){
+ const key=klass.toString();
+ if(terminalClassNames.has(key))return terminalClassNames.get(key);
+ const name=className(klass);
+ if(terminalClassNames.size<128)terminalClassNames.set(key,name);
+ return name;
+}
 function terminalIdentity(controller,controllerClass,reject){
  if(controller.isNull())return reject?.('singleton_empty')??null;
  const klass=controller.readPointer();
@@ -3175,14 +3211,14 @@ function terminalIdentity(controller,controllerClass,reject){
  if(logger.isNull())return reject?.('logger_missing')??null;
  if(level.isNull())return reject?.('level_missing')??null;
  if(!native.add(probeAdapter.nativeOwnerOffset??0x28).readPointer().equals(controller))return reject?.('native_owner_mismatch')??null;
- const loggerClass=className(logger.readPointer());
+ const loggerClass=terminalClassName(logger.readPointer());
  if(loggerClass!=='BattleLogger')return reject?.('logger_class_mismatch',loggerClass)??null;
  if(!logger.add(probeAdapter.loggerOwnerOffset??0x18).readPointer().equals(controller))return reject?.('logger_owner_mismatch')??null;
- const levelClass=className(level.readPointer());
+ const levelClass=terminalClassName(level.readPointer());
  if(levelClass!=='LevelData')return reject?.('level_class_mismatch',levelClass)??null;
  const stats=logger.add(probeAdapter.statsOffset??0x30).readPointer();
  if(stats.isNull())return reject?.('stats_missing')??null;
- const statsClass=className(stats.readPointer());
+ const statsClass=terminalClassName(stats.readPointer());
  if(statsClass!=='BattleStats')return reject?.('stats_class_mismatch',statsClass)??null;
  return {controller:controller.toString(),native:native.toString(),logger:logger.toString(),
   stats:stats.toString(),level:level.toString()};

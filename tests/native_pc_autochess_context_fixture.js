@@ -3,10 +3,10 @@ const assert=require('node:assert/strict');
 const path=require('node:path');
 const vm=require('node:vm');
 const {fixture}=require('./native_pc_frida_probe_fixture.js');
-const sourcePath=path.join(__dirname,'..','event_probe_native_pc.js');
+const sourcePath=path.join(process.env.ARKDPS_PROBE_FIXTURE_ROOT ?? path.join(__dirname,'..'),'event_probe_native_pc.js');
 
 function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=false,unknownToken=false,tokenCount=1,rolesPerPlayer=1,fixtureOptions={},platform='native_pc'}={}){
- const actualSource=platform==='mumu'?path.join(__dirname,'..','event_probe_android2791.js'):sourcePath;
+ const actualSource=platform==='mumu'?path.join(process.env.ARKDPS_PROBE_FIXTURE_ROOT ?? path.join(__dirname,'..'),'event_probe_android2791.js'):sourcePath;
  const f=fixture({platform,sourcePath:actualSource,...fixtureOptions}),zero=f.ptr(0),NS='Torappu.Battle.AutoChess';
  const adapter=vm.runInContext('probeAdapter',f.context);
  const oldMark=f.context.rpc.exports.mark();
@@ -353,7 +353,7 @@ assert.equal(epochSummary.baseline_discarded_skill_events.length,2,'evidence ded
 assert.equal(epochSummary.baseline_discarded_skill_events_complete,true);
 
 for(const platform of ['native_pc','android']){
- const ordinary=fixture({platform,sourcePath:platform==='native_pc'?sourcePath:path.join(__dirname,'..','event_probe_android2791.js')});
+ const ordinary=fixture({platform,sourcePath:platform==='native_pc'?sourcePath:path.join(process.env.ARKDPS_PROBE_FIXTURE_ROOT ?? path.join(__dirname,'..'),'event_probe_android2791.js')});
  emitSkill(ordinary,101);const m=ordinary.context.rpc.exports.mark();
  const empty=ordinary.context.rpc.exports.readEvents(m.sequence,m.sequence);
  assert.equal(empty.events.length,0);
