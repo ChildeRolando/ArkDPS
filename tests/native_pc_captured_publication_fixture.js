@@ -4,7 +4,10 @@ let live=0;
 const context=vm.createContext({__pid:()=>1,__nativeActive:()=>0,__read:()=>{live++;throw Error('LIVE');},__nativeCall:()=>{live++;throw Error('LIVE CALL');}});
 vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8'),context);
 const adapter=fs.readFileSync('event_probe_native_pc.js','utf8');vm.runInContext(adapter.slice(adapter.indexOf('function nativeCapturePlan(')),context);
-const shared=fs.readFileSync('event_probe_runtime.js','utf8');vm.runInContext(shared.slice(shared.indexOf('function __arkdpsPublicationServed('),shared.indexOf('function receiveEventRequest(')),context);
+const shared=fs.readFileSync('event_probe_runtime.js','utf8');vm.runInContext(shared.slice(shared.indexOf('function capturedUtf16('),shared.indexOf('function buff(')),context);
+const autoSource=fs.readFileSync('event_probe_autochess.js','utf8');vm.runInContext(autoSource.slice(autoSource.indexOf('function scopeBlock('),autoSource.indexOf('function scopeGuardGroup(')),context);
+vm.runInContext(shared.slice(shared.indexOf('function __arkdpsPublicationServed('),shared.indexOf('function receiveEventRequest(')),context);
+context.graphBatchSource=process.env.ARKDPS_SOURCE_GRAPH_BATCH==='1';
 vm.runInContext(`
 const mem=new Map();
 function write(address,bytes){new Uint8Array(bytes).forEach((b,i)=>mem.set(BigInt(address)+BigInt(i),b));}
@@ -51,6 +54,19 @@ time=()=>__arkdpsReplayWitness('clock_open',()=>{const v=new DataView(ptr(0xb000
 active=0;activeHooks=new Map();coalesceEnemyHp=false;sequence=3;epoch=8;fatal=null;stopped=false;queue=[{sequence:1},{sequence:2},{sequence:3}];acknowledgedSequence=0;readThroughSequence=0;hpContext=[];hpContextDropped=0;autoChessRoundStartEnvelope=()=>({});
 eventQuality=()=>({enemy_damage_ready:true});currentTerminalBoundary=()=>null;terminalDiagnostics={};
 nativeInitialEnvelope=()=>({initial_boundary:null});probeAdapter={capturedPublicationBinding:nativeCapturedPublicationBinding};
+if(graphBatchSource){
+ // Source acquisition simulator only: actual graph field geometry is read
+ // through the strict owned JS provider; native graph program has its own tests.
+ nativeGraphChunks=()=>[];
+ globalThis.__arkdpsOwnedGraphReadBatch=(kind,readGraph,chunk)=>({slot(slot){
+  const fields=kind==='scope'?readGraph.fields:readGraph.chunks.flatMap(part=>part.fields),field=fields[chunk*32+slot];if(!field)__arkdpsReplayGap('unrequested graph slot');
+  return __arkdpsReplayWitness(field.role,()=>{
+   let address=ptr(field.absolute_address);for(const off of field.pointer_offsets)address=address.add(off).readPointer();address=address.add(field.offset);
+   if(field.kind!=='utf16')return new DataView(address.readByteArray(field.bytes));
+   const klass=address.readPointer().value,n=address.add(16).readS32(),text=address.add(20).readUtf16String(n),bytes=new ArrayBuffer(12+2*n),view=new DataView(bytes);view.setBigUint64(0,klass,true);view.setInt32(8,n,true);for(let i=0;i<n;i++)view.setUint16(12+2*i,text.charCodeAt(i),true);return view;
+  });
+ }});
+}
 function attempt(change){const r=record();if(change)change(r);__arkdpsReplayBegin(r);let result;try{result=__arkdpsOnClosedRecord(r);}finally{__arkdpsReplayEnd();}return result;}
 let scopeReadCount=0;const originalWitness=__arkdpsReplayWitness;__arkdpsReplayWitness=(role,body)=>{if(role.startsWith('scope.'))scopeReadCount++;return originalWitness(role,body);};
 globalThis.good=attempt();const firstScopeReads=scopeReadCount;attempt();globalThis.scopeReadsRepeat=firstScopeReads>=graph.fields.length&&scopeReadCount===firstScopeReads*2;__arkdpsReplayWitness=originalWitness;
@@ -67,7 +83,8 @@ globalThis.wrongRoots=attempt(r=>{nativeCaptureScopes.set(1,{...graph,context:{.
 text(0xa000,'AUTOCHESS_LIVE');integer(0xe000,4,4);integer(0xe004,8,4);text(0xc000,'account-one');
 const autoGraph=nativeCaptureScopeGraph({identity,roots,scopeGuards:[],addresses:{phase:ptr(0xe000),round:ptr(0xe004)},headerKey:'header',fingerprint:'fingerprint'}, {key:roots+':AUTOCHESS_LIVE',enabled:true,stageAddress:ptr(0x5018),stagePointer:ptr(0xa000)},ptr(0xb000),2);
 nativeCaptureScopes.set(2,autoGraph);
-const autoGuards=[['text',ptr(0xc000),'account-one']],autoBinding={...binding,native_stage_id:'AUTOCHESS_LIVE',native_autochess_context:{status:'available',scope_key:roots+':scope',phase:4,round:8,frame:1,game_time:1,memberships:[{data_uid:7,player_uid:'account-one'}]}};
+const autoGuards=[['text',ptr(0xc000),'account-one']];for(let i=1;i<=65;i++){integer(0xf000+i*4,1000+i,4);autoGuards.push(['i',ptr(0xf000+i*4),1000+i]);}
+const autoBinding={...binding,native_stage_id:'AUTOCHESS_LIVE',native_autochess_context:{status:'available',scope_key:roots+':scope',phase:4,round:8,frame:1,game_time:1,memberships:[{data_uid:7,player_uid:'account-one'}]}};
 nativeCapturePublications.set(2,{mode_epoch:0,binding:autoBinding,guards:autoGuards});
 autoScope=()=>roots+':scope';autoCollectionMode=()=> 'local';
 function autoRecord(){const r=record();r.facts={mode_epoch:0,scope_mode_epoch:0,scope_revision:2,publication_revision:2};
@@ -76,7 +93,7 @@ function autoRecord(){const r=record();r.facts={mode_epoch:0,scope_mode_epoch:0,
  const own=(f,address,size)=>r.segments.push({field_id:f.field_id,role:f.role,checkpoint:0,address:String(address),bytes:read(address,size),status:'ok',guard_id:f.guard_id});
  for(const f of autoGraph.fields){let address=BigInt(f.absolute_address);for(const offset of f.pointer_offsets){own(f,address+BigInt(offset),8);address=new DataView(read(address+BigInt(offset),8)).getBigUint64(0,true);}address+=BigInt(f.offset);if(f.kind==='utf16'){own(f,address,8);own(f,address+16n,4);own(f,address+20n,new DataView(read(address+16n,4)).getUint32(0,true)*2);}else own(f,address,f.bytes);}
  const publication=publicationGuardFields(autoGuards,'0x20000',2);
- for(const chunk of publication.chunks)for(const f of chunk.fields){const address=BigInt(f.absolute_address);own(f,address,8);own(f,address+16n,4);own(f,address+20n,new DataView(read(address+16n,4)).getUint32(0,true)*2);}
+ for(const chunk of publication.chunks)for(const f of chunk.fields){const address=BigInt(f.absolute_address);if(f.kind==='utf16'){own(f,address,8);own(f,address+16n,4);own(f,address+20n,new DataView(read(address+16n,4)).getUint32(0,true)*2);}else own(f,address,f.bytes);}
  return r;
 }
 function autoAttempt(change){const r=autoRecord();if(change)change(r);__arkdpsReplayBegin(r);try{return __arkdpsOnClosedRecord(r);}finally{globalThis.lastAutoSummary=__arkdpsReplayEnd();}}
@@ -85,7 +102,9 @@ globalThis.autoMissingMembershipRejected=false;
 globalThis.autoMissingMembershipRejected=autoAttempt(r=>r.segments=r.segments.filter(s=>!s.role.startsWith('publication.')))===null;globalThis.missingSummary=lastAutoSummary;
 globalThis.autoChangedMembershipRejected=false;
 globalThis.autoChangedMembershipRejected=autoAttempt(r=>{const s=r.segments.find(s=>s.role==='publication.close.0'&&s.address==='49172');globalThis.changedMemberInjected=Boolean(s);if(s)new DataView(s.bytes).setUint16(0,88,true);})===null;
+globalThis.autoCrossChunkRejected=autoAttempt(r=>{const segment=r.segments.find(item=>item.role==='publication.close.65');if(!segment)throw Error('cross chunk field absent');new DataView(segment.bytes).setInt32(0,99999,true);})===null;
+
 `,context);
 assert(context.scopeGeometryFrozen);assert(context.compiledScopeReused);assert(context.cacheArrayNotFrozen);assert(context.manualOwnerNotFrozen);assert(context.scopeReadsRepeat);assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
 for(const key of ['notClosed','wrongRevision','wrongGeneration','coldRejected','wrongRoots'])assert.equal(context[key],null,key);
-assert(context.autoGood);assert.equal(context.autoGood.mark.native_autochess_context.frame,10);assert.equal(context.autoGood.mark.native_autochess_context.memberships[0].player_uid,'account-one');assert.equal(context.autoMissingMembershipRejected,true);assert.equal(context.autoChangedMembershipRejected,true);assert.equal(context.missingSummary.complete,false);assert.equal(context.changedMemberInjected,true);assert.equal(context.readThroughSequence,0);assert.equal(context.good.events[0].future,undefined);assert.equal(context.delta.events_after,2);assert.equal(context.delta.events_through,3);assert.equal(context.delta.events.length,1);assert.equal(context.delta.events[0].sequence,3);assert.equal(context.emptyDelta.events.length,0);assert.equal(live,0);console.log('PASS_CAPTURED_PUBLICATION normal closed-prefix + five negative fences; no live read/call');
+assert(context.autoCrossChunkRejected);assert(context.autoGood);assert.equal(context.autoGood.mark.native_autochess_context.frame,10);assert.equal(context.autoGood.mark.native_autochess_context.memberships[0].player_uid,'account-one');assert.equal(context.autoMissingMembershipRejected,true);assert.equal(context.autoChangedMembershipRejected,true);assert.equal(context.missingSummary.complete,false);assert.equal(context.changedMemberInjected,true);assert.equal(context.readThroughSequence,0);assert.equal(context.good.events[0].future,undefined);assert.equal(context.delta.events_after,2);assert.equal(context.delta.events_through,3);assert.equal(context.delta.events.length,1);assert.equal(context.delta.events[0].sequence,3);assert.equal(context.emptyDelta.events.length,0);assert.equal(live,0);console.log('PASS_CAPTURED_PUBLICATION normal closed-prefix + five negative fences; no live read/call');

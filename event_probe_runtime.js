@@ -761,12 +761,15 @@ function hpBatchClock(batch,opening,closing,withEventScope){
  if(view.byteLength!==12||close.byteLength!==4)throw new Error('callback clock unavailable');
  return validatedClockStamp(view,close.getUint32(0,true),false,withEventScope);
 }
-function hpBatchId(batch){
- const view=batch.slot(5),n=view.getInt32(8,true);
+function capturedUtf16(view){
+ if(view.byteLength<12)throw new Error('bad string');
+ const n=view.getInt32(8,true);
  if(n<0||n>200||view.byteLength!==12+2*n)throw new Error('bad string');
- let id='';for(let i=0;i<n;i++)id+=String.fromCharCode(view.getUint16(12+2*i,true));
- if(!id)throw new Error('missing source identity');
- return id;
+ let text='';for(let i=0;i<n;i++)text+=String.fromCharCode(view.getUint16(12+2*i,true));
+ return text;
+}
+function hpBatchId(batch){
+ const id=capturedUtf16(batch.slot(5));if(!id)throw new Error('missing source identity');return id;
 }
 
 function buff(p){return {key:str(p.add(0x208).readPointer()),source:p.add(0x18).readPointer(),hasShield:p.add(0x27c).readU8()};}

@@ -142,7 +142,10 @@ function autoLayout(k,name,namespace,count,specs,check=null){
 function scopeBlock(address,size,fields,mismatch){
  const bytes=address.readByteArray(size);
  if(bytes===null||bytes.byteLength!==size)throw new Error('AutoChess block read unavailable');
- const view=new DataView(bytes);
+ return scopeBlockView(new DataView(bytes),size,fields,mismatch);
+}
+function scopeBlockView(view,size,fields,mismatch){
+ if(view.byteLength!==size)throw new Error('AutoChess block read unavailable');
  for(const [kind,offset,expected,high]of fields){
   if(kind==='p'){
    if(view.getUint32(offset,true)!==expected||view.getUint32(offset+4,true)!==high)

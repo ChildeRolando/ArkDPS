@@ -606,6 +606,27 @@ function nativeCaptureScopeGraph(cache,stage,clockAddress,revision){
 }
 let nativeCapturePublicationRevision=0;
 const nativeCapturePublications=new Map();
+function sealNativePublicationGraph(graph){
+ return Object.freeze({...graph,chunks:Object.freeze(graph.chunks.map(chunk=>Object.freeze({...chunk,fields:scopeReadGeometry(chunk.fields)})))});
+}
+const nativePublicationReadGeometry=new WeakMap();
+function publicationReadGeometry(owned,revision){
+ let geometry=nativePublicationReadGeometry.get(owned);if(geometry)return geometry;
+ const graph=owned.graph??sealNativePublicationGraph({...publicationGuardFields(owned.guards,nativeCaptureMetadata.string_class,revision),mode_epoch:owned.mode_epoch});
+ const slots=Object.create(null);let index=0;
+ for(const chunk of graph.chunks)for(const field of chunk.fields){
+  if(slots[field.role]!==undefined)throw new Error('duplicate publication read role');slots[field.role]=index++;
+ }
+ geometry=Object.freeze({graph,slots:Object.freeze(slots)});nativePublicationReadGeometry.set(owned,geometry);return geometry;
+}
+function nativeGraphChunks(){
+ return typeof __arkdpsOwnedGraphReadBatch==='function'&&__arkdpsReplayActive()&&__arkdpsReplayRecord().native_view===true?[]:null;
+}
+function nativeGraphSlot(kind,graph,index,chunks){
+ if(chunks===null)return null;
+ const chunk=Math.floor(index/32);if(chunks[chunk]===undefined)chunks[chunk]=__arkdpsOwnedGraphReadBatch(kind,graph,chunk);
+ return chunks[chunk]===null?null:chunks[chunk].slot(index%32);
+}
 function publicationGuardFields(guards,stringClass,revision){
  const chunks=[];
  for(let start=0;start<guards.length;start+=60){
@@ -637,20 +658,30 @@ function publishNativeCapturePublication(binding){
  const guards=(binding.native_autochess_context?body.read.guards:[]).map(g=>Object.freeze([...g]));
  // These are membership/account/text witnesses, not cached mutable HP. Every
  // original input is re-read by the producer before this view can publish.
- const value={mode_epoch:nativeCaptureModeEpoch,binding:JSON.parse(JSON.stringify(binding)),guards};
+ const graph=sealNativePublicationGraph(publicationGuardFields(guards,nativeCaptureMetadata.string_class,revision));
+ const value={mode_epoch:nativeCaptureModeEpoch,binding:JSON.parse(JSON.stringify(binding)),guards,graph};
  if(nativeCapturePublications.size>=64)throw new Error('capture publication history budget exceeded');
  nativeCapturePublications.set(revision,value);
- __publishCapturePublication(publicationGuardFields(guards,nativeCaptureMetadata.string_class,revision));
+ __publishCapturePublication(graph);
 }
-function capturedGuardValue(guard,role){
+function capturedGuardValue(guard,role,geometry=null,chunks=null){
  return __arkdpsReplayWitness(role,()=>{
   const [kind,address,before,size]=guard;
-  if(kind==='block'){scopeBlock(address,size,before,'captured publication guard changed');return true;}
+  const slot=geometry?.slots[role];
+  if(geometry&&slot===undefined)__arkdpsReplayGap('missing publication read role');
+  const raw=geometry?nativeGraphSlot('publication',geometry.graph,slot,chunks):null;
+  if(kind==='block'){
+   if(raw)scopeBlockView(raw,size,before,'captured publication guard changed');else scopeBlock(address,size,before,'captured publication guard changed');
+   return true;
+  }
   if(kind==='text'){
-   if(address.add(0x10).readS32()!==before.length)throw new Error('captured publication string length');
-   if(address.add(0x14).readUtf16String(before.length)!==before)throw new Error('captured publication string changed');
+   const length=raw?raw.getInt32(8,true):address.add(0x10).readS32();
+   if(length!==before.length)throw new Error('captured publication string length');
+   const after=raw?capturedUtf16(raw):address.add(0x14).readUtf16String(before.length);
+   if(after!==before)throw new Error('captured publication string changed');
   }else{
-   const after=kind==='p'?address.readPointer():kind==='i'?address.readS32():kind==='u'?address.readU32():kind==='b'?address.readU8():address.readU64().toNumber();
+   const after=raw?(kind==='p'?ptr(raw.getBigUint64(0,true)):kind==='i'?raw.getInt32(0,true):kind==='u'?raw.getUint32(0,true):kind==='b'?raw.getUint8(0):Number(raw.getBigUint64(0,true))):
+    kind==='p'?address.readPointer():kind==='i'?address.readS32():kind==='u'?address.readU32():kind==='b'?address.readU8():address.readU64().toNumber();
    if(kind==='p'?!after.equals(before):after!==before)throw new Error('captured publication input changed');
   }
   return true;
@@ -666,7 +697,8 @@ function nativeCapturedPublicationBinding(forCallback=false){
  if((!forCallback&&(record.edge!=='leave'||record.closed_after!==true))||!facts||!Number.isSafeInteger(facts.publication_revision))return null;
  const owned=nativeCapturePublications.get(facts.publication_revision);
  if(!owned||owned.mode_epoch!==record.facts.mode_epoch)return null;
- for(const side of ['open','close'])owned.guards.forEach((guard,index)=>capturedGuardValue(guard,'publication.'+side+'.'+index));
+ const chunks=nativeGraphChunks(),geometry=chunks===null?null:publicationReadGeometry(owned,facts.publication_revision);
+ for(const side of ['open','close'])owned.guards.forEach((guard,index)=>capturedGuardValue(guard,'publication.'+side+'.'+index,geometry,chunks));
  // Scope/root/stage/state/clock proofs have their own roles. Membership graph
  // success does not replace them, and cached values never supply a new clock.
  const stamp=time(true,false);if(!stamp)return null;
@@ -691,11 +723,11 @@ function compileCapturedScopeReads(graph){
  // Geometry/expected values are setup metadata. Copy nested block tuples so
  // sealing a graph never freezes a mutable AutoChess cache owned elsewhere.
  const fields=Object.isFrozen(graph.fields)?graph.fields:scopeReadGeometry(graph.fields);
- reads=Object.freeze(fields.map(field=>{
+ reads=Object.freeze(fields.map((field,index)=>{
   const base=Object.freeze(ptr(field.absolute_address)),path=field.pointer_offsets;
   const kind=field.kind==='utf16'?0:field.bytes===12?1:Array.isArray(field.expected)?2:field.bytes===4?3:4;
   const expectedPointer=kind===4&&field.expected!==undefined&&field.expected!==null?Object.freeze(ptr(field.expected)):null;
-  return Object.freeze({role:field.role,base,path,offset:field.offset,
+  return Object.freeze({role:field.role,slot:index,base,path,offset:field.offset,
    address:path.length?null:Object.freeze(base.add(field.offset)),kind,bytes:field.bytes,expected:field.expected,expectedPointer,
    classCheck:field.role.includes('logger.class')?1:field.role.includes('stats.class')?2:0,
    output:field.role==='scope.open.3'?1:field.role==='scope.open.4'?2:field.role==='scope.controller.state.open'?3:0});
@@ -715,20 +747,21 @@ function capturedNativeScopePoint(when){
  const record=__arkdpsReplayRecord(),revision=record.facts?.scope_revision;
  const graph=nativeCaptureScopes.get(revision);
  if(!graph?.available||graph.mode_epoch!==record.facts?.mode_epoch)return null;
- let phase=null,round=null,state=null;
+ let phase=null,round=null,state=null;const chunks=nativeGraphChunks();
  for(const field of compileCapturedScopeReads(graph)){
   const value=__arkdpsReplayWitness(field.role,()=>{
+   const raw=nativeGraphSlot('scope',graph,field.slot,chunks);
    let address=field.address;
-   if(address===null){address=field.base;for(const offset of field.path)address=address.add(offset).readPointer();address=address.add(field.offset);}
-   if(field.kind===0){const value=str(address);if(value!==field.expected)throw new Error('captured stage text changed');return value;}
+   if(!raw&&address===null){address=field.base;for(const offset of field.path)address=address.add(offset).readPointer();address=address.add(field.offset);}
+   if(field.kind===0){const value=raw?capturedUtf16(raw):str(address);if(value!==field.expected)throw new Error('captured stage text changed');return value;}
    if(field.kind===1){
-    const view=checkedNativeView(address,12);
+    const view=raw??checkedNativeView(address,12);
     if(view.getUint32(0,true)!==when.frame||Number(view.getBigInt64(4,true))/4294967296!==when.game_time)throw new Error('captured scope clock mismatch');
     return null;
    }
-   if(field.kind===2){scopeBlock(address,field.bytes,field.expected,'captured scope guard changed');return null;}
-   if(field.kind===3){const current=address.readS32();if(field.expected!==null&&field.expected!==undefined&&current!==field.expected)throw new Error('captured scope integer changed');return current;}
-   const current=address.readPointer();
+   if(field.kind===2){if(raw)scopeBlockView(raw,field.bytes,field.expected,'captured scope guard changed');else scopeBlock(address,field.bytes,field.expected,'captured scope guard changed');return null;}
+   if(field.kind===3){const current=raw?raw.getInt32(0,true):address.readS32();if(field.expected!==null&&field.expected!==undefined&&current!==field.expected)throw new Error('captured scope integer changed');return current;}
+   const current=raw?ptr(raw.getBigUint64(0,true)):address.readPointer();
    if(field.expectedPointer!==null&&!current.equals(field.expectedPointer))throw new Error('captured scope pointer changed');
    if(field.classCheck===1&&className(current)!=='BattleLogger'||field.classCheck===2&&className(current)!=='BattleStats')throw new Error('captured scope class changed');
    return current;
