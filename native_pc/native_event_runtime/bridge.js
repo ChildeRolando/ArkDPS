@@ -10,7 +10,7 @@ function __integer(value) {
 // Replay never dereferences a game address. A role is an independently captured
 // observation point, not a last-value cache keyed by pointer.
 let __arkdpsReplay=null;
-function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read'].includes(status);}
+function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read','invalid_phase'].includes(status);}
 function __arkdpsReplayBegin(record){
  if(__arkdpsReplay!==null)throw new Error('replay already active');
  if(record?.version!==1||!Array.isArray(record.segments)||typeof record.edge!=='string')
@@ -138,7 +138,7 @@ function __arkdpsOwnedRead(address,size){
  }
  if(matches.length===0){
   const failed=[...point.states.values()].filter(f=>(replay.fieldId===null||f.field_id===replay.fieldId)&&f.status!=='ok'&&
-   (replay.fieldId!==null||f.attempted_address!==undefined&&Number.isSafeInteger(f.attempted_size)&&f.attempted_size>=0&&
+   (f.attempted_address!==undefined&&Number.isSafeInteger(f.attempted_size)&&f.attempted_size>=0&&
     address>=__integer(f.attempted_address)&&address+BigInt(size)<=__integer(f.attempted_address)+BigInt(f.attempted_size)));
   if(failed.length===1){if(__arkdpsStructuralCaptureStatus(failed[0].status))__arkdpsReplayGap('invalid captured plan field '+replay.role);replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
  }
