@@ -360,3 +360,28 @@ lease-bound; receiver values are rechecked, not inferred from object identity.
 The source owns Q32 conversion, clock/range/UID checks, XOR, scope and eligibility,
 HP state transitions and statistics. Ordinary pointer IO uses that same source
 state reducer. No raw edge, parent topology, first heal, epoch or ACK is skipped.
+
+
+### Sealed native provider ownership
+
+Native installation publishes a null-prototype `__nativeOwnedProvider` data
+bundle containing version one, numeric-address capability and the same native
+function references as the legacy globals. Every bundle property and the global
+bundle property is non-writable and non-configurable; the bundle is not
+extensible. Legacy globals remain available for compatibility, but replacing
+them cannot redirect the sealed owner.
+
+ReplayBegin first validates all own descriptors, the required API set and
+optional paired capabilities, then retains that immutable function owner.
+Subsequent records avoid rescanning mutable globals. Record version/shape,
+checkpoint, decimal ticket and native lease checks still run on every Begin;
+End still validates the same pinned lease and status. No live data or record
+facts are cached by this optimization. An absent bundle follows the original
+global-by-global provider pin path.
+
+The internal C++ install argument `sealed=false` exists only for a self-owned
+harness counterfactual using the exact same functions in one executable.
+Production calls the default true and exposes no host/product switch. Bundle
+A/B must keep raw HP enabled in both arms and assert equal actual observation
+counts. A raw-provider disabled test uses an explicitly labelled high-level
+benchmark stub; deleting old globals cannot disable a sealed capability.

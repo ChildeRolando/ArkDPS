@@ -74,6 +74,10 @@ int main(){
  auto packet=observe(c,memory.root());assert(!JS_IsException(packet)&&!JS_IsUndefined(packet)&&integer(c,packet,4)==5&&!poisoned);
  auto global=JS_GetGlobalObject(c);JS_SetPropertyStr(c,global,"packet",JS_DupValue(c,packet));JS_FreeValue(c,global);
  const auto evaluate=[&](const std::string& text){auto value=JS_Eval(c,text.data(),text.size(),"raw-observation-test.js",JS_EVAL_TYPE_GLOBAL);if(JS_IsException(value)){auto e=JS_GetException(c);const auto* message=JS_ToCString(c,e);std::cerr<<(message?message:"exception")<<"\n";if(message)JS_FreeCString(c,message);JS_FreeValue(c,e);}assert(!JS_IsException(value));const bool result=JS_ToBool(c,value)==1;JS_FreeValue(c,value);assert(result);};
+ evaluate("(()=>{const d=Object.getOwnPropertyDescriptor(globalThis,'__nativeOwnedProvider'),p=__nativeOwnedProvider;return d.writable===false&&d.configurable===false&&Object.isFrozen(p)&&Object.getPrototypeOf(p)===null&&p.version===1&&p.__nativeOwnedNumericAddress===true&&p.__nativeOwnedRead===__nativeOwnedRead&&p.__nativeOwnedHpObservation===__nativeOwnedHpObservation&&Reflect.ownKeys(p).every(k=>{const v=Object.getOwnPropertyDescriptor(p,k);return 'value' in v&&!v.writable&&!v.configurable})})()");
+ evaluate("(()=>{'use strict';try{globalThis.__nativeOwnedProvider={};return false}catch(e){return true}})()");
+ evaluate("(()=>{'use strict';try{__nativeOwnedProvider.__nativeOwnedRead=()=>undefined;return false}catch(e){return true}})()");
+ evaluate("(()=>{globalThis.__nativeOwnedScalar=()=>0;return __nativeOwnedProvider.__nativeOwnedScalar('body',3,-1,"+std::to_string(memory.root()+24)+"n,2)===73&&__nativeOwnedProvider.__nativeOwnedLease('17')})()");
  evaluate("Object.isFrozen(packet)&&packet[6]===18446744073709551615n&&packet[7]===73");
  evaluate("packet["+std::to_string(at(code,"hp.before")+1)+"]===-9223372036854775808n");
  evaluate("(()=>{const s=packet["+std::to_string(at(code,"hp.id")+1)+"];return s.length===9&&[65,0,0x4e2d,0xd800,66,0xdfff,67,0xd83d,0xde00].every((v,i)=>s.charCodeAt(i)===v)})()");
@@ -104,5 +108,10 @@ int main(){
  capture_point(code,memory,*snapshot);begin(code,config,memory,*snapshot);packet=observe(c,memory.root()+1);assert(JS_IsUndefined(packet)&&poisoned);JS_FreeValue(c,packet);
  begin(code,config,memory,*snapshot);packet=observe(c,memory.root(),0x9001);assert(JS_IsUndefined(packet)&&poisoned);JS_FreeValue(c,packet);
  begin(code,config,memory,*snapshot);owned::end();packet=observe(c,memory.root());assert(JS_IsUndefined(packet)&&poisoned);JS_FreeValue(c,packet);
- JS_FreeContext(c);JS_FreeRuntime(runtime);std::cout<<"PASS_RAW_HP_OBSERVATION actual compiled fields/capture/view/primitive UTF16/deferred failures/auto overlap/unique/lease/mode\n";
+ JS_FreeContext(c);
+ // Internal owned-harness seam uses exactly the same native functions, without
+ // installing the sealed owner; production always uses the default true.
+ auto* legacy=JS_NewContext(runtime);owned::install(legacy,[]()noexcept{poisoned=true;},false);
+ auto object=JS_GetGlobalObject(legacy);auto absent=JS_GetPropertyStr(legacy,object,"__nativeOwnedProvider");assert(JS_IsUndefined(absent));JS_FreeValue(legacy,absent);JS_FreeValue(legacy,object);JS_FreeContext(legacy);
+ JS_FreeRuntime(runtime);std::cout<<"PASS_RAW_HP_OBSERVATION actual compiled fields/capture/view/primitive UTF16/deferred failures/auto overlap/unique/lease/mode\n";
 }

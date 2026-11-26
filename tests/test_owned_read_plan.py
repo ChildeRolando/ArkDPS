@@ -45,3 +45,10 @@ def test_hp_observation_js_provider_contract():
                           capture_output=True,text=True,timeout=20)
     assert result.returncode==0,result.stdout+result.stderr
     assert 'PASS_RAW_HP_JS' in result.stdout
+
+
+def test_sealed_native_provider_contract():
+    result=subprocess.run(['node',str(ROOT/'tests/native_pc_sealed_provider_fixture.js')],cwd=ROOT,
+                          capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert 'PASS_SEALED_PROVIDER' in result.stdout

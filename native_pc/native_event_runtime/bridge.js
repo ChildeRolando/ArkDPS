@@ -17,7 +17,7 @@ function __arkdpsUnsigned64(value){
 }
 // Replay never dereferences a game address. A role is an independently captured
 // observation point, not a last-value cache keyed by pointer.
-let __arkdpsReplay=null,__arkdpsNativeProvider=null;
+let __arkdpsReplay=null,__arkdpsNativeProvider=null,__arkdpsSealedNativeProvider=null;
 // A record owns a small, fixed wire header. Cold fields stay lazy: most HP
 // edges never inspect ancestry, parents, publication or terminal metadata.
 // None of these getters consult the native view or a later capture lease.
@@ -99,6 +99,28 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
  return result;
 }
 function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read','invalid_phase'].includes(status);}
+const __arkdpsProviderDescriptor=Object.getOwnPropertyDescriptor,__arkdpsProviderKeys=Reflect.ownKeys,__arkdpsProviderExtensible=Object.isExtensible,__arkdpsProviderPrototype=Object.getPrototypeOf,__arkdpsProviderHasOwn=Object.hasOwn;
+function __arkdpsSealedProvider(){
+ if(__arkdpsSealedNativeProvider!==null)return __arkdpsSealedNativeProvider;
+ const installed=__arkdpsProviderDescriptor(globalThis,'__nativeOwnedProvider');
+ if(installed===undefined)return null;
+ if(!__arkdpsProviderHasOwn(installed,'value')||installed.writable!==false||installed.configurable!==false||installed.value===null||typeof installed.value!=='object')throw Error('native owned provider bundle is mutable');
+ const bundle=installed.value,keys=__arkdpsProviderKeys(bundle);
+ if(__arkdpsProviderExtensible(bundle)||__arkdpsProviderPrototype(bundle)!==null)throw Error('native owned provider bundle has mutable structure');
+ const required=['__nativeOwnedLease','__nativeOwnedRead','__nativeOwnedScalar','__nativeOwnedStatus','__nativeOwnedPoint'];
+ const optional=['__nativeOwnedHpObservation','__nativeOwnedConsumeHpFailure','__nativeOwnedGraphReadBatch','__nativeOwnedGraphCheck','__nativeOwnedGraphFailure'];
+ for(const key of keys){
+  if(typeof key!=='string'||(key!=='version'&&key!=='__nativeOwnedNumericAddress'&&!required.includes(key)&&!optional.includes(key)))throw Error('unexpected native owned provider member');
+  const descriptor=__arkdpsProviderDescriptor(bundle,key);
+  if(!descriptor||!__arkdpsProviderHasOwn(descriptor,'value')||descriptor.writable!==false||descriptor.configurable!==false)throw Error('native owned provider member is mutable');
+ }
+ const version=__arkdpsProviderDescriptor(bundle,'version'),numeric=__arkdpsProviderDescriptor(bundle,'__nativeOwnedNumericAddress');
+ if(version?.value!==1||numeric?.value!==true)throw Error('invalid native owned provider bundle version');
+ for(const key of required)if(typeof __arkdpsProviderDescriptor(bundle,key)?.value!=='function')throw Error('native owned provider member unavailable');
+ for(const key of optional){const descriptor=__arkdpsProviderDescriptor(bundle,key);if(descriptor!==undefined&&typeof descriptor.value!=='function')throw Error('invalid optional native owned provider');}
+ for(const pair of [['__nativeOwnedHpObservation','__nativeOwnedConsumeHpFailure'],['__nativeOwnedGraphCheck','__nativeOwnedGraphFailure']])if(__arkdpsProviderHasOwn(bundle,pair[0])!==__arkdpsProviderHasOwn(bundle,pair[1]))throw Error('incomplete native owned provider pair');
+ return __arkdpsSealedNativeProvider=bundle;
+}
 function __arkdpsReplayBegin(record){
  if(__arkdpsReplay!==null)throw new Error('replay already active');
  if(record?.version!==1||typeof record.edge!=='string')
@@ -106,14 +128,17 @@ function __arkdpsReplayBegin(record){
  const checkpoint=record.checkpoint??0;
  if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('invalid record checkpoint');
  if(record.native_view===true){
+  let native=__arkdpsSealedProvider();
+  if(native===null){
   const lease=globalThis.__nativeOwnedLease,read=globalThis.__nativeOwnedRead,scalar=globalThis.__nativeOwnedScalar,
    status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,hpObservation=globalThis.__nativeOwnedHpObservation,hpFailure=globalThis.__nativeOwnedConsumeHpFailure,graphCheck=globalThis.__nativeOwnedGraphCheck,graphFailure=globalThis.__nativeOwnedGraphFailure,graphBatch=globalThis.__nativeOwnedGraphReadBatch;
   if(typeof lease!=='function'||typeof read!=='function'||typeof scalar!=='function'||typeof status!=='function'||typeof point!=='function')
    throw new Error('native owned provider unavailable');
   if((hpObservation!==undefined||hpFailure!==undefined)&&(typeof hpObservation!=='function'||typeof hpFailure!=='function'))throw new Error('native HP observation provider unavailable');
-  let native=__arkdpsNativeProvider;
+  native=__arkdpsNativeProvider;
   if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedHpObservation!==hpObservation||native.__nativeOwnedConsumeHpFailure!==hpFailure||native.__nativeOwnedGraphCheck!==graphCheck||native.__nativeOwnedGraphFailure!==graphFailure||native.__nativeOwnedGraphReadBatch!==graphBatch)
    native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedHpObservation:hpObservation,__nativeOwnedConsumeHpFailure:hpFailure,__nativeOwnedGraphCheck:graphCheck,__nativeOwnedGraphFailure:graphFailure,__nativeOwnedGraphReadBatch:graphBatch});
+  }
   if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||native.__nativeOwnedLease(record.ticket)!==true)throw new Error('native owned lease unavailable');
   __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};return;
  }
@@ -599,7 +624,7 @@ const __argumentHandler={
   return descriptor;
  },
  defineProperty(array,key,descriptor){
-  if(descriptor.writable===false&&!Object.hasOwn(descriptor,'value')&&
+  if(descriptor.writable===false&&!__arkdpsProviderHasOwn(descriptor,'value')&&
      Reflect.getOwnPropertyDescriptor(array,key)?.value===__deferredArgument)
    __materializeArgument(array,key);
   return Reflect.defineProperty(array,key,descriptor);

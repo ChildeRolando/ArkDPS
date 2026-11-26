@@ -358,17 +358,32 @@ inline JSValue lease(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     if(!matches) error(capture::Error::invalid_plan);
     return JS_NewBool(c,matches);
 }
-inline void install(JSContext* c,void(*poison)() noexcept) {
+inline void install(JSContext* c,void(*poison)() noexcept,bool sealed=true) {
     binding().poison=poison;
-    auto global=JS_GetGlobalObject(c);
-    JS_SetPropertyStr(c,global,"__nativeOwnedNumericAddress",JS_TRUE);
+    auto global=JS_GetGlobalObject(c);auto bundle=JS_NewObjectProto(c,JS_NULL);
+    bool failed=JS_IsException(global)||JS_IsException(bundle);
+    const auto define=[&](const char* name,JSValue value){
+        if(failed){JS_FreeValue(c,value);return;}
+        if(JS_IsException(value)||JS_DefinePropertyValueStr(c,bundle,name,value,JS_PROP_ENUMERABLE)<0)failed=true;
+    };
+    define("version",JS_NewUint32(c,1));define("__nativeOwnedNumericAddress",JS_TRUE);
+    if(!failed&&JS_SetPropertyStr(c,global,"__nativeOwnedNumericAddress",JS_TRUE)<0)failed=true;
     struct Entry{const char* name;JSCFunction* function;int arguments;};
     const Entry entries[]{
         {"__nativeOwnedRead",bytes,5},{"__nativeOwnedScalar",scalar,5},{"__nativeOwnedStatus",status,0},
         {"__nativeOwnedPoint",point,2},{"__nativeOwnedLease",lease,1},
         {"__nativeOwnedHpObservation",hp_observation,2},{"__nativeOwnedConsumeHpFailure",consume_hp_failure,1},
         {"__nativeOwnedGraphReadBatch",graph_read_batch,4},{"__nativeOwnedGraphCheck",graph_check,3},{"__nativeOwnedGraphFailure",graph_failure,0}};
-    for(const auto& entry:entries)JS_SetPropertyStr(c,global,entry.name,JS_NewCFunction(c,entry.function,entry.name,entry.arguments));
-    JS_FreeValue(c,global);
+    for(const auto& entry:entries){
+        if(failed)break;
+        auto function=JS_NewCFunction(c,entry.function,entry.name,entry.arguments);
+        if(JS_IsException(function)){failed=true;break;}
+        if(JS_SetPropertyStr(c,global,entry.name,JS_DupValue(c,function))<0){JS_FreeValue(c,function);failed=true;break;}
+        define(entry.name,function);
+    }
+    if(!failed&&JS_PreventExtensions(c,bundle)<0)failed=true;
+    if(!failed&&sealed){if(JS_DefinePropertyValueStr(c,global,"__nativeOwnedProvider",bundle,JS_PROP_ENUMERABLE)<0)failed=true;bundle=JS_UNDEFINED;}
+    JS_FreeValue(c,bundle);JS_FreeValue(c,global);
+    if(failed){conversion_exception();throw std::runtime_error("native owned provider installation failed");}
 }
 } // namespace arkdps::owned_js
