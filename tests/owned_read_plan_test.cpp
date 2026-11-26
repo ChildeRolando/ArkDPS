@@ -45,6 +45,13 @@ static void graph_contract(JSContext* c){
  const auto run=[&](unsigned chunk,unsigned revision=1,unsigned mode=1){JSValue args[]{JS_NewString(c,"scope"),JS_NewUint32(c,revision),JS_NewUint32(c,mode),JS_NewUint32(c,chunk)};auto result=owned::graph_read_batch(c,JS_UNDEFINED,4,args);for(auto arg:args)JS_FreeValue(c,arg);return result;};
  start();auto value=run(0);std::size_t size=0;auto* bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&number<std::uint32_t>(bytes,4)==32);assert(number<std::uint32_t>(bytes,number<std::uint32_t>(bytes,20))==100);JS_FreeValue(c,value);
  value=run(1);bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&number<std::uint32_t>(bytes,4)==1&&number<std::uint32_t>(bytes,number<std::uint32_t>(bytes,20))==132);JS_FreeValue(c,value);
+ // A cp3 record cannot borrow otherwise valid cp0 graph evidence.
+ start();owned::bind_graphs(config,1,0,1,3);value=run(0);assert(JS_IsUndefined(value)&&owned::binding().error==Error::missing_plan_field&&poisoned);JS_FreeValue(c,value);
+ for(auto& segment:ss)segment.checkpoint=3;
+ for(auto& state:fs)state.checkpoint=3;
+ start();owned::bind_graphs(config,1,0,1,3);value=run(0);bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&number<std::uint32_t>(bytes,number<std::uint32_t>(bytes,20))==100&&!poisoned);JS_FreeValue(c,value);
+ for(auto& segment:ss)segment.checkpoint=0;
+ for(auto& state:fs)state.checkpoint=0;
  for(auto bad:{2u,3u}){start();value=run(0,bad);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);}
  start();value=run(0,1,2);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);
  fs[0].attempted_address=0x9000;fs[0].attempted_size=1;

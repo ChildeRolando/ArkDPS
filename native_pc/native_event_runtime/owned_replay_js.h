@@ -29,6 +29,7 @@ struct Binding {
     bool js_exception = false;
     const capture::CaptureConfiguration* configuration=nullptr;
     std::uint64_t scope_revision=0,publication_revision=0,graph_mode=0;
+    std::uint32_t graph_checkpoint=0;
     bool read_plans_open=true;
     std::vector<ReadPlan> read_plans;
 };
@@ -285,9 +286,9 @@ inline JSValue read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args
 }
 // Exact record configuration is selected by engine, never by a JS supplied id.
 inline void bind_graphs(const capture::CaptureConfiguration* config,std::uint64_t scope,
-                        std::uint64_t publication,std::uint64_t mode) noexcept {
+                        std::uint64_t publication,std::uint64_t mode,std::uint32_t checkpoint=0) noexcept {
     auto& owner=binding();owner.configuration=config;owner.scope_revision=scope;
-    owner.publication_revision=publication;owner.graph_mode=mode;
+    owner.publication_revision=publication;owner.graph_mode=mode;owner.graph_checkpoint=checkpoint;
 }
 inline JSValue graph_read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     auto& owner=binding();owner.js_exception=false;double revision=0,mode=0,chunk=0;
@@ -306,7 +307,7 @@ inline JSValue graph_read_batch(JSContext* c,JSValueConst,int count,JSValueConst
         ||mode!=owner.graph_mode||owner.configuration->mode_epoch!=owner.graph_mode||chunk>=graph->read_chunks.size()) {
         error(capture::Error::missing_plan_field);return JS_UNDEFINED;
     }
-    return execute_read_batch(c,graph->read_chunks[static_cast<std::size_t>(chunk)],1,0,0);
+    return execute_read_batch(c,graph->read_chunks[static_cast<std::size_t>(chunk)],1,0,owner.graph_checkpoint);
 }
 inline JSValue status(JSContext* c,JSValueConst,int,JSValueConst*) {return JS_NewInt32(c,static_cast<int>(binding().error));}
 inline JSValue point(JSContext* c,JSValueConst,int count,JSValueConst* args) {
