@@ -30,6 +30,8 @@ static Fixture f;static OwnedReplayView view;
 static std::uint64_t number(OwnedReplayView::ReadResult result,std::size_t size){assert(result.error==Error::ok);std::uint64_t value=0;std::memcpy(&value,result.data,size);return value;}
 int main(){
  const auto before=allocations;
+ assert(view.initialize(nullptr,0,nullptr,0,nullptr,0,0)==Error::ok); // Argument-only hooks need no memory roles.
+ assert(view.point_info(1,0).error==Error::missing_plan_field);
  std::uint64_t original=0x12345678abcdef00ULL;
  f.field(1,1,0);f.segment(1,1,0,0x1000,&original,8);
  const auto second=original^123;f.field(32768,1,1);f.segment(32768,1,1,0x1000,&second,8);

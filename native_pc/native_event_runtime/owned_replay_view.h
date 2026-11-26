@@ -30,7 +30,7 @@ public:
         reset();
         if (structural(record_error)) return failure_ = record_error;
         if (!known(record_error) || segment_count > max_segments || field_count > max_fields
-            || payload_bytes > max_bytes || !max_role_id || (segment_count && !segments)
+            || payload_bytes > max_bytes || (!max_role_id && (segment_count || field_count)) || (segment_count && !segments)
             || (field_count && !fields) || (payload_bytes && !payload)) return failure_ = Error::invalid_plan;
         segments_ = static_cast<const std::byte*>(segments); fields_ = static_cast<const std::byte*>(fields);
         payload_ = payload; segment_count_ = segment_count; field_count_ = field_count; payload_bytes_ = payload_bytes;

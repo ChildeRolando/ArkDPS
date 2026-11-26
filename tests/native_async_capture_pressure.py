@@ -1,7 +1,8 @@
 """Explicit owned-process pressure run; this is not an in-game FPS test.
 
 The fixture measures real native wrapping, owned byte capture and one JS
-consumer. Its 128-byte payload is deliberately labelled; the production HP
+consumer. It observes one argument, while all twelve original arguments must
+still reach the native function. Its 128-byte payload is labelled; the HP
 contract and branch semantics require their separate fixtures/live acceptance.
 """
 from argparse import ArgumentParser
@@ -28,7 +29,7 @@ const owned=Memory.alloc(128);for(let i=0;i<16;i++)owned.add(i*8).writeU64(i+1);
 const fields=['entry','leave'].map((phase,index)=>({field_id:index+1,phase,role:'body',root:'absolute',root_index:0,
  absolute_address:owned.toString(),pointer_offsets:[],offset:0,bytes:128,kind:'bytes',guard_id:0,guard_side:'none',required:true}));
 const plan={schema_version:1,complete:true,name:'owned-pressure-128-bytes',address:address.toString(),
- abi:'win64-gp',profile:'owned',arg_count:12,arg_mask:4095,globals:[],fields,max_bytes:65536,max_reads:4096,required_projections:[]};
+ abi:'win64-gp',profile:'owned',arg_count:1,arg_mask:1,globals:[],fields,max_bytes:65536,max_reads:4096,required_projections:[]};
 let entries=0,leaves=0,lastRequest=null,served=0;
 const hook=Interceptor.attach(address,{arkdpsName:'owned.pressure',arkdpsCaptureContract:plan,
  onEnter(args){
@@ -126,7 +127,7 @@ def main():
             or not 0 <= options.rate <= 200000):
         parser.error('owned count/pause budget exceeded')
     receipt = dict(game_processes_accessed=False, in_game_fps_measured=False,
-                   fixture='128-byte native boundary payload, not the complete HP contract',
+                   fixture='128-byte native boundary, one observed argument, twelve original arguments, not the complete HP contract',
                    synchronous_control=options.synchronous_control,
                    target_setters_per_second=options.rate,
                    binary_sha256=sha256(options.binary.read_bytes()).hexdigest(), cases=[])
