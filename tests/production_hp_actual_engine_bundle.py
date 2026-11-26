@@ -4,8 +4,8 @@ import argparse,json
 from production_hp_quickjs_bundle import bundle
 ROOT=Path(__file__).resolve().parents[1]
 
-def engine_bundle(count=500,batch=True,branch='heal_coalesced',source_root=ROOT,pub_every=1000):
-    text=bundle(count,True,source_root=source_root,bridge_root=source_root,full_scope=True,pub_every=pub_every)
+def engine_bundle(count=500,batch=True,branch='heal_coalesced',source_root=ROOT,pub_every=1000,bridge_root=None):
+    text=bundle(count,True,source_root=source_root,bridge_root=bridge_root or source_root,full_scope=True,pub_every=pub_every)
     marker='const results=[];'
     assert text.count(marker)==1
     text=text.split(marker)[0]
@@ -37,4 +37,4 @@ print(JSON.stringify({kind:'actual_engine_production_hp_self_owned',branch:BRANC
 '''.replace('OPTIONS',options).replace('COUNT',str(count)).replace('BATCH','true' if batch else 'false').replace('BRANCH',json.dumps(branch))
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True);p.add_argument('--count',type=int,default=500);p.add_argument('--single',action='store_true');p.add_argument('--branch',choices=['heal_coalesced','changed_damage','unchanged'],default='heal_coalesced');p.add_argument('--source-root',type=Path,default=ROOT);a=p.parse_args();a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(engine_bundle(a.count,not a.single,a.branch,a.source_root),encoding='utf-8')
+    p=argparse.ArgumentParser();p.add_argument('--output',type=Path,required=True);p.add_argument('--count',type=int,default=500);p.add_argument('--single',action='store_true');p.add_argument('--branch',choices=['heal_coalesced','changed_damage','unchanged'],default='heal_coalesced');p.add_argument('--source-root',type=Path,default=ROOT);p.add_argument('--bridge-root',type=Path);a=p.parse_args();a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(engine_bundle(a.count,not a.single,a.branch,a.source_root,bridge_root=a.bridge_root),encoding='utf-8')

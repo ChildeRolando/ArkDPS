@@ -27,6 +27,7 @@ struct Binding {
     bool active = false;
     bool concurrent = false;
     bool js_exception = false;
+    std::uint64_t lease_calls=0,status_calls=0;
     const capture::CaptureConfiguration* configuration=nullptr;
     std::uint64_t scope_revision=0,publication_revision=0,graph_mode=0;
     std::uint32_t graph_checkpoint=0;
@@ -374,7 +375,7 @@ inline JSValue graph_failure(JSContext* c,JSValueConst,int count,JSValueConst*) 
     if(count||!binding().active){error(capture::Error::invalid_plan);return JS_UNDEFINED;}
     return JS_NewUint32(c,binding().graph_failure);
 }
-inline JSValue status(JSContext* c,JSValueConst,int,JSValueConst*) {return JS_NewInt32(c,static_cast<int>(binding().error));}
+inline JSValue status(JSContext* c,JSValueConst,int,JSValueConst*) {++binding().status_calls;return JS_NewInt32(c,static_cast<int>(binding().error));}
 inline JSValue point(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     binding().js_exception=false;double checkpoint=0;
     if(count!=2) {error(capture::Error::invalid_plan);return JS_NewUint32(c,0);}
@@ -389,7 +390,7 @@ inline JSValue point(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     return JS_NewUint32(c,(count_code<<24)|(static_cast<unsigned>(field_error)<<16)|result.single_field_id);
 }
 inline JSValue lease(JSContext* c,JSValueConst,int count,JSValueConst* args) {
-    auto& owner=binding();owner.js_exception=false;
+    auto& owner=binding();++owner.lease_calls;owner.js_exception=false;
     if(count!=1 || !owner.active || !JS_IsString(args[0])) {error(capture::Error::invalid_plan);return JS_FALSE;}
     std::size_t length=0;const auto* text=JS_ToCStringLen(c,&length,args[0]);
     if(!text) {conversion_exception();return JS_EXCEPTION;}

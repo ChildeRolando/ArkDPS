@@ -73,6 +73,7 @@ struct Runtime {
     std::size_t deferred_record_size=0;
     std::uint64_t batch_calls=0,batch_issued=0,batch_finalized=0,batch_barriers=0,single_replayed=0;
     unsigned maximum_batch_edges=0;
+    std::uint64_t replay_health_calls=0,controlled_finish_checks=0;
     std::array<std::uint64_t,8> replay_fallbacks{};
     JSValue materialization_count=JS_UNDEFINED;
     struct WorkerInvocation { JSValue receiver = JS_UNDEFINED; std::uint64_t id = 0; Hook* hook = nullptr; };
@@ -589,7 +590,7 @@ JSValue js_active(JSContext* c, JSValueConst, int, JSValueConst*) {
     return JS_NewUint32(c, runtime.replay_active ? runtime.replay_header.active : runtime.active.load());
 }
 JSValue js_replay_healthy(JSContext* c, JSValueConst, int, JSValueConst*) {
-    auto& runtime=state();
+    auto& runtime=state();++runtime.replay_health_calls;
     return JS_NewBool(c,runtime.replay_active && arkdps::owned_js::binding().active
         && runtime.lanes->failure.load(std::memory_order_acquire)==0);
 }
@@ -745,11 +746,33 @@ bool replay_arguments_valid(const PreparedReplay& item) {
 void release_replay_arguments(PreparedReplay& item) {
     for(const unsigned index:{0u,1u,3u,6u,7u})JS_FreeValue(state().context,item.arguments[index]);
 }
-void finish_replay_record(const PreparedReplay& item,JSValue answer) {
+void finish_replay_record(const PreparedReplay& item,JSValue answer,bool controlled=false) {
     using namespace arkdps::capture;
     auto& runtime=state();auto* c=runtime.context;const auto& header=item.header;auto* hook=item.hook;
     auto& depth=runtime.replay_depth[header.lane];auto& call=runtime.receivers[header.lane][header.depth-1];
     const auto* bytes=item.bytes;const auto segment_start=item.segment_start,field_start=item.field_start;const auto* payload=item.payload;
+    if(controlled){
+        ++runtime.controlled_finish_checks;
+        const auto& owner=arkdps::owned_js::binding();
+        const auto status=static_cast<unsigned>(owner.error);
+        // Deferred, unused HP slot errors are not committed here. Only the
+        // current binding status and persistent native poison are authoritative.
+        const bool valid=runtime.replay_active && owner.active && owner.ticket==header.ticket
+            && owner.roles==&runtime.configurations.roles && owner.hp_plan==&hook->capture_plan
+            && owner.hp_phase==header.phase && owner.hp_root==header.args[0]
+            && owner.hp_checkpoint==header.checkpoint && owner.hp_mode==header.mode_epoch
+            && owner.hp_issued && owner.hp_packet_context==c
+            && owner.configuration==runtime.configurations.find(header.configuration_id)
+            && (!(header.configuration_id||header.scope_revision||header.publication_revision)||owner.configuration!=nullptr)
+            && (!owner.configuration||owner.configuration->mode_epoch==header.mode_epoch)
+            && owner.scope_revision==header.scope_revision && owner.publication_revision==header.publication_revision
+            && owner.graph_mode==header.mode_epoch && owner.graph_checkpoint==header.checkpoint
+            && owner.concurrent==header.capture_concurrent && status<=10
+            && !OwnedReplayView::structural(owner.error)
+            && runtime.replay_header.ticket==header.ticket && runtime.replay_header.hook_id==header.hook_id
+            && runtime.replay_header.phase==header.phase;
+        if(!valid)runtime.lanes->poison(LaneFault::replay_structure);
+    }
     runtime.replay_active=false;
     if (const auto failure=runtime.lanes->failure.load(std::memory_order_acquire)) {
         if (JS_IsException(answer)) {auto ignored=JS_GetException(c);JS_FreeValue(c,ignored);}
@@ -963,7 +986,7 @@ JSValue js_batch_advance(JSContext* c,JSValueConst,int count,JSValueConst* args)
         if(batch.pending){
             if(JS_IsArray(c,args[1])!=1)reject();
             auto previous=std::move(batch.pending);release_replay_arguments(*previous);
-            try{finish_replay_record(*previous,JS_DupValue(c,args[1]));}
+            try{finish_replay_record(*previous,JS_DupValue(c,args[1]),true);}
             catch(...){batch.native_failure=std::current_exception();arkdps::owned_js::end();throw;}
             arkdps::owned_js::end();++batch.finalized;++runtime.batch_finalized;
         }else if(!JS_IsUndefined(args[1])||batch.issued)reject();
@@ -1329,6 +1352,8 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
         const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
         nlohmann::json state{{"version",1},{"reserved_ticket",reserved},
             {"processed_ticket",runtime.processed_ticket},{"closed_ticket",runtime.closed_ticket},
+            {"replay_lease_calls",arkdps::owned_js::binding().lease_calls},{"replay_status_calls",arkdps::owned_js::binding().status_calls},
+            {"replay_health_calls",runtime.replay_health_calls},{"controlled_finish_checks",runtime.controlled_finish_checks},
             {"batch_calls",runtime.batch_calls},{"batch_issued",runtime.batch_issued},{"batch_finalized",runtime.batch_finalized},
             {"batch_barriers",runtime.batch_barriers},{"single_replayed",runtime.single_replayed},{"maximum_batch_edges",runtime.maximum_batch_edges},
             {"published_ticket",runtime.published_ticket},

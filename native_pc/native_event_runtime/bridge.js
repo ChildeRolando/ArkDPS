@@ -89,13 +89,15 @@ class __ArkDpsLazyCaptureRecord {
 // by the worker before calling this function and remains live through End.
 // The result is only a transport envelope; C++ must independently inspect its
 // poison flag and complete bit before passing the projection to the journal.
-function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix,returnAddress,prepared,contract,batchView){
+function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix,returnAddress,prepared,contract,batchView,permit){
+ const controlled=permit===undefined?null:__arkdpsBatchAuthority.consume(permit,header,callback,receiver,payload,argumentMask,prefix,returnAddress,prepared,contract,batchView);
  const record=batchView===undefined?__arkdpsPackedCaptureRecord(header):new __ArkDpsLazyCaptureRecord(header,batchView);
- __arkdpsReplayBegin(record);
+ if(controlled!==null){controlled.record=record;__arkdpsBatchAuthority.begin(record,controlled);}else __arkdpsReplayBegin(record);
  const replay=__arkdpsReplay;
  let projection,summary,healthy=false;
  try{
   if(typeof __nativeReplayHealthy!=='function')__arkdpsReplayGap('native replay health helper unavailable');
+  if(controlled!==null&&!__arkdpsBatchAuthority.healthyIdentity())__arkdpsReplayGap('native replay health helper changed');
   if(prepared!==undefined){
    if(typeof callback!=='function'||typeof payload!=='bigint')__arkdpsReplayGap('invalid prepared HP callback');
    if(record.edge==='entry'&&argumentMask!==1)__arkdpsReplayGap('uncaptured native argument');
@@ -117,27 +119,50 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
    else callback.call(receiver,ptr(payload));
   }
   }
-  healthy=__nativeReplayHealthy();
+  if(controlled!==null&&!__arkdpsBatchAuthority.healthyIdentity())__arkdpsReplayGap('native replay health helper changed');
+  healthy=controlled!==null?true:__nativeReplayHealthy();
   if(typeof healthy!=='boolean')__arkdpsReplayGap('invalid native replay health');
   if(healthy&&__arkdpsReplay.structural.length===0&&record.edge==='leave'&&record.closed_after&&typeof prefix==='function')
    projection=prefix(record);
- }finally{summary=__arkdpsReplayEnd(true);}
+ }finally{summary=controlled!==null?__arkdpsBatchAuthority.end(true):__arkdpsReplayEnd(true);}
  const result=[batchView===undefined?record:null,projection,healthy&&summary,receiver];
  if(!result[2])result.push(replay.diagnostic||__arkdpsReplayDiagnostic(replay));
  return result;
 }
-// The native advance controller is local to this invocation; business callbacks
-// receive neither it nor the advance function and cannot commit another item.
-function __arkdpsReplayBatch(advance,controller,header,dispatch){
- if(typeof dispatch!=='function'||typeof advance!=='function'||!(header instanceof ArrayBuffer)||header.byteLength!==176)throw Error('invalid bounded replay entry');
- const view=new DataView(header);let answer,count=0;
- for(;;){
-  const item=advance(controller,answer);answer=undefined;
-  if(item===null)return count;
-  if(count>=32||!Array.isArray(item)||item.length!==9)throw Error('invalid bounded replay item');
-  answer=dispatch(item[0],item[1],item[2],item[3],item[4],item[5],item[6],item[7],item[8],view);++count;
- }
-}
+// The bootstrap captures actual native control function identities before the
+// probe source runs. Only a successful native advance can mint a one-shot
+// permit; callbacks receive neither controller, permit nor authority state.
+const __arkdpsControlledFrames=new WeakMap();
+const __arkdpsBatchAuthority=(()=>{
+ const nativeAdvance=globalThis.__nativeBoundedReplayAdvance,nativeHealth=globalThis.__nativeReplayHealthy;
+ const dispatchOwner=__arkdpsReplayDispatch,beginOwner=__arkdpsReplayBegin,endOwner=__arkdpsReplayEnd;
+ const pending=new WeakMap(),active=new WeakSet();
+ const valid=(state,record)=>state!==null&&typeof state==='object'&&active.has(state)&&state.record===record;
+ return Object.freeze({
+  valid,begin:beginOwner,end:endOwner,healthyIdentity:()=>typeof nativeHealth==='function'&&globalThis.__nativeReplayHealthy===nativeHealth,
+  consume(token,header,callback,receiver,payload,mask,prefix,returnAddress,prepared,contract,view){
+   const state=pending.get(token),item=state?.item;
+   if(!state||state.view!==view||item[0]!==header||item[1]!==callback||item[2]!==receiver||item[3]!==payload||item[4]!==mask||item[5]!==prefix||item[6]!==returnAddress||item[7]!==prepared||item[8]!==contract)__arkdpsReplayGap('invalid controlled replay permit');
+   pending.delete(token);active.add(state);return state;
+  },
+  run(advance,controller,header,dispatch){
+   if(typeof dispatch!=='function'||typeof advance!=='function'||!(header instanceof ArrayBuffer)||header.byteLength!==176)throw Error('invalid bounded replay entry');
+   const trusted=typeof nativeAdvance==='function'&&advance===nativeAdvance&&dispatch===dispatchOwner&&__arkdpsSealedProvider()!==null;
+   const view=new DataView(header);let answer,count=0;
+   for(;;){
+    const item=advance(controller,answer);answer=undefined;
+    if(item===null)return count;
+    if(count>=32||!Array.isArray(item)||item.length!==9)throw Error('invalid bounded replay item');
+    const controlled=trusted&&item[0]===header&&typeof item[1]==='function'&&typeof item[3]==='bigint'&&item[4]===1&&item[5]===undefined&&item[6]===undefined&&item[7]!==null&&typeof item[7]==='object';
+    let token,state;
+    if(controlled){token=Object.freeze({});state={item,view,record:null};pending.set(token,state);}
+    try{answer=dispatch(item[0],item[1],item[2],item[3],item[4],item[5],item[6],item[7],item[8],view,token);++count;}
+    finally{if(controlled){pending.delete(token);active.delete(state);state.item=null;state.view=null;state.record=null;}}
+   }
+  }
+ });
+})();
+function __arkdpsReplayBatch(advance,controller,header,dispatch){return __arkdpsBatchAuthority.run(advance,controller,header,dispatch);}
 function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read','invalid_phase'].includes(status);}
 const __arkdpsProviderDescriptor=Object.getOwnPropertyDescriptor,__arkdpsProviderKeys=Reflect.ownKeys,__arkdpsProviderExtensible=Object.isExtensible,__arkdpsProviderPrototype=Object.getPrototypeOf,__arkdpsProviderHasOwn=Object.hasOwn;
 function __arkdpsSealedProvider(){
@@ -161,10 +186,11 @@ function __arkdpsSealedProvider(){
  for(const pair of [['__nativeOwnedHpObservation','__nativeOwnedConsumeHpFailure'],['__nativeOwnedGraphCheck','__nativeOwnedGraphFailure']])if(__arkdpsProviderHasOwn(bundle,pair[0])!==__arkdpsProviderHasOwn(bundle,pair[1]))throw Error('incomplete native owned provider pair');
  return __arkdpsSealedNativeProvider=bundle;
 }
-function __arkdpsReplayBegin(record){
+function __arkdpsReplayBegin(record,controlled=null){
  if(__arkdpsReplay!==null)throw new Error('replay already active');
  if(record?.version!==1||typeof record.edge!=='string')
   throw new Error('invalid capture record');
+ if(controlled!==null&&!__arkdpsBatchAuthority.valid(controlled,record))throw Error('invalid controlled replay owner');
  const checkpoint=record.checkpoint??0;
  if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('invalid record checkpoint');
  if(record.native_view===true){
@@ -179,8 +205,8 @@ function __arkdpsReplayBegin(record){
   if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedHpObservation!==hpObservation||native.__nativeOwnedConsumeHpFailure!==hpFailure||native.__nativeOwnedGraphCheck!==graphCheck||native.__nativeOwnedGraphFailure!==graphFailure||native.__nativeOwnedGraphReadBatch!==graphBatch)
    native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedHpObservation:hpObservation,__nativeOwnedConsumeHpFailure:hpFailure,__nativeOwnedGraphCheck:graphCheck,__nativeOwnedGraphFailure:graphFailure,__nativeOwnedGraphReadBatch:graphBatch});
   }
-  if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||native.__nativeOwnedLease(record.ticket)!==true)throw new Error('native owned lease unavailable');
-  __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};return;
+  if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||(controlled===null&&native.__nativeOwnedLease(record.ticket)!==true))throw new Error('native owned lease unavailable');
+  __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};if(controlled!==null)__arkdpsControlledFrames.set(__arkdpsReplay,controlled);return;
  }
  if(record.native_view!==undefined&&record.native_view!==false)throw new Error('invalid owned provider selection');
  if(!Array.isArray(record.segments))throw new Error('invalid capture segments');
@@ -286,7 +312,7 @@ function __arkdpsReplayOptional(role,read){
 }
 function __arkdpsReplayEnd(compact=false){
  if(__arkdpsReplay===null)throw new Error('no replay active');
- if(__arkdpsReplay.native){
+ if(__arkdpsReplay.native&&!__arkdpsBatchAuthority.valid(__arkdpsControlledFrames.get(__arkdpsReplay),__arkdpsReplay.record)){
   const replay=__arkdpsReplay;
   try{if(replay.native.__nativeOwnedLease(replay.record.ticket)!==true)replay.structural.push('native owned lease ended');
    const status=replay.native.__nativeOwnedStatus();if(!Number.isInteger(status)||status<0||status>10||__arkdpsNativeStructuralStatus(status))replay.structural.push('native owned structural status '+status);
