@@ -250,3 +250,19 @@ def test_capture_retention_retries_after_locked_file_is_released(tmp_path, monke
     assert not old.exists()
     assert _records(log)[1]['data'] == {'frame': 3}
     assert replay(log)['coverage'] == 'retained_only'
+
+
+def test_native_replay_gap_numeric_context_survives_non_debug_journal(tmp_path):
+    fields = dict(op='mark', error_type='RuntimeError', code='native_replay_gap',
+                  replay_hook_id=2, replay_edge=1, replay_ticket=2**64-1,
+                  replay_role_id=3, replay_checkpoint=0, replay_field_id=-1,
+                  replay_gap_count=1, metadata_read_size=8,
+                  replay_reason_codes='1', replay_script_lines='1:123.2:456')
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               header=_test_header) as journal:
+        journal.write('native_hook_request_failed', dict(fields, reason='private pointer'))
+    log, = tmp_path.glob('wpf-*.jsonl')
+    _, failure = _records(log)
+    data = failure['data']
+    assert {k: data[k] for k in fields} == fields
+    assert 'reason' not in data

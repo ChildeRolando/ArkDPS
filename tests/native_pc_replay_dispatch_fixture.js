@@ -68,3 +68,20 @@ console.log('PASS_FUSED_REPLAY_DISPATCH fake provider only; single-edge lifecycl
 assert.equal(c.receiverInitial.sameInput,false);assert.equal(c.receiverInitial.thread,31);assert.equal(c.receiverInitial.address,'0xfedcba9876543210');assert.equal(c.receiverInitial.invocation,'9007199254740993');assert.equal(c.receiverInitial.mode,2);for(const d of Object.values(c.receiverDescriptors))assert.deepEqual(JSON.parse(JSON.stringify(d)),{writable:true,enumerable:true,configurable:true});assert.equal(c.leaveFacts.sameReceiver,true);assert.equal(c.leaveFacts.thread,32);assert.equal(c.noCallback[2],true);assert(c.noCallback[3]);assert.equal(c.noCallback[3].nativeCaptureInvocation,'42');assert.equal(c.noCallback[3].nativeCaptureModeEpoch,77);assert.equal(c.noCallback[3].returnAddress.toString(),'0x1234');assert.equal(c.retainedReceiver.invocation,'9007199254740993');assert.equal(c.retainedReceiver.mode,2);assert.equal(c.retainedReceiver.address,'0xfedcba9876543210');assert.equal(c.retainedReceiver.thread,32);
 
 assert.deepEqual(Array.from(c.receiverKeys),['threadId','returnAddress','nativeCaptureInvocation','nativeCaptureModeEpoch']);assert(c.receiverPlain);
+
+// Failure-only safe numeric labels, no address or arbitrary game strings.
+vm.runInContext(`globalThis.metadataGap=__arkdpsReplayDispatch(header(1,1),()=>{
+ try{__arkdpsReplayGap('unverified cold metadata 0xDEADBEEF:8');}catch(ignored){}
+},{},0n,0,prefix);`,c,{filename:'event-probe.js'});
+assert.equal(c.entry.length,4);assert.equal(c.leave.length,4);
+assert.equal(c.metadataGap.length,5);assert.equal(c.metadataGap[2],false);
+assert.equal(c.metadataGap[4].metadata_read_size,8);
+assert.deepEqual(Array.from(c.metadataGap[4].codes),[1]);
+assert(c.metadataGap[4].frames.some(f=>f[0]===1&&f[1]>0));
+assert(!JSON.stringify(c.metadataGap[4]).includes('DEADBEEF'));
+assert.equal(c.caughtGap[4].count,1);
+
+vm.runInContext(`globalThis.pointGap=__arkdpsReplayDispatch(header(1,1),()=>{
+ try{__arkdpsReplayGap('missing or ambiguous witness cold.root_close',{role:'cold.root_close',checkpoint:7,field_id:-1});}catch(ignored){}
+},{},0n,0,prefix);`,c);
+assert.equal(c.pointGap[4].role,'cold.root_close');assert.equal(c.pointGap[4].checkpoint,7);assert.equal(c.pointGap[4].field_id,-1);

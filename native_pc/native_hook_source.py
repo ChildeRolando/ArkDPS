@@ -873,6 +873,22 @@ class NativeHookEventProbe:
                                           response_limit=int(oversized[2]))
                         if oversized[3] is not None:
                             diagnostic['requested_event_count'] = int(oversized[3])
+                    replay_gap = re.search(
+                        r'(?:^|; )native_replay_gap:v1,h=([0-9]{1,5}),e=([01]),t=([0-9]{1,20}),'
+                        r'r=([0-9]{1,5}),p=([0-9]{1,5}),f=(-1|[0-9]{1,5}),g=([0-9]{1,2}),'
+                        r'm=([0-9]{1,7}),k=([0-9]{1,2}(?:\.[0-9]{1,2}){0,15}),'
+                        r'q=(0|[12]:[0-9]{1,6}(?:\.[12]:[0-9]{1,6}){0,2})$', str(exc))
+                    if replay_gap:
+                        values = [int(replay_gap[i]) for i in range(1, 9)]
+                        codes = [int(v) for v in replay_gap[9].split('.')]
+                        if (values[2] <= 2**64 - 1 and max(values[3:6]) <= 65535
+                                and 1 <= values[6] <= 16 and values[7] <= 1048576
+                                and all(v <= 30 for v in codes)):
+                            diagnostic.update(code='native_replay_gap', replay_hook_id=values[0],
+                                replay_edge=values[1], replay_ticket=values[2], replay_role_id=values[3],
+                                replay_checkpoint=values[4], replay_field_id=values[5],
+                                replay_gap_count=values[6], metadata_read_size=values[7],
+                                replay_reason_codes=replay_gap[9], replay_script_lines=replay_gap[10])
                     self._timing_sink('native_hook_request_failed', diagnostic)
                 except Exception:
                     pass  # Failure reporting cannot replace the transport error.

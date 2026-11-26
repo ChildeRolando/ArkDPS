@@ -718,11 +718,49 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     auto receiver=JS_GetPropertyUint32(c,answer,3);
     const bool valid=JS_IsBool(complete) && JS_ToBool(c,complete)==1 && JS_IsObject(receiver)
         && (header.phase==Phase::entry || JS_VALUE_GET_PTR(receiver)==JS_VALUE_GET_PTR(call.receiver));
-    JS_FreeValue(c,complete);JS_FreeValue(c,answer);
+    JS_FreeValue(c,complete);
     if (!valid || JS_IsException(record) || JS_IsException(projection)) {
+        std::string diagnostic="native_replay_gap:v1,h="+std::to_string(header.hook_id)
+            +",e="+std::to_string(header.phase==Phase::entry?0:1)+",t="+std::to_string(header.ticket);
+        const auto diagnostic_base=diagnostic;
+        auto failure_detail=JS_GetPropertyUint32(c,answer,4);
+        try {
+            const auto d=json_value(c,failure_detail);
+            const auto bounded=[&](const char* key,int maximum,int fallback) {
+                const auto it=d.find(key);if(it==d.end()||!it->is_number_integer())return fallback;
+                const auto value=it->get<std::int64_t>();return value>=0&&value<=maximum?static_cast<int>(value):fallback;
+            };
+            unsigned role=0;
+            if(d.contains("role")&&d["role"].is_string()) {
+                const auto name=d["role"].get<std::string>();
+                for(std::size_t i=0;i<runtime.configurations.roles.size();++i)
+                    if(runtime.configurations.roles[i]==name){role=static_cast<unsigned>(i+1);break;}
+            }
+            diagnostic+=",r="+std::to_string(role)+",p="+std::to_string(bounded("checkpoint",65535,0))
+                +",f="+std::to_string(bounded("field_id",65535,-1))+",g="+std::to_string(bounded("count",16,1))
+                +",m="+std::to_string(bounded("metadata_read_size",1048576,0))+",k=";
+            bool first=true;unsigned code_count=0;
+            if(d.contains("codes")&&d["codes"].is_array())for(const auto& code:d["codes"]){
+                if(!code.is_number_integer())continue;const auto n=code.get<int>();if(n<0||n>30)continue;
+                if(!first)diagnostic+=".";diagnostic+=std::to_string(n);first=false;
+                if(++code_count==16)break;
+            }
+            if(first)diagnostic+="0";
+            diagnostic+=",q=";first=true;unsigned frame_count=0;
+            if(d.contains("frames")&&d["frames"].is_array())for(const auto& frame:d["frames"]){
+                if(!frame.is_array()||frame.size()!=2||!frame[0].is_number_integer()||!frame[1].is_number_integer())continue;
+                const auto file=frame[0].get<int>(),line=frame[1].get<int>();
+                if(file<1||file>2||line<1||line>999999)continue;
+                if(!first)diagnostic+=".";diagnostic+=std::to_string(file)+":"+std::to_string(line);first=false;
+                if(++frame_count==3)break;
+            }
+            if(first)diagnostic+="0";
+        } catch(...) {diagnostic=diagnostic_base+",r=0,p=0,f=-1,g=1,m=0,k=0,q=0";}
+        JS_FreeValue(c,failure_detail);JS_FreeValue(c,answer);
         JS_FreeValue(c,record);JS_FreeValue(c,projection);JS_FreeValue(c,receiver);
-        throw std::runtime_error("native callback replay has structural gaps");
+        throw std::runtime_error(diagnostic);
     }
+    JS_FreeValue(c,answer);
     if (header.phase==Phase::entry) call.receiver=receiver;
     else JS_FreeValue(c,receiver);
     if (header.phase==Phase::leave) {

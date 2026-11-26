@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <set>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -311,12 +312,16 @@ std::string safe_diagnostic(const char* message, const char* phase) {
                 detail += suffix;
         }
     }
+    // Only numeric, bounded replay context crosses this privacy boundary.
+    static const std::regex replay_gap(R"(^native_replay_gap:v1,h=[0-9]{1,5},e=[01],t=[0-9]{1,20},r=[0-9]{1,5},p=[0-9]{1,5},f=(-1|[0-9]{1,5}),g=[0-9]{1,2},m=[0-9]{1,7},k=[0-9]{1,2}(\.[0-9]{1,2}){0,15},q=(0|[12]:[0-9]{1,6}(\.[12]:[0-9]{1,6}){0,2})$)");
+    if(first.size()<=256 && std::regex_match(first,replay_gap))detail=first;
     if (type == "TypeError" && first.find("not a function") != std::string::npos)
         detail = "TypeError: not a function";
     std::string result = std::string("native runtime ") + phase + " failed; error_type=" + type;
     if (!detail.empty()) result += "; " + detail;
 
-    if (result.size() > 256) result.resize(256);
+    const auto limit=detail.rfind("native_replay_gap:v1,",0)==0?384u:256u;
+    if (result.size() > limit) result.resize(limit);
     return result;
 }
 

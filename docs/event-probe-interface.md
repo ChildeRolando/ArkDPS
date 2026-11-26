@@ -181,3 +181,12 @@ Sessions 只消费已取得的事务，不调用 observer。初始化用 anchor 
 无reset的合法零输出scope不能丢弃：`pending_scope_exit` 保存原始独立successor，并物化anchor和最后同scope空窗口后归档，沿用严格终局/body门禁，缺证仍未知。明确absence/finished/process-change通过 `pending_scope_end` 保留原lifecycle及原terminal诊断并归档已知观察窗口，不证明未读尾部、不推进更高ACK。原队列不因零伤害或timeout被释放。
 
 只有 `pending_scope_superseded` 的原始独立PC serial严格+1、原生generation严格+1、PID birth/build/五根/manager/账号相同、两时钟确实回退、整个空片段没有进入callback且source无未定位失败时，才允许用真实reset替代pre-start空片段。它和正时间初始化是不同事务；不把旧锚点重标成零，不以新scope标志自证reset。未知版本、冲突事务、已建立generation上的重初始化一律拒绝。
+
+
+## 原生回放结构缺口诊断
+
+结构缺口仍使观察器失败并拒绝发布/ACK。融合回放只在失败时增加内部 tuple 第五项；成功仍为四项。首个缺口记录发生时的 role/checkpoint/field，最多16个固定原因码，最多3个 `event-probe.js` / `native-bridge.js` 数字行号；只对已知 frozen metadata miss 提取读取长度，不传读取地址。C++把role映射为初始化intern的数字ID，并绑定实际hook/edge/raw ticket。服务器只接收 `native_replay_gap:v1` 的有界数字语法，其他异常继续原有脱敏。
+
+普通审计 `native_hook_request_failed` 保留 `replay_hook_id/edge/ticket/role_id/checkpoint/field_id/gap_count`、`metadata_read_size`、点分隔 `replay_reason_codes` 和 `replay_script_lines`（文件码1=event-probe，2=native-bridge）。field=-1表示自动选择；role=0表示未映射。原因码1..19依次为：cold metadata缺失、冻结metadata缺失、cold class identity、witness、optional字段、parent checkpoint、point、read、冲突观察、native structural、无效几何、禁止写/调用/分配、mode epoch、lease、provider、ancestry、cold binding、参数、health；0为未分类，30为未附加JS缺口的失败。不会传token、地址、原始异常文本、原始stack或源代码。
+
+这些字段定位失败发生位置，不证明缺失字段的业务根因。失败回执不取代native独立poison验证，planned unreadable/changed_guard的既有处理不变。

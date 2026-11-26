@@ -244,7 +244,9 @@ KEY_EVENTS = {
     'observer_retry': ('generation', 'previous_status', 'status'),
     'observer_recovery_deferred': ('generation', 'observer_status', 'code', 'can_restart_in_process'),
     'native_hook_request_failed': ('op', 'error_type', 'win32_error', 'code', 'response_bytes',
-                                   'response_limit', 'requested_event_count'),
+                                   'response_limit', 'requested_event_count', 'replay_hook_id', 'replay_edge',
+                                   'replay_ticket', 'replay_role_id', 'replay_checkpoint', 'replay_field_id',
+                                   'replay_gap_count', 'metadata_read_size', 'replay_reason_codes', 'replay_script_lines'),
     'lifecycle_state': ('previous', 'state'),
     'capture_health': None,  # Sanitized before the journal mode is applied.
     'event_gap': ('error_type', 'code'),

@@ -77,6 +77,7 @@ function __arkdpsPackedCaptureRecord(bytes){return new __ArkDpsCaptureRecord(byt
 function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix,returnAddress){
  const record=__arkdpsPackedCaptureRecord(header);
  __arkdpsReplayBegin(record);
+ const replay=__arkdpsReplay;
  let projection,summary,healthy=false;
  try{
   if(typeof __nativeReplayHealthy!=='function')__arkdpsReplayGap('native replay health helper unavailable');
@@ -93,7 +94,9 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
   if(healthy&&__arkdpsReplay.structural.length===0&&record.edge==='leave'&&record.closed_after&&typeof prefix==='function')
    projection=prefix(record);
  }finally{summary=__arkdpsReplayEnd(true);}
- return [record,projection,healthy&&summary,receiver];
+ const result=[record,projection,healthy&&summary,receiver];
+ if(!result[2])result.push(replay.diagnostic||__arkdpsReplayDiagnostic(replay));
+ return result;
 }
 function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read','invalid_phase'].includes(status);}
 function __arkdpsReplayBegin(record){
@@ -187,12 +190,12 @@ function __arkdpsReplayWitness(role,body){
  let fieldId;
  if(replay.native){
   const packed=__arkdpsNativePoint(role,checkpoint);
-  if((packed>>>24)!==1)__arkdpsReplayGap('missing or ambiguous witness '+role);
+  if((packed>>>24)!==1)__arkdpsReplayGap('missing or ambiguous witness '+role,{role,checkpoint,field_id:-1});
   const status=(packed>>>16)&255;if(status)__arkdpsNativeReadFailure(status);
   fieldId=packed&65535;
  }else{
   const ids=replay.points.get(role+'\0'+checkpoint)?.ids??new Set();
-  if(ids.size!==1)__arkdpsReplayGap('missing or ambiguous witness '+role);
+  if(ids.size!==1)__arkdpsReplayGap('missing or ambiguous witness '+role,{role,checkpoint,field_id:-1});
   fieldId=[...ids][0];
  }
  replay.role=role;replay.fieldId=fieldId;replay.checkpoint=checkpoint;
@@ -203,14 +206,14 @@ function __arkdpsReplayOptional(role,read){
  const replay=__arkdpsReplay,checkpoint=replay.record.checkpoint??0;
  if(replay.native){
   const packed=__arkdpsNativePoint(role,checkpoint),status=(packed>>>16)&255;
-  if((packed>>>24)!==1)__arkdpsReplayGap('missing or ambiguous optional capture field '+role);
-  if(status){if(__arkdpsNativeStructuralStatus(status))__arkdpsReplayGap('invalid optional native capture field '+role);replay.unreadable++;return {available:false,value:null};}
+  if((packed>>>24)!==1)__arkdpsReplayGap('missing or ambiguous optional capture field '+role,{role,checkpoint,field_id:-1});
+  if(status){if(__arkdpsNativeStructuralStatus(status))__arkdpsReplayGap('invalid optional native capture field '+role,{role,checkpoint,field_id:-1});replay.unreadable++;return {available:false,value:null};}
   return {available:true,value:__arkdpsReplayWitness(role,read)};
  }
  const states=[...(replay.points.get(role+'\0'+checkpoint)?.states.values()??[])];
- if(states.length!==1)__arkdpsReplayGap('missing optional capture field '+role);
+ if(states.length!==1)__arkdpsReplayGap('missing optional capture field '+role,{role,checkpoint,field_id:-1});
  if(states[0].status!=='ok'){
-  if(__arkdpsStructuralCaptureStatus(states[0].status))__arkdpsReplayGap('invalid optional capture field '+role);
+  if(__arkdpsStructuralCaptureStatus(states[0].status))__arkdpsReplayGap('invalid optional capture field '+role,{role,checkpoint,field_id:-1});
   replay.unreadable++;return {available:false,value:null};
  }
  return {available:true,value:__arkdpsReplayWitness(role,read)};
@@ -228,9 +231,31 @@ function __arkdpsReplayEnd(compact=false){
  if(compact===true)return complete;
  return Object.freeze({complete,structural_gaps:Object.freeze([...replay.structural]),unreadable_reads:replay.unreadable});
 }
-function __arkdpsReplayGap(reason){
- if(__arkdpsReplay!==null&&__arkdpsReplay.structural.length<16)__arkdpsReplay.structural.push(reason);
- throw new Error(reason);
+// Failure-only, bounded labels. Raw reasons never cross the native transport.
+function __arkdpsReplayDiagnostic(replay){
+ const reasons=replay.structural.slice(0,16);
+ const patterns=[/unverified cold metadata/,/metadata not frozen|frozen class parent/,/cold class identity/,/witness/,/optional capture field/,/parent checkpoint/,/missing captured point/,/missing captured read/,/conflicting|ambiguous captured/,/native owned structural/,/invalid.*(?:size|address|point|bytes)/,/NativeFunction|native write|native allocation/,/mode.*epoch/,/lease ended/,/provider failed/,/ancestry limit/,/cold.*binding/,/argument/,/health/];
+ const codes=reasons.map(reason=>{const i=patterns.findIndex(p=>p.test(reason));return i<0?0:i+1;});
+ const size=reasons.map(r=>/^unverified cold metadata [^ :]+:([0-9]+)$/.exec(r)).find(Boolean);
+ return {codes:codes.length?codes:[30],count:Math.max(1,reasons.length),role:replay.gapRole||replay.role,
+  checkpoint:replay.gapCheckpoint??replay.checkpoint,field_id:replay.gapField??replay.fieldId??-1,
+  metadata_read_size:size&&Number(size[1])<=1048576?Number(size[1]):0,frames:replay.gapFrames||[]};
+}
+function __arkdpsReplayGap(reason,point){
+ const error=new Error(reason),replay=__arkdpsReplay;
+ if(replay!==null){
+  if(replay.structural.length===0){
+   replay.gapRole=point?.role??replay.role;replay.gapCheckpoint=point?.checkpoint??replay.checkpoint;replay.gapField=point?.field_id??replay.fieldId;
+   replay.gapFrames=[];
+   const stack=typeof error.stack==='string'?error.stack:'';
+   const pattern=/(event-probe\.js|native-bridge\.js):([0-9]+)(?::[0-9]+)?/g;
+   let match;while(replay.gapFrames.length<3&&(match=pattern.exec(stack))!==null){
+    const line=Number(match[2]);if(line>0&&line<=999999)replay.gapFrames.push([match[1]==='event-probe.js'?1:2,line]);
+   }
+  }
+  if(replay.structural.length<16)replay.structural.push(reason);
+ }
+ throw error;
 }
 function __arkdpsNativeStructuralStatus(status){return [1,2,3,9,10].includes(status);}
 function __arkdpsNativeReadFailure(status){

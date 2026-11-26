@@ -930,3 +930,32 @@ def test_prepared_business_source_change_is_rejected_even_with_ui_callback(prepa
         probe.start()
     assert not prepared.claimed and not pipes and not loaders[0].closed
     prepared.close()
+
+
+@pytest.mark.parametrize('suffix, accepted', [
+    ('h=2,e=1,t=18446744073709551615,r=3,p=0,f=-1,g=1,m=8,k=1,q=1:123.2:456', True),
+    ('h=2,e=1,t=3,r=3,p=0,f=1,g=1,m=8,k=1,q=0; token=secret', False),
+    ('h=2,e=1,t=3,r=3,p=0,f=1,g=1,m=8,k=99,q=0', False),
+])
+def test_replay_gap_audit_is_numeric_bounded_and_keeps_failure(suffix, accepted):
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; native_replay_gap:v1,' + suffix)
+    def request(*args, **kwargs):
+        raise failure
+    records = []
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure
+    assert probe.status == ObserverStatus.FAILED
+    data = records[0][1]
+    assert (data.get('code') == 'native_replay_gap') is accepted
+    assert 'secret' not in repr(data)
+    if accepted:
+        assert data['replay_ticket'] == 2**64 - 1
+        assert data['replay_field_id'] == -1
+        assert data['metadata_read_size'] == 8
+        assert data['replay_reason_codes'] == '1'
+        assert data['replay_script_lines'] == '1:123.2:456'
