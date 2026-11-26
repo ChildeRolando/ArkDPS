@@ -17,7 +17,7 @@ function __arkdpsUnsigned64(value){
 }
 // Replay never dereferences a game address. A role is an independently captured
 // observation point, not a last-value cache keyed by pointer.
-let __arkdpsReplay=null;
+let __arkdpsReplay=null,__arkdpsNativeProvider=null;
 // A record owns a small, fixed wire header. Cold fields stay lazy: most HP
 // edges never inspect ancestry, parents, publication or terminal metadata.
 // None of these getters consult the native view or a later capture lease.
@@ -85,8 +85,8 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
   if(typeof healthy!=='boolean')__arkdpsReplayGap('invalid native replay health');
   if(healthy&&__arkdpsReplay.structural.length===0&&record.edge==='leave'&&record.closed_after&&typeof prefix==='function')
    projection=prefix(record);
- }finally{summary=__arkdpsReplayEnd();}
- return [record,projection,healthy&&summary.complete];
+ }finally{summary=__arkdpsReplayEnd(true);}
+ return [record,projection,healthy&&summary];
 }
 function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read','invalid_phase'].includes(status);}
 function __arkdpsReplayBegin(record){
@@ -96,9 +96,13 @@ function __arkdpsReplayBegin(record){
  const checkpoint=record.checkpoint??0;
  if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('invalid record checkpoint');
  if(record.native_view===true){
-  const names=['__nativeOwnedLease','__nativeOwnedRead','__nativeOwnedScalar','__nativeOwnedStatus','__nativeOwnedPoint'];
-  if(names.some(name=>typeof globalThis[name]!=='function'))throw new Error('native owned provider unavailable');
-  const native=Object.fromEntries(names.map(name=>[name,globalThis[name]]));
+  const lease=globalThis.__nativeOwnedLease,read=globalThis.__nativeOwnedRead,scalar=globalThis.__nativeOwnedScalar,
+   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint;
+  if(typeof lease!=='function'||typeof read!=='function'||typeof scalar!=='function'||typeof status!=='function'||typeof point!=='function')
+   throw new Error('native owned provider unavailable');
+  let native=__arkdpsNativeProvider;
+  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point)
+   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point});
   if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||native.__nativeOwnedLease(record.ticket)!==true)throw new Error('native owned lease unavailable');
   __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};return;
  }
@@ -204,7 +208,7 @@ function __arkdpsReplayOptional(role,read){
  }
  return {available:true,value:__arkdpsReplayWitness(role,read)};
 }
-function __arkdpsReplayEnd(){
+function __arkdpsReplayEnd(compact=false){
  if(__arkdpsReplay===null)throw new Error('no replay active');
  if(__arkdpsReplay.native){
   const replay=__arkdpsReplay;
@@ -212,8 +216,10 @@ function __arkdpsReplayEnd(){
    const status=replay.native.__nativeOwnedStatus();if(!Number.isInteger(status)||status<0||status>10||__arkdpsNativeStructuralStatus(status))replay.structural.push('native owned structural status '+status);
   }catch(error){replay.structural.push('native owned provider failed at end');}
  }
- const result=Object.freeze({complete:__arkdpsReplay.structural.length===0,structural_gaps:Object.freeze([...__arkdpsReplay.structural]),unreadable_reads:__arkdpsReplay.unreadable});
- __arkdpsReplay=null;return result;
+ const replay=__arkdpsReplay,complete=replay.structural.length===0;
+ __arkdpsReplay=null;
+ if(compact===true)return complete;
+ return Object.freeze({complete,structural_gaps:Object.freeze([...replay.structural]),unreadable_reads:replay.unreadable});
 }
 function __arkdpsReplayGap(reason){
  if(__arkdpsReplay!==null&&__arkdpsReplay.structural.length<16)__arkdpsReplay.structural.push(reason);

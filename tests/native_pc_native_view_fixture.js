@@ -83,6 +83,11 @@ status=0;const beforeMetadataReads=readCalls;__arkdpsReplayBegin(nativeRecord())
 globalThis.__arkdpsColdMetadataRead=(address,size)=>{if(address.toString()!=='0x5a'||size!==8)throw Error('unexpected immutable key');const owned=new ArrayBuffer(8);new DataView(owned).setBigUint64(0,1n,true);return owned;};status=0;__arkdpsReplayBegin(nativeRecord());globalThis.metadataAssignable=__arkdpsCapturedAssignable(ptr(1),ptr(2));globalThis.metadataGoodEnd=__arkdpsReplayEnd();
 status=0;__arkdpsReplayBegin(nativeRecord());globalThis.badAddress=rejects(()=>__arkdpsOwnedRead('invalid',1));globalThis.badAddressEnd=__arkdpsReplayEnd();
 globalThis.wrapValues=[ptr(-1n).toString(),ptr(0x10000000000000001n).toString(),ptr(-0x10000000000000001n).toString()];
+status=0;__arkdpsReplayBegin(nativeRecord());const cachedProvider=__arkdpsReplay.native;globalThis.providerFrozen=Object.isFrozen(cachedProvider);globalThis.compactGood=__arkdpsReplayEnd(true);
+__arkdpsReplayBegin(nativeRecord());globalThis.providerReused=cachedProvider===__arkdpsReplay.native;globalThis.publicEnd=__arkdpsReplayEnd();
+globalThis.__nativeOwnedRead=(...args)=>savedRead(...args);__arkdpsReplayBegin(nativeRecord());globalThis.providerRebuilt=cachedProvider!==__arkdpsReplay.native;globalThis.compactRebuilt=__arkdpsReplayEnd(true);globalThis.__nativeOwnedRead=savedRead;
+status=0;__arkdpsReplayBegin(nativeRecord());leased=false;globalThis.compactExpired=__arkdpsReplayEnd(true);leased=true;
+status=0;__arkdpsReplayBegin(nativeRecord());status=9;globalThis.compactPoison=__arkdpsReplayEnd(true);status=0;
 globalThis.liveCount=live;
 `,c);
 assert.deepEqual(Array.from(c.values),[251,65000,0xfedcba98,-123456,'18364758544493064720','-9223372036854775807',-13.25,'0xfedcba9876543210']);
@@ -100,3 +105,5 @@ assert(c.metadataMissing);assert.equal(c.metadataMissingEnd.complete,false);asse
 assert(c.badAddress);assert.equal(c.badAddressEnd.complete,false);
 
 assert.deepEqual(Array.from(c.wrapValues),['0xffffffffffffffff','0x1','0xffffffffffffffff']);
+
+assert(c.providerFrozen);assert(c.providerReused);assert(c.providerRebuilt);assert.equal(c.compactGood,true);assert.equal(c.compactRebuilt,true);assert.equal(c.publicEnd.complete,true);assert.equal(c.compactExpired,false);assert.equal(c.compactPoison,false);

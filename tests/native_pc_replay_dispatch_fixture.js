@@ -18,7 +18,7 @@ function rejects(fn){try{fn();return false;}catch(error){return true;}}
 `,c);
 vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8'),c);
 vm.runInContext(`
-const originalEnd=__arkdpsReplayEnd;__arkdpsReplayEnd=function(){endCalls++;return originalEnd();};
+const originalEnd=__arkdpsReplayEnd;__arkdpsReplayEnd=function(compact){endCalls++;return originalEnd(compact);};
 const receiver={calls:0},input=argumentsBytes(3),prefix=record=>{prefixCalls++;if(!__arkdpsReplayActive()||record!==__arkdpsReplayRecord())throw Error('prefix moved after End');return Object.freeze({value:__arkdpsReplayPoint('body',()=>ptr(4096).readU8())});};
 globalThis.entry=__arkdpsReplayDispatch(header(),function(args){this.calls++;this.args=args;this.value=__arkdpsReplayPoint('body',()=>ptr(4096).readU8());},receiver,input,7,prefix);
 globalThis.entryFacts={calls:receiver.calls,value:receiver.value,args:receiver.args.map(p=>p.toString()),proxy:isProxy(receiver.args),active:__arkdpsReplayActive(),endCalls,prefixCalls};
