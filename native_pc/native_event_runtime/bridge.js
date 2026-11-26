@@ -573,9 +573,10 @@ function __arkdpsOwnedGraphPrimitives(kind,graph){
  }
  if(!Array.isArray(packet)||packet[0]!==1||packet[1]!==geometry.fields.length||packet[2]!==(replay.record.checkpoint??0)||packet[3]!==geometry.mode)__arkdpsReplayGap('invalid primitive graph packet');
  let at=4;const decoded=[];
- for(const codecs of geometry.codecs){
-  if(packet[at++]!==(codecs===null?0:codecs.length))__arkdpsReplayGap('invalid primitive graph value count');
+ for(let index=0;index<geometry.codecs.length;index++){
+  const codecs=geometry.codecs[index];
   if(codecs===null){decoded.push(null);continue;}
+  if(packet[at++]!==index||packet[at++]!==codecs.length)__arkdpsReplayGap('invalid primitive graph value count');
   const values=[];for(const codec of codecs){
    const value=packet[at++];
    if(codec.kind==='u32'||codec.kind==='i32'){

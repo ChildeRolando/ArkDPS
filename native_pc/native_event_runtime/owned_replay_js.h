@@ -241,10 +241,12 @@ inline JSValue execute_read_batch(JSContext* c,const ReadProgram& plan,unsigned 
         unsigned at=0,slot=0;bool failed=false;
         const auto append=[&](JSValue value){if(JS_IsException(value)){failed=true;return;}if(JS_DefinePropertyValueUint32(c,result,at++,value,JS_PROP_ENUMERABLE)<0)failed=true;};
         append(JS_NewUint32(c,1));append(JS_NewUint32(c,plan.fields.size()));append(JS_NewUint32(c,checkpoint));append(JS_NewFloat64(c,static_cast<double>(owner.graph_mode)));
+        unsigned original_index=0;
         for(const auto& field:plan.fields){
+            const auto index=original_index++;
             if(failed)break;
-            append(JS_NewUint32(c,field.project?field.observations.size():0));
             if(!field.project)continue;
+            append(JS_NewUint32(c,index));append(JS_NewUint32(c,field.observations.size()));
             std::uint32_t offset;std::memcpy(&offset,output.data()+16+16*slot+4,4);++slot;
             for(const auto& codec:field.observations){
                 const auto* data=output.data()+offset+codec.offset;

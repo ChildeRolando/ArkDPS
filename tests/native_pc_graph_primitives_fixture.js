@@ -7,7 +7,7 @@ function __nativeOwnedLease(t){return t==='17';}function __nativeOwnedStatus(){r
 function __nativeOwnedRead(){live++;throw Error('read forbidden');}function __nativeOwnedScalar(){live++;throw Error('scalar forbidden');}function __nativeOwnedPoint(){live++;throw Error('point forbidden');}
 function __nativeOwnedGraphFailure(){return 1;}
 function __nativeOwnedGraphCheck(kind,revision,epoch,format){calls++;if(kind!=='scope'||revision!==7||epoch!==5||format!==1)throw Error('ABI');if(mode==='guard'){status=8;return;}if(mode==='missing'){status=9;return;}
- const p=[1,2,3,5,0,4,4294967295,-1,18446744073709551615n,-9223372036854775808n];if(mode==='phase')p[2]=0;if(mode==='sign')p[7]=4294967295;if(mode==='wide')p[8]=18446744073709551616n;if(mode==='extra')p.push(1);return Object.freeze(p);}
+ const p=[1,2,3,5,1,4,4294967295,-1,18446744073709551615n,-9223372036854775808n];if(mode==='phase')p[2]=0;if(mode==='sign')p[7]=4294967295;if(mode==='wide')p[8]=18446744073709551616n;if(mode==='extra')p.push(1);return Object.freeze(p);}
 function rec(){return {version:1,native_view:true,ticket:'17',edge:'leave',checkpoint:3,facts:{mode_epoch:5}};}function reject(fn){try{fn();return false;}catch(e){return true;}}
 `,c);vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8'),c);
 vm.runInContext(`

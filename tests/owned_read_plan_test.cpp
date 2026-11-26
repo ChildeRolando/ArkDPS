@@ -72,8 +72,8 @@ static void graph_contract(JSContext* c){
  assert(check_config->scope->primitive_ready);
  start();owned::bind_graphs(check_config,2,0,1);JSValue typedArgs[]{JS_NewString(c,"scope"),JS_NewUint32(c,2),JS_NewUint32(c,1),JS_NewUint32(c,1)};
  value=owned::graph_check(c,JS_UNDEFINED,4,typedArgs);assert(JS_IsArray(c,value)==1&&!poisoned);
- auto got=JS_GetPropertyUint32(c,value,5);std::uint32_t actual=0;assert(JS_ToUint32(c,&actual,got)==0&&actual==100);JS_FreeValue(c,got);JS_FreeValue(c,value);
- std::memset(data.data(),255,4);start();owned::bind_graphs(check_config,2,0,1);value=owned::graph_check(c,JS_UNDEFINED,4,typedArgs);got=JS_GetPropertyUint32(c,value,6);std::int32_t signed_value=0;assert(JS_ToInt32(c,&signed_value,got)==0&&signed_value==-1);JS_FreeValue(c,got);JS_FreeValue(c,value);std::uint32_t restored=100;std::memcpy(data.data(),&restored,4);
+ auto got=JS_GetPropertyUint32(c,value,6);std::uint32_t actual=0;assert(JS_ToUint32(c,&actual,got)==0&&actual==100);JS_FreeValue(c,got);JS_FreeValue(c,value);
+ std::memset(data.data(),255,4);start();owned::bind_graphs(check_config,2,0,1);value=owned::graph_check(c,JS_UNDEFINED,4,typedArgs);got=JS_GetPropertyUint32(c,value,7);std::int32_t signed_value=0;assert(JS_ToInt32(c,&signed_value,got)==0&&signed_value==-1);JS_FreeValue(c,got);JS_FreeValue(c,value);std::uint32_t restored=100;std::memcpy(data.data(),&restored,4);
  for(auto arg:typedArgs)JS_FreeValue(c,arg);
  data[4]=std::byte{1};value=check_run();assert(JS_IsUndefined(value)&&owned::binding().error==Error::changed_guard&&owned::binding().graph_failure==1&&!poisoned);JS_FreeValue(c,value);data[4]=std::byte{101};
  fs[1].error=Error::field_unreadable;value=check_run();assert(JS_IsUndefined(value)&&owned::binding().error==Error::field_unreadable&&!poisoned);JS_FreeValue(c,value);fs[1].error=Error::ok;
@@ -88,7 +88,7 @@ static void graph_contract(JSContext* c){
  const std::uint64_t maximum=UINT64_MAX;std::memcpy(data.data(),&maximum,8);ss[0].size=8;
  start();owned::bind_graphs(wide_config,3,0,1);JSValue wideArgs[]{JS_NewString(c,"scope"),JS_NewUint32(c,3),JS_NewUint32(c,1),JS_NewUint32(c,1)};
  value=owned::graph_check(c,JS_UNDEFINED,4,wideArgs);assert(JS_IsArray(c,value)==1&&!poisoned);
- auto unsigned_big=JS_GetPropertyUint32(c,value,5),signed_big=JS_GetPropertyUint32(c,value,6);std::int64_t signed_bigint=0;
+ auto unsigned_big=JS_GetPropertyUint32(c,value,6),signed_big=JS_GetPropertyUint32(c,value,7);std::int64_t signed_bigint=0;
  assert(JS_ToBigInt64(c,&signed_bigint,signed_big)==0&&signed_bigint==-1);const auto* exact=JS_ToCString(c,unsigned_big);assert(exact&&std::string(exact)=="18446744073709551615");JS_FreeCString(c,exact);
  JS_FreeValue(c,unsigned_big);JS_FreeValue(c,signed_big);JS_FreeValue(c,value);for(auto arg:wideArgs)JS_FreeValue(c,arg);ss[0].size=4;
  const std::uint32_t original_data[]{100,101};std::memcpy(data.data(),original_data,8);owned::end();
