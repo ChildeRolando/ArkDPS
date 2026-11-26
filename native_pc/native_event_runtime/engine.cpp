@@ -943,6 +943,7 @@ struct BoundedReplayBatch {
     std::chrono::steady_clock::time_point deadline;
     JSValue controller=JS_UNDEFINED,header=JS_UNDEFINED;
     std::unique_ptr<PreparedReplay> pending;
+    std::exception_ptr native_failure;
 };
 BoundedReplayBatch& replay_batch_state(){static auto* value=new BoundedReplayBatch;return *value;}
 arkdps::capture::DirectHpReason direct_record_reason(const arkdps::capture::RecordHeader& header) {
@@ -962,7 +963,8 @@ JSValue js_batch_advance(JSContext* c,JSValueConst,int count,JSValueConst* args)
         if(batch.pending){
             if(JS_IsArray(c,args[1])!=1)reject();
             auto previous=std::move(batch.pending);release_replay_arguments(*previous);
-            try{finish_replay_record(*previous,JS_DupValue(c,args[1]));}catch(...){arkdps::owned_js::end();throw;}
+            try{finish_replay_record(*previous,JS_DupValue(c,args[1]));}
+            catch(...){batch.native_failure=std::current_exception();arkdps::owned_js::end();throw;}
             arkdps::owned_js::end();++batch.finalized;++runtime.batch_finalized;
         }else if(!JS_IsUndefined(args[1])||batch.issued)reject();
         if(batch.issued>=batch.limit||(batch.issued&&std::chrono::steady_clock::now()>=batch.deadline))return JS_NULL;
@@ -988,7 +990,7 @@ JSValue js_batch_advance(JSContext* c,JSValueConst,int count,JSValueConst* args)
 unsigned replay_bounded_batch(std::size_t first_size,std::chrono::steady_clock::time_point deadline,unsigned remaining) {
     auto& runtime=state();auto* c=runtime.context;auto& batch=replay_batch_state();
     if(batch.active)throw std::runtime_error("nested bounded replay batch");
-    ++runtime.batch_calls;batch.active=true;batch.issued=0;batch.finalized=0;batch.limit=(std::min)(32u,remaining);batch.first_size=first_size;batch.deadline=deadline;
+    ++runtime.batch_calls;batch.active=true;batch.issued=0;batch.finalized=0;batch.limit=(std::min)(32u,remaining);batch.first_size=first_size;batch.deadline=deadline;batch.native_failure=nullptr;
     batch.controller=JS_NewObject(c);JS_PreventExtensions(c,batch.controller);
     std::array<std::uint8_t,176> zero{};batch.header=JS_NewArrayBufferCopy(c,zero.data(),zero.size());
     std::array<JSValue,4> args{{runtime.batch_advance,batch.controller,batch.header,runtime.replay_dispatch}};
@@ -1003,7 +1005,15 @@ unsigned replay_bounded_batch(std::size_t first_size,std::chrono::steady_clock::
     if(batch.pending){release_replay_arguments(*batch.pending);batch.pending.reset();arkdps::owned_js::end();runtime.replay_active=false;}
     arkdps::owned_js::end();
     JS_FreeValue(c,batch.controller);JS_FreeValue(c,batch.header);batch.controller=JS_UNDEFINED;batch.header=JS_UNDEFINED;
-    if(JS_IsException(result))throw std::runtime_error(exception(c));
+    const auto native_failure=std::move(batch.native_failure);
+    if(JS_IsException(result)){
+        const auto message=exception(c); // Always consume the VM exception.
+        // Advance crosses a JS call only for dispatch. Preserve the original
+        // native proof failure instead of wrapping its bounded audit as an
+        // InternalError string that the transport cannot classify.
+        if(native_failure)std::rethrow_exception(native_failure);
+        throw std::runtime_error(message);
+    }
     JS_FreeValue(c,result);
     if(incomplete||!valid_count)throw std::runtime_error("incomplete bounded replay result");
     return batch.issued;
