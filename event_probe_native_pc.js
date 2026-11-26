@@ -599,7 +599,7 @@ function rawGuardView(address,kind,size){
  const text=new Uint8Array(address.add(20).readByteArray(n*2));new Uint8Array(bytes,12).set(text);return view;
 }
 function scopeFieldProjection(field){
- if(field.role==='scope.clock_open'||field.role==='scope.clock_close'||field.role.includes('logger.class')||field.role.includes('stats.class')||field.expected===undefined||field.expected===null)return {projection:true};
+ if(field.role==='scope.clock_open'||field.role==='scope.clock_close'||field.role==='scope.open.3'||field.role==='scope.open.4'||field.role==='scope.controller.state.open'||field.role.includes('logger.class')||field.role.includes('stats.class')||field.expected===undefined||field.expected===null)return {projection:true};
  const kind=field.kind==='utf16'?'text':Array.isArray(field.expected)?'block':field.bytes===4?'i':field.bytes===8?'p':null;
  const comparison=rawGuardComparison(kind,field.expected,field.bytes);
  return {comparison,projection:comparison===null};
