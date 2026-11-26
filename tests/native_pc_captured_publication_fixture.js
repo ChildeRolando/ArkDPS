@@ -104,7 +104,20 @@ globalThis.autoChangedMembershipRejected=false;
 globalThis.autoChangedMembershipRejected=autoAttempt(r=>{const s=r.segments.find(s=>s.role==='publication.close.0'&&s.address==='49172');globalThis.changedMemberInjected=Boolean(s);if(s)new DataView(s.bytes).setUint16(0,88,true);})===null;
 globalThis.autoCrossChunkRejected=autoAttempt(r=>{const segment=r.segments.find(item=>item.role==='publication.close.65');if(!segment)throw Error('cross chunk field absent');new DataView(segment.bytes).setInt32(0,99999,true);})===null;
 
+// Exercise the production publication helper: cache-owner pointer/value changes
+// after publish cannot alter either the CPP geometry or JS expected witnesses.
+const originalAddress=ptr(0x18000),originalExpected=ptr(0x19000),originalRows=[['i',0,7]];
+const originalGuards=[['p',originalAddress,originalExpected],['block',ptr(0x1a000),originalRows,4]];
+arkdpsNativeAsyncCapture=true;nativeAutoBodyCache={body:{allInputsGuarded:true,read:{guards:originalGuards}}};
+globalThis.__publishCapturePublication=graph=>{globalThis.publishedGuardGraph=graph;};
+publishNativeCapturePublication(autoBinding);
+const saved=nativeCapturePublications.get(nativeCapturePublicationRevision);
+originalAddress.value=0x28000n;originalExpected.value=0x29000n;originalRows[0][2]=99;
+globalThis.publicationMetadataOwned=saved.guards[0][1].toString()==='0x18000'&&saved.guards[0][2].toString()==='0x19000'&&saved.guards[1][2][0][2]===7&&publishedGuardGraph.chunks[0].fields[0].absolute_address==='0x18000';
+globalThis.publicationMetadataFrozen=Object.isFrozen(saved.guards)&&Object.isFrozen(saved.guards[0])&&Object.isFrozen(saved.guards[0][1])&&Object.isFrozen(saved.guards[0][2])&&Object.isFrozen(saved.guards[1][2])&&Object.isFrozen(saved.guards[1][2][0]);
+globalThis.publicationOriginalOwnerMutable=!Object.isFrozen(originalGuards)&&!Object.isFrozen(originalAddress)&&!Object.isFrozen(originalExpected)&&!Object.isFrozen(originalRows)&&!Object.isFrozen(originalRows[0]);
+
 `,context);
-assert(context.noDuplicateScopeWitness);assert(context.scopeGeometryFrozen);assert(context.compiledScopeReused);assert(context.cacheArrayNotFrozen);assert(context.manualOwnerNotFrozen);assert(context.scopeReadsRepeat);assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
+assert(context.publicationMetadataOwned);assert(context.publicationMetadataFrozen);assert(context.publicationOriginalOwnerMutable);assert(context.noDuplicateScopeWitness);assert(context.scopeGeometryFrozen);assert(context.compiledScopeReused);assert(context.cacheArrayNotFrozen);assert(context.manualOwnerNotFrozen);assert(context.scopeReadsRepeat);assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
 for(const key of ['notClosed','wrongRevision','wrongGeneration','coldRejected','wrongRoots'])assert.equal(context[key],null,key);
 assert(context.autoCrossChunkRejected);assert(context.autoGood);assert.equal(context.autoGood.mark.native_autochess_context.frame,10);assert.equal(context.autoGood.mark.native_autochess_context.memberships[0].player_uid,'account-one');assert.equal(context.autoMissingMembershipRejected,true);assert.equal(context.autoChangedMembershipRejected,true);assert.equal(context.missingSummary.complete,false);assert.equal(context.changedMemberInjected,true);assert.equal(context.readThroughSequence,0);assert.equal(context.good.events[0].future,undefined);assert.equal(context.delta.events_after,2);assert.equal(context.delta.events_through,3);assert.equal(context.delta.events.length,1);assert.equal(context.delta.events[0].sequence,3);assert.equal(context.emptyDelta.events.length,0);assert.equal(live,0);console.log('PASS_CAPTURED_PUBLICATION normal closed-prefix + five negative fences; no live read/call');

@@ -652,6 +652,14 @@ function publicationGuardFields(guards,stringClass,revision){
  }
  return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,raw_collection:'all',available:true,chunks};
 }
+function snapshotPublicationGuards(guards){
+ return Object.freeze(guards.map(guard=>{
+  const copy=[...guard];copy[1]=Object.freeze(ptr(guard[1].toString()));
+  if(guard[0]==='p')copy[2]=Object.freeze(ptr(guard[2].toString()));
+  else if(guard[0]==='block')copy[2]=Object.freeze(guard[2].map(row=>Object.freeze([...row])));
+  return Object.freeze(copy);
+ }));
+}
 function publishNativeCapturePublication(binding){
  if(globalThis.arkdpsNativeAsyncCapture!==true||__arkdpsReplayActive())return;
  if(typeof __publishCapturePublication!=='function')throw new Error('native publication publisher unavailable');
@@ -665,7 +673,7 @@ function publishNativeCapturePublication(binding){
  }
  const revision=++nativeCapturePublicationRevision;
  if(!Number.isSafeInteger(revision))throw new Error('publication revision exhausted');
- const guards=(binding.native_autochess_context?body.read.guards:[]).map(g=>Object.freeze([...g]));
+ const guards=snapshotPublicationGuards(binding.native_autochess_context?body.read.guards:[]);
  // These are membership/account/text witnesses, not cached mutable HP. Every
  // original input is re-read by the producer before this view can publish.
  const graph=sealNativePublicationGraph(publicationGuardFields(guards,nativeCaptureMetadata.string_class,revision));
