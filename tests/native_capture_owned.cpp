@@ -19,10 +19,14 @@ template<std::size_t Capacity> struct OwnedArena {
     static constexpr std::uintptr_t base = 0x10000;
     std::array<std::byte, Capacity> memory{};
     unsigned reads = 0, mutate_at = 0, mutation_offset = 0;
+    std::uintptr_t mutate_on_address = 0;
     template<class T> void set(std::size_t offset, T value) { std::memcpy(memory.data() + offset, &value, sizeof(value)); }
     static bool read(void* context, std::uintptr_t address, void* out, std::size_t size) noexcept {
         auto& self = *static_cast<OwnedArena*>(context);
         if (++self.reads == self.mutate_at) self.template set<std::uint32_t>(self.mutation_offset, 99);
+        if (self.mutate_on_address && address == self.mutate_on_address) {
+            self.mutate_on_address = 0; self.template set<std::uint32_t>(self.mutation_offset, 99);
+        }
         if (address < base || address - base > self.memory.size() || size > self.memory.size() - (address - base)) return false;
         std::memcpy(out, self.memory.data() + address - base, size);
         return true;
@@ -296,6 +300,77 @@ int main() {
     unit.ancestry_depth = 10; unit.child_begin = 0; unit.child_count = 1;
     assert(validate_plan(p) == Error::invalid_plan); // Cycles/reusing the same node are forbidden.
     unit.child_count = 0; unit.max_visits = 257;
+    assert(validate_plan(p) == Error::invalid_plan);
+
+    // A single unavailable Chess/Character branch has its own immutable
+    // field identity. The next row remains readable, with no borrowed bytes
+    // from the failed branch. Parent slots/counts still close after the error.
+    p = plan(); p.max_bytes = 4096; p.max_reads = 256; p.field_count = 1;
+    p.fields[0] = field(1, 1, 0, 0); p.fields[0].kind = Kind::projection_tree; p.projection_count = 3;
+    p.projections[0] = ProjectionNode{};
+    p.projections[0].kind = ProjectionKind::array; p.projections[0].count_offset = 0;
+    p.projections[0].items_offset = 8; p.projections[0].element_bytes = 16; p.projections[0].max_count = 2;
+    p.projections[0].child_begin = 1; p.projections[0].child_count = 1;
+    p.projections[1] = ProjectionNode{}; p.projections[1].depth = 1; p.projections[1].pointer_offsets[0] = 8;
+    p.projections[1].bytes = 16; p.projections[1].gate = TypeGate::exact; p.projections[1].expected_class = 0x777;
+    p.projections[1].max_visits = 2; p.projections[1].child_begin = 2; p.projections[1].child_count = 1;
+    p.projections[1].local_fail_boundary = true;
+    p.projections[2] = ProjectionNode{}; p.projections[2].kind = ProjectionKind::utf16;
+    p.projections[2].depth = 1; p.projections[2].pointer_offsets[0] = 8;
+    p.projections[2].expected_class = 0x888; p.projections[2].max_units = 8; p.projections[2].max_visits = 2;
+    arena.memory.fill(std::byte{0}); arena.set<std::uint32_t>(0, 2); arena.set<std::uintptr_t>(8, Arena::base + 64);
+    arena.set<std::uintptr_t>(72, Arena::base + 256); arena.set<std::uintptr_t>(88, Arena::base + 384);
+    arena.set<std::uintptr_t>(256, 0x777); arena.set<std::uintptr_t>(264, 0x90000);
+    arena.set<std::uintptr_t>(384, 0x777); arena.set<std::uintptr_t>(392, Arena::base + 512);
+    arena.set<std::uintptr_t>(512, 0x888); arena.set<std::uint32_t>(528, 2); arena.set<std::uint32_t>(532, 0x00420041);
+    assert(validate_plan(p) == Error::ok);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
+    assert(owned.field_count == 3 && owned.fields[0].id == dynamic_field_id_begin
+        && owned.fields[0].error == Error::field_unreadable && owned.fields[0].attempted_address == 0x90000);
+    assert(owned.fields[1].error == Error::ok && owned.fields[2].id == 1 && owned.fields[2].error == Error::ok);
+    assert(read_snapshot(owned, 1, 7, dynamic_field_id_begin + 1, Arena::base + 532, &value, 4) == Error::ok
+        && value == 0x00420041);
+    assert(read_snapshot(owned, 1, 7, dynamic_field_id_begin, Arena::base + 256, &value, 4) == Error::field_unreadable);
+    assert(read_snapshot(owned, 1, 7, 1, Arena::base + 72, &pointer, 8) == Error::ok && pointer == Arena::base + 256);
+    // Dynamic identities stay unique across parent checkpoints in one raw
+    // session. The static field ID may repeat under its distinct checkpoint.
+    assert(capture_begin(owned, Phase::entry, c, 8192, 512) == Error::ok);
+    assert(capture_append(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
+    auto another_context = c; another_context.checkpoint = 8;
+    assert(capture_append(p, Phase::entry, another_context, Arena::read, &arena, owned) == Error::ok);
+    assert(capture_finalize(owned) == Error::ok && owned.next_dynamic_field_id == dynamic_field_id_begin + 4);
+    assert(read_snapshot(owned, 1, 8, dynamic_field_id_begin + 3, Arena::base + 532, &value, 4) == Error::ok);
+    assert(read_snapshot(owned, 1, 7, dynamic_field_id_begin + 3, Arena::base + 532, &value, 4) == Error::missing_plan_field);
+    // A changed parent slot or already-read class while the leaf fails is
+    // never swallowed by the row-local catch boundary.
+    arena.mutate_on_address = 0x90000; arena.mutation_offset = 72;
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::changed_guard);
+    arena.set<std::uintptr_t>(72, Arena::base + 256);
+    arena.mutate_on_address = 0x90000; arena.mutation_offset = 256;
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::changed_guard);
+    arena.set<std::uintptr_t>(256, 0x777);
+    assert(capture_begin(owned, Phase::entry, c, 16, 4) == Error::ok);
+    assert(capture_append(p, Phase::entry, c, Arena::read, &arena, owned) == Error::bounds);
+    assert(capture_finalize(owned) == Error::bounds);
+    // A non-token's raw host pointer/UID is evidence, but its irrelevant
+    // pointed-to host text must never be traversed.
+    p.projection_count = 3; p.projections[0] = ProjectionNode{};
+    p.projections[0].child_begin = 1; p.projections[0].child_count = 2;
+    p.projections[1] = ProjectionNode{}; p.projections[1].offset = 0x90; p.projections[1].bytes = 24;
+    p.projections[2] = ProjectionNode{}; p.projections[2].kind = ProjectionKind::utf16;
+    p.projections[2].depth = 1; p.projections[2].pointer_offsets[0] = 0x98;
+    p.projections[2].parent_byte_offset = 0x90; p.projections[2].parent_byte_value = 1;
+    p.projections[2].expected_class = 0x888; p.projections[2].max_units = 8;
+    arena.memory.fill(std::byte{0}); arena.set<std::uintptr_t>(0x98, 0x90000); arena.set<std::uint32_t>(0xa0, 123);
+    assert(validate_plan(p) == Error::ok);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
+    assert(read_snapshot(owned, 1, 7, 1, Arena::base + 0x98, &pointer, 8) == Error::ok && pointer == 0x90000);
+    assert(read_snapshot(owned, 1, 7, 1, 0x90000, &value, 4) == Error::missing_plan_field);
+    arena.set<std::uint8_t>(0x90, 1);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::field_unreadable);
+    arena.mutate_on_address = 0x90000; arena.mutation_offset = 0x90;
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::changed_guard);
+    p.fields[0].id = dynamic_field_id_begin;
     assert(validate_plan(p) == Error::invalid_plan);
 
     // Return and checkpoint/absolute roots are explicit and phase-restricted.

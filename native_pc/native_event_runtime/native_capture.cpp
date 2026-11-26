@@ -18,6 +18,23 @@ bool compatible(const Field& a, const Field& b) noexcept {
         && a.element_pointer_offset == b.element_pointer_offset && a.stop_at_dynamic == b.stop_at_dynamic
         && a.projection_root == b.projection_root;
 }
+Error reserve_field_key(Snapshot& out, std::uint16_t id, std::uint32_t checkpoint) noexcept {
+    if (!id || out.field_key_count >= max_fields) return Error::bounds;
+    const auto key = (static_cast<std::uint64_t>(checkpoint) << 16) | id;
+    auto mixed = key;
+    mixed ^= mixed >> 33; mixed *= 0xff51afd7ed558ccdULL;
+    mixed ^= mixed >> 33; mixed *= 0xc4ceb9fe1a85ec53ULL; mixed ^= mixed >> 33;
+    std::size_t slot = mixed & (field_key_slots - 1);
+    for (;;) {
+        ++out.field_key_probes;
+        if (out.field_keys[slot] == key) return Error::invalid_plan;
+        if (!out.field_keys[slot]) break;
+        slot = (slot + 1) & (field_key_slots - 1);
+    }
+    out.field_keys[slot] = key;
+    out.used_key_slots[out.field_key_count++] = static_cast<std::uint16_t>(slot);
+    return Error::ok;
+}
 struct Writer {
     Snapshot& out;
     ReadMemory reader;
@@ -75,29 +92,47 @@ Error captured_count(const HookCapturePlan& plan, std::size_t index, Writer& wri
 
 }
 Error capture_string(const Field& field, std::uintptr_t address, Writer& writer, bool* matches_dynamic = nullptr) noexcept {
-    std::uintptr_t klass = 0, length_address = 0;
+    std::uintptr_t klass = 0, length_address = 0, text = 0;
     std::int32_t length = 0;
+    bool has_class = false, has_length = false, has_text = false;
+    std::size_t bytes = 0; std::uint32_t text_offset = 0;
+    auto finish = [&](Error original) noexcept -> Error {
+        const auto failed_address = writer.attempted_address; const auto failed_size = writer.attempted_size;
+        std::uintptr_t after_class = 0; std::int32_t after_length = 0;
+        if (has_class) {
+            const auto error = writer.raw(address, &after_class, 8);
+            if (error != Error::ok) return error == Error::bounds ? error : Error::changed_guard;
+            if (after_class != klass) return Error::changed_guard;
+        }
+        if (has_length) {
+            const auto error = writer.raw(length_address, &after_length, 4);
+            if (error != Error::ok) return error == Error::bounds ? error : Error::changed_guard;
+            if (after_length != length) return Error::changed_guard;
+        }
+        std::array<std::byte, max_string_units * 2> repeated;
+        if (has_text && bytes) {
+            const auto error = writer.raw(text, repeated.data(), bytes);
+            if (error != Error::ok) return error == Error::bounds ? error : Error::changed_guard;
+            if (std::memcmp(writer.out.bytes.data() + text_offset, repeated.data(), bytes)) return Error::changed_guard;
+        }
+        if (original != Error::ok) {
+            writer.attempted_address = failed_address; writer.attempted_size = failed_size;
+        }
+        return original;
+    };
     if (!address_add(address, 16, length_address)) return Error::bounds;
-    auto error = writer.scalar(field, address, &klass, sizeof(klass));
+    auto error = writer.scalar(field, address, &klass, 8);
     if (error != Error::ok) return error;
-    if ((error = writer.scalar(field, length_address, &length, sizeof(length))) != Error::ok) return error;
-    if (!field.expected_class || klass != field.expected_class) return Error::class_mismatch;
-    if (length < 0 || length > field.max_units || field.max_units > max_string_units) return Error::invalid_length;
-    std::uintptr_t text;
-    if (!address_add(address, 20, text)) return Error::bounds;
-    const auto text_offset = writer.out.byte_count;
-    const auto bytes = static_cast<std::size_t>(length) * 2;
-    if ((error = writer.copy(field, text, bytes)) != Error::ok) return error;
-    // The monitor and padding are not string identity facts. Only class,
-    // length and the exact text are owned and checked again.
-    std::uintptr_t after_class = 0;
-    std::int32_t after_length = 0;
-    if ((error = writer.raw(address, &after_class, sizeof(after_class))) != Error::ok) return error;
-    if ((error = writer.raw(length_address, &after_length, sizeof(after_length))) != Error::ok) return error;
-    if (klass != after_class || length != after_length) return Error::changed_guard;
-    std::array<std::byte, max_string_units * 2> repeated;
-    if (bytes && (error = writer.raw(text, repeated.data(), bytes)) != Error::ok) return error;
-    if (bytes && std::memcmp(writer.out.bytes.data() + text_offset, repeated.data(), bytes)) return Error::changed_guard;
+    has_class = true;
+    if ((error = writer.scalar(field, length_address, &length, 4)) != Error::ok) return finish(error);
+    has_length = true;
+    if (!field.expected_class || klass != field.expected_class) return finish(Error::class_mismatch);
+    if (length < 0 || length > field.max_units || field.max_units > max_string_units) return finish(Error::invalid_length);
+    if (!address_add(address, 20, text)) return finish(Error::bounds);
+    text_offset = writer.out.byte_count; bytes = static_cast<std::size_t>(length) * 2;
+    if ((error = writer.copy(field, text, bytes)) != Error::ok) return finish(error);
+    has_text = true;
+    if ((error = finish(Error::ok)) != Error::ok) return error;
     if (matches_dynamic) {
         constexpr char16_t key[] = u"dynamic";
         *matches_dynamic = length == 7 && std::memcmp(writer.out.bytes.data() + text_offset, key, 14) == 0;
@@ -112,6 +147,121 @@ struct ProjectionWitness {
     std::array<std::byte, max_element_bytes> bytes;
     std::uint16_t size;
 };
+bool local_error(Error error) noexcept {
+    return error == Error::missing_root || error == Error::field_unreadable
+        || error == Error::class_mismatch || error == Error::invalid_length;
+}
+Error projection(const HookCapturePlan&, const Field&, std::uint16_t, std::uintptr_t,
+                 Writer&, std::array<std::uint16_t, max_projection_nodes>&, std::size_t) noexcept;
+Error projection_body(const HookCapturePlan& plan, const Field& field, std::uint16_t index,
+                      std::uintptr_t base, Writer& writer,
+                      std::array<std::uint16_t, max_projection_nodes>& visits,
+                      std::size_t level) noexcept {
+    const auto& node = plan.projections[index];
+    std::array<ProjectionWitness, max_depth + 15> witnesses;
+    std::size_t witness_count = 0;
+    auto own = [&](std::uintptr_t address, void* target, std::size_t size) noexcept -> Error {
+        if (witness_count == witnesses.size() || size > max_element_bytes) return Error::bounds;
+        auto& witness = witnesses[witness_count];
+        witness.address = address; witness.size = static_cast<std::uint16_t>(size);
+        const auto error = writer.scalar(field, address, witness.bytes.data(), size);
+        if (error == Error::ok) {
+            ++witness_count;
+            if (target && size) std::memcpy(target, witness.bytes.data(), size);
+        }
+        return error;
+    };
+    auto finish = [&](Error original) noexcept -> Error {
+        const auto failed_address = writer.attempted_address;
+        const auto failed_size = writer.attempted_size;
+        std::array<std::byte, max_element_bytes> repeated;
+        for (std::size_t i = 0; i < witness_count; ++i) {
+            const auto& witness = witnesses[i];
+            const auto error = writer.raw(witness.address, repeated.data(), witness.size);
+            // A failed closing witness is never a row-local unavailable leaf:
+            // there is no proof that already traversed pointers stayed valid.
+            if (error != Error::ok) return error == Error::bounds ? error : Error::changed_guard;
+            if (std::memcmp(witness.bytes.data(), repeated.data(), witness.size)) return Error::changed_guard;
+        }
+        if (original != Error::ok) {
+            writer.attempted_address = failed_address; writer.attempted_size = failed_size;
+        }
+        return original;
+    };
+    Error error = Error::ok;
+    if (node.parent_byte_offset >= 0) {
+        std::uintptr_t flag_address = 0; std::uint8_t flag = 0;
+        if (!base || !address_add(base, static_cast<std::uint32_t>(node.parent_byte_offset), flag_address))
+            return finish(Error::missing_root);
+        if ((error = own(flag_address, &flag, 1)) != Error::ok) return finish(error);
+        if (flag != node.parent_byte_value) return finish(Error::ok);
+    }
+    auto address = base;
+    for (std::size_t i = 0; i < node.depth; ++i) {
+        if (!address) return finish(node.allow_null ? Error::ok : Error::missing_root);
+        std::uintptr_t link = 0;
+        if (!address_add(address, node.pointer_offsets[i], link)) return finish(Error::bounds);
+        if ((error = own(link, &address, 8)) != Error::ok) return finish(error);
+    }
+    if (!address) return finish(node.allow_null ? Error::ok : Error::missing_root);
+    if (!address_add(address, node.offset, address)) return finish(Error::bounds);
+    if (node.gate != TypeGate::none) {
+        std::uintptr_t klass = 0;
+        if ((error = own(address, &klass, 8)) != Error::ok) return finish(error);
+        bool matched = klass == node.expected_class;
+        for (std::size_t i = 1; !matched && klass && node.gate == TypeGate::ancestor && i < node.ancestry_depth; ++i) {
+            std::uintptr_t parent = 0;
+            if (!address_add(klass, 0x58, parent)) return finish(Error::bounds);
+            if ((error = own(parent, &klass, 8)) != Error::ok) return finish(error);
+            matched = klass == node.expected_class;
+        }
+        if (!matched) return finish(Error::ok);
+    }
+    if (node.kind == ProjectionKind::utf16) {
+        auto string_field = field;
+        string_field.expected_class = node.expected_class;
+        string_field.max_units = node.max_units;
+        error = capture_string(string_field, address, writer);
+    } else if (node.kind == ProjectionKind::object) {
+        if (node.bytes && (error = own(address, nullptr, node.bytes)) != Error::ok) return finish(error);
+        for (std::size_t i = 0; error == Error::ok && i < node.child_count; ++i)
+            error = projection(plan, field, static_cast<std::uint16_t>(node.child_begin + i), address,
+                               writer, visits, level + 1);
+    } else if (node.kind == ProjectionKind::array) {
+        std::uintptr_t count_address = 0, items_address = 0, items = 0;
+        std::uint32_t count = 0;
+        if (!address_add(address, node.count_offset, count_address)
+            || !address_add(address, node.items_offset, items_address)) return finish(Error::bounds);
+        if ((error = own(count_address, &count, 4)) != Error::ok
+            || (error = own(items_address, &items, 8)) != Error::ok) return finish(error);
+        if (count > node.max_count) return finish(Error::invalid_length);
+        if (count && !items) return finish(Error::missing_root);
+        for (std::size_t i = 0; i < count; ++i) {
+            std::uintptr_t slot = 0;
+            if (!address_add(items, node.data_offset + i * node.element_bytes, slot)) return finish(Error::bounds);
+            const auto slot_offset = writer.out.byte_count;
+            if ((error = writer.copy(field, slot, node.element_bytes)) != Error::ok) return finish(error);
+            std::int32_t occupancy = 0;
+            if (node.skip_negative_i32_offset >= 0)
+                std::memcpy(&occupancy, writer.out.bytes.data() + slot_offset + node.skip_negative_i32_offset, 4);
+            for (std::size_t j = 0; error == Error::ok && occupancy >= 0 && j < node.child_count; ++j)
+                error = projection(plan, field, static_cast<std::uint16_t>(node.child_begin + j), slot,
+                                   writer, visits, level + 1);
+            const auto failed_address = writer.attempted_address;
+            const auto failed_size = writer.attempted_size;
+            std::array<std::byte, max_element_bytes> repeated;
+            const auto closing = writer.raw(slot, repeated.data(), node.element_bytes);
+            if (closing != Error::ok) return finish(closing == Error::bounds ? closing : Error::changed_guard);
+            if (std::memcmp(writer.out.bytes.data() + slot_offset, repeated.data(), node.element_bytes))
+                return finish(Error::changed_guard);
+            if (error != Error::ok) {
+                writer.attempted_address = failed_address; writer.attempted_size = failed_size;
+                return finish(error);
+            }
+        }
+    } else error = Error::invalid_plan;
+    return finish(error);
+}
 Error projection(const HookCapturePlan& plan, const Field& field, std::uint16_t index,
                  std::uintptr_t base, Writer& writer,
                  std::array<std::uint16_t, max_projection_nodes>& visits,
@@ -120,90 +270,30 @@ Error projection(const HookCapturePlan& plan, const Field& field, std::uint16_t 
         return Error::invalid_plan;
     const auto& node = plan.projections[index];
     if (++visits[index] > node.max_visits) return Error::bounds;
-    // At most 12 pointer links + 11 class/parent observations + payload/count/items.
-    std::array<ProjectionWitness, max_depth + 14> witnesses;
-    std::size_t witness_count = 0;
-    auto own = [&](std::uintptr_t address, void* target, std::size_t size) noexcept -> Error {
-        if (witness_count == witnesses.size() || size > max_element_bytes) return Error::bounds;
-        auto& witness = witnesses[witness_count++];
-        witness.address = address; witness.size = static_cast<std::uint16_t>(size);
-        const auto error = writer.scalar(field, address, witness.bytes.data(), size);
-        if (error == Error::ok && target && size) std::memcpy(target, witness.bytes.data(), size);
-        return error;
-    };
-    auto close = [&]() noexcept -> Error {
-        std::array<std::byte, max_element_bytes> repeated;
-        for (std::size_t i = 0; i < witness_count; ++i) {
-            const auto& witness = witnesses[i];
-            const auto error = writer.raw(witness.address, repeated.data(), witness.size);
-            if (error != Error::ok) return error;
-            if (std::memcmp(witness.bytes.data(), repeated.data(), witness.size)) return Error::changed_guard;
-        }
-        return Error::ok;
-    };
-    auto address = base;
-    Error error = Error::ok;
-    for (std::size_t i = 0; i < node.depth; ++i) {
-        if (!address) return node.allow_null ? close() : Error::missing_root;
-        std::uintptr_t link = 0;
-        if (!address_add(address, node.pointer_offsets[i], link)) return Error::bounds;
-        if ((error = own(link, &address, 8)) != Error::ok) return error;
+    if (!node.local_fail_boundary) return projection_body(plan, field, index, base, writer, visits, level);
+    // Reserve a separate identity for this one live branch. Static plans only
+    // use the lower half of uint16; no address-based coalescing crosses rows.
+    if (writer.out.field_count >= max_fields - 1 || !writer.out.next_dynamic_field_id) return Error::bounds;
+    auto local = field; local.id = writer.out.next_dynamic_field_id++;
+    const auto key_error = reserve_field_key(writer.out, local.id, writer.checkpoint);
+    if (key_error != Error::ok) return key_error;
+    const auto segment_begin = writer.out.segment_count;
+    const auto state_index = writer.out.field_count++;
+    const auto field_begin = writer.out.field_count;
+    const auto error = projection_body(plan, local, index, base, writer, visits, level);
+    if (error != Error::ok) {
+        for (std::size_t i = field_begin; i < writer.out.field_count; ++i)
+            if (writer.out.fields[i].error == Error::ok) writer.out.fields[i].error = error;
     }
-    if (!address) return node.allow_null ? close() : Error::missing_root;
-    if (!address_add(address, node.offset, address)) return Error::bounds;
-    if (node.gate != TypeGate::none) {
-        std::uintptr_t klass = 0;
-        if ((error = own(address, &klass, 8)) != Error::ok) return error;
-        bool matched = klass == node.expected_class;
-        for (std::size_t i = 1; !matched && klass && node.gate == TypeGate::ancestor && i < node.ancestry_depth; ++i) {
-            std::uintptr_t parent = 0;
-            if (!address_add(klass, 0x58, parent)) return Error::bounds;
-            if ((error = own(parent, &klass, 8)) != Error::ok) return error;
-            matched = klass == node.expected_class;
-        }
-        // Type mismatch means this branch has no verified projected layout.
-        // Its owned class chain remains available to the normal JS validator.
-        if (!matched) return close();
-    }
-    if (node.kind == ProjectionKind::utf16) {
-        auto string_field = field;
-        string_field.expected_class = node.expected_class;
-        string_field.max_units = node.max_units;
-        if ((error = capture_string(string_field, address, writer)) != Error::ok) return error;
-    } else if (node.kind == ProjectionKind::object) {
-        if (node.bytes && (error = own(address, nullptr, node.bytes)) != Error::ok) return error;
-        for (std::size_t i = 0; i < node.child_count; ++i)
-            if ((error = projection(plan, field, static_cast<std::uint16_t>(node.child_begin + i), address,
-                                    writer, visits, level + 1)) != Error::ok) return error;
-    } else if (node.kind == ProjectionKind::array) {
-        std::uintptr_t count_address = 0, items_address = 0, items = 0;
-        std::uint32_t count = 0;
-        if (!address_add(address, node.count_offset, count_address)
-            || !address_add(address, node.items_offset, items_address)) return Error::bounds;
-        if ((error = own(count_address, &count, 4)) != Error::ok
-            || (error = own(items_address, &items, 8)) != Error::ok) return error;
-        if (count > node.max_count) return Error::invalid_length;
-        if (count && !items) return Error::missing_root;
-        for (std::size_t i = 0; i < count; ++i) {
-            std::uintptr_t slot = 0;
-            if (!address_add(items, node.data_offset + i * node.element_bytes, slot)) return Error::bounds;
-            const auto slot_offset = writer.out.byte_count;
-            if ((error = writer.copy(field, slot, node.element_bytes)) != Error::ok) return error;
-            std::int32_t occupancy = 0;
-            if (node.skip_negative_i32_offset >= 0)
-                std::memcpy(&occupancy, writer.out.bytes.data() + slot_offset + node.skip_negative_i32_offset, 4);
-            for (std::size_t j = 0; occupancy >= 0 && j < node.child_count; ++j)
-                if ((error = projection(plan, field, static_cast<std::uint16_t>(node.child_begin + j), slot,
-                                        writer, visits, level + 1)) != Error::ok) return error;
-            std::array<std::byte, max_element_bytes> repeated;
-            if ((error = writer.raw(slot, repeated.data(), node.element_bytes)) != Error::ok) return error;
-            if (std::memcmp(writer.out.bytes.data() + slot_offset, repeated.data(), node.element_bytes))
-                return Error::changed_guard;
-        }
-    } else return Error::invalid_plan;
-    return close();
+    const auto segment_end = writer.out.segment_count;
+    writer.out.fields[state_index] = {local.id, local.role, error,
+        static_cast<std::uint16_t>(error == Error::ok && segment_end > segment_begin ? segment_end - 1 : 0xffff),
+        error == Error::ok ? 0 : writer.attempted_address, error == Error::ok ? 0 : writer.attempted_size,
+        writer.checkpoint, segment_begin, segment_end, field.guard_id,
+        field.guard_id ? Guard::member : Guard::none, false};
+    return local_error(error) ? Error::ok : error;
 }
-struct ProjectionBudget { std::size_t bytes = 0, reads = 0, segments = 0; };
+struct ProjectionBudget { std::size_t bytes = 0, reads = 0, segments = 0, fields = 0; };
 Error projection_budget(const HookCapturePlan& plan, std::uint16_t index, std::size_t visits,
                         std::size_t level, std::array<bool, max_projection_nodes>& seen,
                         ProjectionBudget& budget) noexcept {
@@ -216,12 +306,15 @@ Error projection_budget(const HookCapturePlan& plan, std::uint16_t index, std::s
         || (node.gate != TypeGate::none && node.gate != TypeGate::exact && node.gate != TypeGate::ancestor)
         || (node.gate != TypeGate::none && !node.expected_class)
         || (node.gate == TypeGate::ancestor && (!node.ancestry_depth || node.ancestry_depth > 10))
+        || node.parent_byte_offset < -1
         || node.skip_negative_i32_offset < -1
         || (node.skip_negative_i32_offset >= 0 && (node.kind != ProjectionKind::array
             || static_cast<std::size_t>(node.skip_negative_i32_offset) + 4 > node.element_bytes))) return Error::invalid_plan;
     visits = visits < node.max_visits ? visits : node.max_visits;
+    if (node.local_fail_boundary) budget.fields += visits;
     const std::size_t gate = node.gate == TypeGate::none ? 0 : node.gate == TypeGate::exact ? 1 : node.ancestry_depth;
-    std::size_t local_bytes = (node.depth + gate) * 8, local_reads = node.depth + gate;
+    std::size_t local_bytes = (node.depth + gate) * 8 + (node.parent_byte_offset >= 0 ? 1 : 0);
+    std::size_t local_reads = node.depth + gate + (node.parent_byte_offset >= 0 ? 1 : 0);
     std::size_t local_segments = local_reads, children_visits = visits;
     if (node.kind == ProjectionKind::object) {
         if (node.bytes > max_element_bytes) return Error::invalid_plan;
@@ -242,7 +335,7 @@ Error projection_budget(const HookCapturePlan& plan, std::uint16_t index, std::s
     } else return Error::invalid_plan;
     budget.bytes += visits * local_bytes * 2; budget.reads += visits * local_reads * 2;
     budget.segments += visits * local_segments;
-    if (budget.bytes > plan.max_bytes || budget.reads > plan.max_reads || budget.segments > max_segments) return Error::bounds;
+    if (budget.bytes > plan.max_bytes || budget.reads > plan.max_reads || budget.segments > max_segments || budget.fields > max_fields) return Error::bounds;
     for (std::size_t i = 0; i < node.child_count; ++i) {
         const auto error = projection_budget(plan, static_cast<std::uint16_t>(node.child_begin + i), children_visits,
                                              level + 1, seen, budget);
@@ -322,10 +415,10 @@ Error validate_plan(const HookCapturePlan& plan) noexcept {
     std::array<std::array<int, max_guards>, 3> before{}, after{};
     for (auto& phase : before) phase.fill(-1);
     for (auto& phase : after) phase.fill(-1);
-    std::array<std::size_t, 3> bytes{}, segments{}, reads{};
+    std::array<std::size_t, 3> bytes{}, segments{}, reads{}, states{};
     for (std::size_t i = 0; i < plan.field_count; ++i) {
         const auto& field = plan.fields[i];
-        if (!field.id || !field.role || !phase_ok(field.phase) || field.root_index >= max_roots
+        if (!field.id || field.id >= dynamic_field_id_begin || !field.role || !phase_ok(field.phase) || field.root_index >= max_roots
             || field.depth > max_depth || field.guard_id >= max_guards
             || (field.root != Root::arg && field.root != Root::entry_ref && field.root != Root::parent_ref && field.root != Root::global_slot
                 && field.root != Root::return_value && field.root != Root::checkpoint_ref && field.root != Root::absolute)
@@ -336,14 +429,14 @@ Error validate_plan(const HookCapturePlan& plan) noexcept {
         for (std::size_t j = 0; j < i; ++j) if (plan.fields[j].id == field.id) return Error::invalid_plan;
         if (field.stop_at_dynamic && field.kind != Kind::utf16_array) return Error::invalid_plan;
         auto n = field.bytes;
-        std::size_t count = field.depth + 1, read_count = field.depth + 1;
+        std::size_t count = field.depth + 1, read_count = field.depth + 1, state_count = 1;
         if (field.kind == Kind::projection_tree) {
             ProjectionBudget budget;
             std::array<bool, max_projection_nodes> seen{};
             const auto error = projection_budget(plan, field.projection_root, 1, 0, seen, budget);
             if (error != Error::ok) return error;
             n = static_cast<std::uint32_t>(budget.bytes); count = field.depth + budget.segments;
-            read_count = field.depth + budget.reads;
+            read_count = field.depth + budget.reads; state_count += budget.fields;
         } else if (field.kind == Kind::utf16) {
             if (!field.expected_class || !field.max_units || field.max_units > max_string_units) return Error::invalid_plan;
             n = 2 * (12 + field.max_units * 2); count += 2; read_count = field.depth + 6;
@@ -369,8 +462,8 @@ Error validate_plan(const HookCapturePlan& plan) noexcept {
         } else if (field.kind != Kind::bytes || !n) return Error::invalid_plan;
         const auto phase = static_cast<std::size_t>(field.phase);
         bytes[phase] += field.depth * sizeof(std::uintptr_t) + n;
-        segments[phase] += count; reads[phase] += read_count;
-        if (bytes[phase] > plan.max_bytes || reads[phase] > plan.max_reads || segments[phase] > max_segments) return Error::bounds;
+        segments[phase] += count; reads[phase] += read_count; states[phase] += state_count;
+        if (bytes[phase] > plan.max_bytes || reads[phase] > plan.max_reads || segments[phase] > max_segments || states[phase] > max_fields) return Error::bounds;
         if (field.guard == Guard::before || field.guard == Guard::after) {
             auto& slot = (field.guard == Guard::before ? before : after)[phase][field.guard_id];
             if (slot != -1) return Error::invalid_plan;
@@ -397,7 +490,7 @@ Error capture_begin(Snapshot& out, Phase phase, const Context& context,
     out.guard_count = 0; out.guard_valid[0] = true;
     if (out.field_key_count > max_fields) return Error::invalid_plan;
     for (std::size_t i = 0; i < out.field_key_count; ++i) out.field_keys[out.used_key_slots[i]] = 0;
-    out.field_key_count = 0; out.field_key_probes = 0;
+    out.field_key_count = 0; out.field_key_probes = 0; out.next_dynamic_field_id = dynamic_field_id_begin;
     out.segment_count = out.field_count = 0; out.byte_count = 0; out.read_count = out.read_bytes = 0;
     out.error = Error::ok; out.session_open = true; out.finalized = false;
     out.phase = phase; out.checkpoint = context.checkpoint;
@@ -429,30 +522,25 @@ Error capture_append(const HookCapturePlan& plan, Phase phase, const Context& co
         const auto& field = plan.fields[i];
         if (field.phase != phase) continue;
         if (out.field_count >= max_fields || field.guard_id >= max_guards) return out.error = Error::bounds;
-        if (!field.id) return out.error = Error::invalid_plan;
-        const auto key = (static_cast<std::uint64_t>(context.checkpoint) << 16) | field.id;
-        auto mixed = key;
-        mixed ^= mixed >> 33; mixed *= 0xff51afd7ed558ccdULL;
-        mixed ^= mixed >> 33; mixed *= 0xc4ceb9fe1a85ec53ULL; mixed ^= mixed >> 33;
-        std::size_t slot = mixed & (field_key_slots - 1);
-        for (;;) {
-            ++out.field_key_probes;
-            if (out.field_keys[slot] == key) return out.error = Error::invalid_plan;
-            if (!out.field_keys[slot]) break;
-            slot = (slot + 1) & (field_key_slots - 1);
-        }
-        out.field_keys[slot] = key;
-        out.used_key_slots[out.field_key_count++] = static_cast<std::uint16_t>(slot);
+        if (!field.id || field.id >= dynamic_field_id_begin) return out.error = Error::invalid_plan;
+        const auto key_error = reserve_field_key(out, field.id, context.checkpoint);
+        if (key_error != Error::ok) return out.error = key_error;
         if (field.guard_id && !out.guard_seen[field.guard_id]) {
             out.guard_seen[field.guard_id] = true; out.guard_valid[field.guard_id] = true;
             out.guards[field.guard_id] = GuardState{};
             out.guard_ids[out.guard_count++] = field.guard_id;
         }
         const auto begin = out.segment_count;
+        const auto local_field_begin = out.field_count;
         writer.attempted_address = 0; writer.attempted_size = 0;
         auto error = field_capture(plan, i, context, writer);
         if (out.read_count - first_reads > plan.max_reads || out.read_bytes - first_bytes > plan.max_bytes)
             error = Error::bounds;
+        if (error != Error::ok) {
+            for (std::size_t f = local_field_begin; f < out.field_count; ++f)
+                if (out.fields[f].error == Error::ok) out.fields[f].error = error;
+        }
+        if (out.field_count >= max_fields) return out.error = Error::bounds;
         const auto state_index = out.field_count++;
         auto& state = out.fields[state_index];
         state = {field.id, field.role, error,

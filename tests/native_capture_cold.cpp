@@ -42,6 +42,7 @@ static std::array<unsigned, max_projection_nodes> visits{};
 static void materialize(std::uint16_t index, std::uintptr_t base) {
     const auto& node = plan.projections[index];
     const auto ordinal = visits[index]++;
+    if (node.parent_byte_offset >= 0) arena.put<std::uint8_t>(base + node.parent_byte_offset, node.parent_byte_value);
     auto address = base;
     for (std::size_t i = 0; i < node.depth; ++i) {
         const auto link = address + node.pointer_offsets[i];
@@ -82,6 +83,11 @@ static void materialize(std::uint16_t index, std::uintptr_t base) {
         for (std::size_t i = 0; i < node.child_count; ++i) materialize(static_cast<std::uint16_t>(node.child_begin + i), address);
     }
 }
+static const FieldState& state(std::uint16_t id) {
+    for (std::size_t i = 0; i < snapshot.field_count; ++i)
+        if (snapshot.fields[i].id == id) return snapshot.fields[i];
+    std::abort();
+}
 int main() {
     load_cold_plan(plan);
     assert(plan.projection_count == 52);
@@ -94,10 +100,16 @@ int main() {
     assert(visits[35] == 256 && visits[45] == 128 && visits[40] == 256 && visits[50] == 128);
     Context context; context.checkpoint = 4;
     const auto before = allocations;
+    const bool has_boundaries = plan.projections[35].local_fail_boundary;
     const auto captured = capture(plan, Phase::checkpoint, context, Arena::read, &arena, snapshot);
-    if (captured != Error::ok || snapshot.fields[1].error != Error::ok) {
-        std::cout << "capture error " << unsigned(captured) << " field " << unsigned(snapshot.fields[1].error)
-            << " address " << snapshot.fields[1].attempted_address << " bytes " << snapshot.read_bytes << '\n'; return 2;
+    if (captured != Error::ok || state(2).error != Error::ok) {
+        std::cout << "capture error " << unsigned(captured) << " field " << unsigned(state(2).error)
+            << " address " << state(2).attempted_address << " bytes " << snapshot.read_bytes << '\n'; return 2;
+    }
+    if (has_boundaries) {
+        assert(snapshot.field_count == 388);
+        assert(snapshot.next_dynamic_field_id - 1 == 33152);
+        assert(state(33152).checkpoint == 4 && state(33152).error == Error::ok);
     }
     assert(snapshot.read_bytes > 400000 && snapshot.read_count > 10000 && snapshot.segment_count > 4000);
     assert(snapshot.read_bytes <= max_bytes && snapshot.read_count <= max_reads && snapshot.segment_count <= max_segments);
@@ -106,10 +118,10 @@ int main() {
     // no truncated membership/zero baseline is exposed as a successful field.
     plan.projections[35].max_visits = 255;
     assert(capture(plan, Phase::checkpoint, context, Arena::read, &arena, snapshot) == Error::ok);
-    assert(snapshot.fields[1].error == Error::bounds);
+    assert(state(2).error == Error::bounds);
     plan.projections[35].max_visits = 256;
     assert(capture(plan, Phase::checkpoint, context, Arena::read, &arena, snapshot) == Error::ok);
-    assert(snapshot.fields[1].error == Error::ok);
+    assert(state(2).error == Error::ok);
     const auto owned_bytes = snapshot.byte_count; const auto segments = snapshot.segment_count;
     // Post-capture poisoning never changes a readable owned CID.
     const auto& cid = plan.projections[40]; (void)cid;
@@ -119,6 +131,6 @@ int main() {
     assert(read_snapshot(snapshot, segment.role, 4, segment.field_id, segment.address, value.data(), n) == Error::ok);
     assert(allocations == before);
     std::cout << "cold384: reads=" << read_count << " read_bytes=" << read_bytes
-        << " owned_bytes=" << owned_bytes << " segments=" << segments << " scratch_bytes=" << sizeof(Snapshot) << " noheap=1\n";
+        << " last_dynamic_id=" << (snapshot.next_dynamic_field_id - 1) << " owned_bytes=" << owned_bytes << " segments=" << segments << " scratch_bytes=" << sizeof(Snapshot) << " noheap=1\n";
 }
 

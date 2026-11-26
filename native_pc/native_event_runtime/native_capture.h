@@ -9,6 +9,7 @@ constexpr std::size_t max_fields = 8192, max_depth = 12, max_segments = 16384, m
 constexpr std::size_t max_roots = 16, max_string_units = 200, max_guards = 4096, max_reads = 65536;
 constexpr std::size_t max_array_elements = 128, max_element_bytes = 128;
 constexpr std::size_t max_projection_nodes = 128, max_projection_visits = 256, max_projection_depth = 24;
+constexpr std::uint16_t dynamic_field_id_begin = 32768;
 constexpr std::size_t field_key_slots = max_fields * 2;
 static_assert((field_key_slots & (field_key_slots - 1)) == 0, "field key table must be a power of two");
 enum class Phase : std::uint8_t { entry, leave, checkpoint };
@@ -32,6 +33,9 @@ struct ProjectionNode {
     std::uint16_t element_bytes = 0, max_count = 0;
     // Dictionary tombstones: retain/guard the slot, but never dereference its stale children.
     std::int16_t skip_negative_i32_offset = -1;
+    bool local_fail_boundary = false;
+    std::int32_t parent_byte_offset = -1;
+    std::uint8_t parent_byte_value = 1;
 };
 enum class Guard : std::uint8_t { none, before, after, member };
 enum class Error : std::uint8_t {
@@ -109,7 +113,7 @@ struct Snapshot {
     std::array<bool, max_guards> guard_valid{}, guard_seen{};
     std::array<std::uint16_t, max_guards> guard_ids{};
     std::array<GuardState, max_guards> guards{};
-    std::uint16_t field_key_count = 0;
+    std::uint16_t field_key_count = 0, next_dynamic_field_id = dynamic_field_id_begin;
     std::uint32_t field_key_probes = 0;
     std::array<std::uint64_t, field_key_slots> field_keys{};
     std::array<std::uint16_t, max_fields> used_key_slots{};

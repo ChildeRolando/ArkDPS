@@ -24,7 +24,7 @@ def test_native_capture_owned_memory_contract(tmp_path):
     print(result.stdout.strip())
 
 
-@pytest.mark.parametrize("fixture_name,expected_fields", [("cold-plan-dbf93c8.json", 2), ("cold-plan-b91da2b.json", 3)])
+@pytest.mark.parametrize("fixture_name,expected_fields", [("cold-plan-dbf93c8.json", 2), ("cold-plan-b91da2b.json", 3), ("cold-plan-450a0c9.json", 3)])
 def test_actual_cold_plan_and_384_owned_entities(tmp_path, fixture_name, expected_fields):
     import json
     compiler = shutil.which('g++')

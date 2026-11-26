@@ -29,3 +29,12 @@ required common-root open/close guard pair around the optional cold body;
 allow 200 units. The earlier two-field JSON is retained separately. The same
 384-entity fixture checks both contracts. Current three-field work is 16862
 reads, 588200 attempted bytes, 294100 owned bytes, 8431 segments.
+
+`cold-plan-450a0c9.json` is the exact follow-up with three fixed row/collection
+local-failure boundaries and two parent byte equality gates for token host
+text. The maximum owned graph produces 385 independent dynamic field IDs
+32768..33152 in addition to the three static fields. Its work is 17630 reads,
+588968 attempted bytes, 294484 owned bytes, 8815 segments. Independent
+small-graph tests prove one bad and one good row, precise failed attempts,
+no host-text dereference for non-tokens, cumulative checkpoint identities,
+and hard rejection for changed parent slots/classes/flags or exhausted budget.
