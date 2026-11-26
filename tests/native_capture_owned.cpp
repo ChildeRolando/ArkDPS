@@ -359,11 +359,23 @@ int main() {
     assert(capture(parent_plan, Phase::entry, parent_context, Arena::read, &arena, owned) == Error::ok);
     assert(owned.guard_count == 0 && !owned.guard_seen[3000] && !owned.guard_valid[4095]);
 
+    // Publication-size field batches use a half-loaded fixed hash rather
+    // than rescanning every prior field on the native thread.
+    p = plan(); p.field_count = 4000; p.max_bytes = 20000; p.max_reads = 5000;
+    for (std::size_t i = 0; i < p.field_count; ++i) p.fields[i] = field(static_cast<std::uint16_t>(i + 1), 1, 0, 4);
+    assert(validate_plan(p) == Error::ok);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
+    assert(owned.field_key_count == 4000 && owned.field_key_probes < 8000);
+    const auto probes = owned.field_key_probes;
+    p.field_count = 1;
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
+    assert(owned.field_key_count == 1 && owned.field_key_probes == 1 && probes > 4000);
+
     // Initialize-time budgets reject a plan, never trim its evidence silently.
     p.fields[0].required = true; p.max_bytes = 1;
     assert(validate_plan(p) == Error::bounds);
     p.max_bytes = 2048; p.max_reads = 0;
     assert(validate_plan(p) == Error::invalid_plan);
     assert(allocations == before); // All capture/read/validation paths above stayed allocation-free.
-    std::cout << "owned capture: poison/roles/guards/pointers/parents/strings/budgets passed\n";
+    std::cout << "owned capture: poison/roles/guards/pointers/parents/strings/budgets passed field4000_probes=" << probes << "\n";
 }

@@ -9,6 +9,8 @@ constexpr std::size_t max_fields = 8192, max_depth = 12, max_segments = 16384, m
 constexpr std::size_t max_roots = 16, max_string_units = 200, max_guards = 4096, max_reads = 65536;
 constexpr std::size_t max_array_elements = 128, max_element_bytes = 128;
 constexpr std::size_t max_projection_nodes = 128, max_projection_visits = 256, max_projection_depth = 24;
+constexpr std::size_t field_key_slots = max_fields * 2;
+static_assert((field_key_slots & (field_key_slots - 1)) == 0, "field key table must be a power of two");
 enum class Phase : std::uint8_t { entry, leave, checkpoint };
 enum class Root : std::uint8_t { arg, entry_ref, parent_ref, global_slot, return_value, checkpoint_ref, absolute };
 enum class Kind : std::uint8_t { bytes, utf16, counted_bytes, utf16_array, projection_tree };
@@ -107,6 +109,10 @@ struct Snapshot {
     std::array<bool, max_guards> guard_valid{}, guard_seen{};
     std::array<std::uint16_t, max_guards> guard_ids{};
     std::array<GuardState, max_guards> guards{};
+    std::uint16_t field_key_count = 0;
+    std::uint32_t field_key_probes = 0;
+    std::array<std::uint64_t, field_key_slots> field_keys{};
+    std::array<std::uint16_t, max_fields> used_key_slots{};
     std::array<Segment, max_segments> segments{};
     std::array<FieldState, max_fields> fields{};
     std::array<std::byte, max_bytes> bytes{};

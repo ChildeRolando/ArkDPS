@@ -395,6 +395,9 @@ Error capture_begin(Snapshot& out, Phase phase, const Context& context,
     if (out.guard_count > max_guards) return Error::invalid_plan;
     for (std::size_t i = 0; i < out.guard_count; ++i) out.guard_seen[out.guard_ids[i]] = false;
     out.guard_count = 0; out.guard_valid[0] = true;
+    if (out.field_key_count > max_fields) return Error::invalid_plan;
+    for (std::size_t i = 0; i < out.field_key_count; ++i) out.field_keys[out.used_key_slots[i]] = 0;
+    out.field_key_count = 0; out.field_key_probes = 0;
     out.segment_count = out.field_count = 0; out.byte_count = 0; out.read_count = out.read_bytes = 0;
     out.error = Error::ok; out.session_open = true; out.finalized = false;
     out.phase = phase; out.checkpoint = context.checkpoint;
@@ -426,9 +429,20 @@ Error capture_append(const HookCapturePlan& plan, Phase phase, const Context& co
         const auto& field = plan.fields[i];
         if (field.phase != phase) continue;
         if (out.field_count >= max_fields || field.guard_id >= max_guards) return out.error = Error::bounds;
-        for (std::size_t prior = 0; prior < out.field_count; ++prior)
-            if (out.fields[prior].id == field.id && out.fields[prior].checkpoint == context.checkpoint)
-                return out.error = Error::invalid_plan;
+        if (!field.id) return out.error = Error::invalid_plan;
+        const auto key = (static_cast<std::uint64_t>(context.checkpoint) << 16) | field.id;
+        auto mixed = key;
+        mixed ^= mixed >> 33; mixed *= 0xff51afd7ed558ccdULL;
+        mixed ^= mixed >> 33; mixed *= 0xc4ceb9fe1a85ec53ULL; mixed ^= mixed >> 33;
+        std::size_t slot = mixed & (field_key_slots - 1);
+        for (;;) {
+            ++out.field_key_probes;
+            if (out.field_keys[slot] == key) return out.error = Error::invalid_plan;
+            if (!out.field_keys[slot]) break;
+            slot = (slot + 1) & (field_key_slots - 1);
+        }
+        out.field_keys[slot] = key;
+        out.used_key_slots[out.field_key_count++] = static_cast<std::uint16_t>(slot);
         if (field.guard_id && !out.guard_seen[field.guard_id]) {
             out.guard_seen[field.guard_id] = true; out.guard_valid[field.guard_id] = true;
             out.guards[field.guard_id] = GuardState{};
