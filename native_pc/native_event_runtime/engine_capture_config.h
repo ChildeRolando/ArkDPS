@@ -78,7 +78,7 @@ public:
                 throw std::runtime_error("scope graph revision regressed");
             config->scope=next;
         }
-        if (owned_.size()>=256) throw std::runtime_error("native capture configuration retention budget exceeded");
+        if (owned_.size()>=512) throw std::runtime_error("native capture configuration retention budget exceeded");
         auto* pointer=config.get();
         owned_.push_back(std::move(config));
         current_[next->mode_epoch].store(pointer,std::memory_order_release);
@@ -88,10 +88,20 @@ public:
     // Caller has established no replay, active==0 and processed==reserved after
     // publishing latest pointers. No producer or queued record can still need a
     // retired configuration. Keep the latest pointer for every retained epoch.
-    void collect_quiescent() {
+    nlohmann::json collect_quiescent(std::uint64_t producer_epoch) {
+        const auto* latest=pin(producer_epoch);
+        if (!latest) return nullptr;
+        for (unsigned epoch=0;epoch<capture_mode_slots;++epoch)
+            if (epoch!=producer_epoch) current_[epoch].store(nullptr,std::memory_order_release);
+        const auto previous=owned_.size();
         owned_.erase(std::remove_if(owned_.begin(),owned_.end(),[&](const auto& config) {
-            return pin(config->mode_epoch)!=config.get();
+            return config.get()!=latest;
         }),owned_.end());
+        if (previous==owned_.size()) return nullptr;
+        nlohmann::json bounds{{"mode_before",producer_epoch}};
+        if (latest->scope) bounds["scope_before"]=latest->scope->revision;
+        if (latest->publication) bounds["publication_before"]=latest->publication->revision;
+        return bounds;
     }
     std::vector<std::string> roles;
 private:

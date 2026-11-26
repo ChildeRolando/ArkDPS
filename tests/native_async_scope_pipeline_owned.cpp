@@ -126,5 +126,11 @@ int main(){
  lane->depth=2;lane->calls[0].hp_nested_dirty=false;context.args[1]=0;header={};
  capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
  assert(lane->calls[0].hp_nested_dirty);
+ const auto bounds=configs->collect_quiescent(0);
+ assert(bounds["scope_before"]==2 && bounds["publication_before"]==1 && bounds["mode_before"]==0);
+ assert(configs->pin(0)->scope->revision==2);
+ graph["mode_epoch"]=1;graph["revision"]=3;configs->publish(graph,false);
+ const auto new_bounds=configs->collect_quiescent(1);
+ assert(configs->pin(0)==nullptr && configs->pin(1)->scope->revision==3 && new_bounds["mode_before"]==1);
  std::cout<<"scope bracket, clock spanning graph, pinned immutable revision passed\n";
 }

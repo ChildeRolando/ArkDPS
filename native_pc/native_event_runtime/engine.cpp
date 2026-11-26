@@ -54,7 +54,7 @@ struct Runtime {
     bool replay_active = false;
     JSValue prefix_projection = JS_UNDEFINED;
     JSValue publication_publish = JS_UNDEFINED, publication_request = JS_UNDEFINED;
-    JSValue mode_state = JS_UNDEFINED, mode_install = JS_UNDEFINED;
+    JSValue mode_state = JS_UNDEFINED, mode_install = JS_UNDEFINED, graph_retire = JS_UNDEFINED;
     std::atomic<std::uint64_t> capture_mode_epoch{0};
     std::uint64_t published_mode_epoch = 0;
     int desired_mode = -1;
@@ -882,6 +882,23 @@ bool drain_captures() noexcept {
             auto ticket=lane->queue.head_ticket();
             if (ticket && *ticket==runtime.processed_ticket+1) return true;
         }
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (!runtime.replay_active && runtime.active.load(std::memory_order_acquire)==0
+            && runtime.processed_ticket==runtime.lanes->reserved.load(std::memory_order_acquire)) {
+            const auto bounds=runtime.configurations.collect_quiescent(runtime.capture_mode_epoch.load(std::memory_order_acquire));
+            if (!bounds.is_null()) {
+                if (!JS_IsFunction(runtime.context,runtime.graph_retire)) throw std::runtime_error("capture graph retirement unavailable");
+                const auto text=bounds.dump();
+                auto argument=JS_ParseJSON(runtime.context,text.data(),text.size(),"capture-retirement.json");
+                runtime.replay_active=true;
+                auto result=JS_Call(runtime.context,runtime.graph_retire,JS_UNDEFINED,1,&argument);
+                runtime.replay_active=false;
+                JS_FreeValue(runtime.context,argument);
+                const bool failed=JS_IsException(result);JS_FreeValue(runtime.context,result);
+                if (failed || runtime.lanes->failure.load(std::memory_order_acquire))
+                    throw std::runtime_error("capture graph retirement violated its owned boundary");
+            }
+        }
         return false;
     } catch (const std::exception& error) {
         runtime.captured_publication.clear(); runtime.published_ticket=0;
@@ -1039,6 +1056,7 @@ void initialize_on_worker(const std::string& source) {
         runtime.publication_request=JS_GetPropertyStr(c,global,"__arkdpsPublicationRequest");
         runtime.mode_state=JS_GetPropertyStr(c,global,"__arkdpsCaptureModeState");
         runtime.mode_install=JS_GetPropertyStr(c,global,"__arkdpsInstallCaptureMode");
+        runtime.graph_retire=JS_GetPropertyStr(c,global,"__arkdpsRetireCaptureGraphs");
         if (JS_IsFunction(c,runtime.mode_state)) {
             auto mode=JS_Call(c,runtime.mode_state,JS_UNDEFINED,0,nullptr);
             if (JS_IsException(mode)) throw std::runtime_error(exception(c));
