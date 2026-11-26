@@ -25,7 +25,7 @@ write(assemblyList,assembly);const names=new Map();
 function klass(name,namespace,parent=zero){const k=alloc();names.set(k.toString(),{name,namespace});classes.push(k);write(k.add(0x58),parent);return k;}
 const systemObject=klass('Object','System'),string=klass('String','System',systemObject);
 const ns='Torappu.Battle.AutoChess';
-const definitions=[['BattleController','Torappu.Battle'],['Character','Torappu.Battle'],['BObject','Torappu.Battle'],['Entity','Torappu.Battle'],['Enemy','Torappu.Battle'],['BasicSkill','Torappu.Battle'],['LevelData','Torappu'],
+const definitions=[['BattleController','Torappu.Battle'],['Character','Torappu.Battle'],['BObject','Torappu.Battle'],['Entity','Torappu.Battle'],['Unit','Torappu.Battle'],['Enemy','Torappu.Battle'],['BasicSkill','Torappu.Battle'],['LevelData','Torappu'],
  ['SingletonHost',''],['AutoChessGameManager',ns],['AutoChessGameStatus',ns],['AutoChessGameStateModel',''],['AutoChessGameStateMachine',''],
  ['AutoChessDataCenter','Torappu.Battle.DataCenter'],['AutoChessPlayerDataModel',ns],['ScenePlayerData',''],['PlayerCard',ns],
  ['AutoChessBattleDataModel',ns],['ChessInst',ns],['UnitManager','Torappu.Battle'],['BattleCharacterData','Torappu.Battle']];
@@ -52,7 +52,9 @@ const links=new Map([
  [dictionary.toString()+':_entries',entryArray],
  [player.list.toString()+':_items',player.array],[group.list.toString()+':_items',group.array],[refs.toString()+':_items',refArray],
 ]);
+let classification=false;
 const apiTable={
+ il2cpp_class_is_assignable_from:()=>{if(classification==='throw')throw Error('owned missing assignability');return classification;},
  il2cpp_domain_get_assemblies:(_domain,size)=>{write(size,1);return assemblyList;},
  il2cpp_assembly_get_image:()=>image,il2cpp_image_get_name:()=>({readCString:()=> 'Assembly-CSharp.dll'}),
  il2cpp_image_get_class_count:()=>classes.length,il2cpp_image_get_class:(_image,i)=>classes[i],
@@ -84,6 +86,10 @@ const setup=adapter.slice(adapter.indexOf('function prepareNativeCaptureMetadata
 vm.runInContext("let nativeCaptureMetadata=null;const nativeCaptureModeHistory=new Map();const nativeAutoDesiredMode='all';const coalesceEnemyHp=true;globalThis.arkdpsNativeAsyncCapture=true;"+setup,context);
 vm.runInContext('prepareNativeCaptureMetadata({...meta,skillF:{charSkill:0x3c8,owner:0xa8,data:0xb0,prefab:0x50,id:0x18,name:0x10}});globalThis.adapterMetadata=nativeCaptureMetadata;',context);
 assert.equal(context.adapterMetadata.cold_metadata_ready,true);assert.equal(context.adapterMetadata.immutable_class_parents,true);assert.equal(context.adapterMetadata.coalesce_enemy_hp,true);
+assert.equal(context.adapterMetadata.hp_non_enemy_classes.length,4);
+assert(!context.adapterMetadata.hp_non_enemy_classes.includes(found.Enemy.toString()));
+for(const result of [true,0,undefined,'throw']){classification=result;vm.runInContext('prepareNativeCaptureMetadata({...meta,skillF:{charSkill:0x3c8,owner:0xa8,data:0xb0,prefab:0x50,id:0x18,name:0x10}});globalThis.adapterMetadata=nativeCaptureMetadata;',context);assert.equal(context.adapterMetadata.hp_non_enemy_classes.length,0);}
+classification=false;vm.runInContext('prepareNativeCaptureMetadata({...meta,skillF:{charSkill:0x3c8,owner:0xa8,data:0xb0,prefab:0x50,id:0x18,name:0x10}});globalThis.adapterMetadata=nativeCaptureMetadata;',context);
 assert.equal(context.adapterMetadata.cold_plan.fields.length,3);assert.equal(context.adapterMetadata.classes.AutoChessGameManager,found.AutoChessGameManager.toString());
 const before={reads,calls};replaying=true;
 context.manager=found.AutoChessGameManager;

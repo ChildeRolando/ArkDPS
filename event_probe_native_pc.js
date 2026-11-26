@@ -160,6 +160,17 @@ function prepareNativeCaptureMetadata(meta){
   skill_wait:meta.skillCastStateMethods?.wait??null,attack_type_offset:meta.mitigationMethods?.damageType??null,
   factory_addresses:meta.mitigationMethods?.factories?.map(x=>x.toString())??[],
   classes:Object.fromEntries(Object.entries(meta.found).filter(([,v])=>v&&!v.isNull()).map(([k,v])=>[k,v.toString()]))};
+ nativeCaptureMetadata.hp_non_enemy_classes=[];
+ const enemyClass=meta.found.Enemy;
+ if(enemyClass&&!enemyClass.isNull()){
+  const assignable=api('il2cpp_class_is_assignable_from','bool',['pointer','pointer']);
+  for(const name of ['BObject','Entity','Unit','Character']){
+   const candidate=meta.found[name];if(!candidate||candidate.isNull()||candidate.equals(enemyClass))continue;
+   try{if(assignable(enemyClass,candidate)===false&&!nativeCaptureMetadata.hp_non_enemy_classes.includes(candidate.toString()))
+    nativeCaptureMetadata.hp_non_enemy_classes.push(candidate.toString());}catch(error){/* No result is never exclusion evidence. */}
+  }
+ }
+ Object.freeze(nativeCaptureMetadata.hp_non_enemy_classes);
  if(typeof __arkdpsPrepareColdMetadata==='function'){
   const extra=__arkdpsPrepareColdMetadata({...meta,native_capture:nativeCaptureMetadata});
   if(extra!==undefined){if(!extra||typeof extra!=='object')throw new Error('invalid cold metadata');Object.assign(nativeCaptureMetadata,extra);}
@@ -474,7 +485,7 @@ function nativeCapturePlan(name,address,metadata){
  }
  return {schema_version:1,complete:false,raw_collection:'all',name:normalized,address:address.toString(),abi:'win64-gp',profile,arg_count:argCount,arg_mask:argMask,
   globals,fields,max_bytes:profile==='shield'?131072:65536,max_reads:4096,
-  ...(profile==='hp'?{hp_filter:{receiver_arg:0,attribute_index_arg:normalized==='Entity.OnAttributeDirty'?1:null,max_hp_attribute:0,enemy_class:metadata.classes.Enemy??null,enemy_base_class:metadata.classes.BObject??null,normal_setter:normalized==='Entity.SetHpInternal',defer_entry_scope:metadata.coalesce_enemy_hp===true&&normalized==='Entity.SetHpInternal',nochange_preserve_epoch:true,preserve_nested_max_hp_dirty:true}}:{}),
+  ...(profile==='hp'?{hp_filter:{hp_non_enemy_classes:metadata.hp_non_enemy_classes??[],receiver_arg:0,attribute_index_arg:normalized==='Entity.OnAttributeDirty'?1:null,max_hp_attribute:0,enemy_class:metadata.classes.Enemy??null,enemy_base_class:metadata.classes.BObject??null,normal_setter:normalized==='Entity.SetHpInternal',defer_entry_scope:metadata.coalesce_enemy_hp===true&&normalized==='Entity.SetHpInternal',nochange_preserve_epoch:true,preserve_nested_max_hp_dirty:true}}:{}),
   metadata:{classes:metadata.classes,skill_offsets:metadata.skill_offsets,attack_type_offset:metadata.attack_type_offset},
   ...(profile==='boundary'?{entry_roots:[{slot:8,root:'arg',root_index:0,pointer_offsets:[0xe0]},{slot:9,root:'arg',root_index:0,pointer_offsets:[0x160]},{slot:10,root:'arg',root_index:0,pointer_offsets:[0x10]},{slot:11,root:'arg',root_index:0,pointer_offsets:[0xe0,0x30]}]}:{}),
   ...(metadata.cold_plan?{cold_plan:metadata.cold_plan}:{}),
