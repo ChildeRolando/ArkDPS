@@ -26,9 +26,13 @@ internal static class NativeBackendSettingsTests
             Check("Frida remains the default PC selection", window.NativeEventBackend.SelectedIndex == 0);
             window.NativeEventBackend.SelectedIndex = 1;
             var native = (ComboBoxItem)window.NativeEventBackend.SelectedItem;
-            Check("native choice gives the requested game-error instruction",
-                native.Content?.ToString() == "ArkPie" && window.NativeHookNotes.Children.OfType<TextBlock>()
-                    .Any(text => text.Text.Contains("检测到环境存在异常")));
+            Check("both PC backend pages and dropdown choices share the game-error instruction",
+                native.Content?.ToString() == "ArkPie"
+                && window.NativeEventBackendHint.Text == "遇到“检测到环境存在异常”报错时，选择 ArkPie。"
+                && ReferenceEquals(window.NativeEventBackendHint.Parent, window.NativeEventNotes)
+                && window.NativeEventBackend.ToolTip?.ToString() == window.NativeEventBackendHint.Text
+                && window.NativeEventBackend.Items.Cast<ComboBoxItem>()
+                    .All(item => item.ToolTip?.ToString() == window.NativeEventBackendHint.Text));
             Check("native choice shows startup guidance and hides unused file source",
                 window.NativeHookNotes.Visibility == Visibility.Visible
                 && window.FridaEventNotes.Visibility == Visibility.Collapsed

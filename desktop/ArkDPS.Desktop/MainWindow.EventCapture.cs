@@ -14,7 +14,8 @@ public partial class MainWindow
     private string eventCaptureRequestError = "";
     private double eventCaptureErrorRevision;
     private BridgeClient? eventCaptureErrorSource;
-    private const string EventCaptureScope = "累计快照与FPS继续采集；暂停期间的逐次事件无法补采。";
+    private const string PauseCaptureHelp = "遭遇卡顿时可以暂停事件采集，仅保留粗口径统计。";
+    private const string ResumeCaptureHelp = "低压力场景可以恢复事件采集，获取更多细口径统计信息。";
 
     private void SetEventCaptureRequestError(string error)
     {
@@ -47,10 +48,11 @@ public partial class MainWindow
         bool connected = !workerUnavailable && !(responseStale && !applying);
         bool enabled = supported && confirmed && !pending && connected &&
             !closingRequested && !quitting && !updateShutdownPreparing && recoveryTask is not { IsCompleted:false };
-        string action = paused ? "继续事件" : "暂停事件";
+        string action = paused ? "继续采集" : "暂停采集";
         string status;
         string detail;
         bool failed = false;
+        bool showActionHelp = false;
 
         if (!connected)
         {
@@ -67,7 +69,8 @@ public partial class MainWindow
         {
             action = requestingPause ? "正在暂停…" : "正在继续…";
             status = "等待采集端确认";
-            detail = (requestingPause ? "正在请求暂停逐次事件采集。" : "正在请求继续逐次事件采集。") + EventCaptureScope;
+            detail = requestingPause ? "等待暂停事件采集的确认，累计快照与 FPS 继续更新。"
+                : "等待恢复事件采集的确认，累计快照与 FPS 继续更新。";
         }
         else if (!confirmed)
         {
@@ -85,18 +88,20 @@ public partial class MainWindow
         else
         {
             status = paused ? "事件已暂停 · 快照与FPS继续" : "逐次事件采集中";
-            detail = (paused ? "继续本局的逐次事件采集。" : "暂停本局的逐次事件采集。") + EventCaptureScope;
+            detail = paused ? ResumeCaptureHelp : PauseCaptureHelp;
+            showActionHelp = true;
         }
 
         if (failed) action = paused ? "重试继续" : "重试暂停";
         SideEventCaptureButton.Content = action;
         SideEventCaptureButton.IsEnabled = enabled;
-        SideEventCaptureButton.ToolTip = status + "\n" + detail;
+        string help = showActionHelp ? detail : status + "\n" + detail;
+        SideEventCaptureButton.ToolTip = help;
         AutomationProperties.SetName(SideEventCaptureButton, pending
-            ? requestingPause ? "正在暂停逐次事件采集" : "正在继续逐次事件采集"
-            : (failed ? "重试" : "") + (paused ? "继续逐次事件采集" : "暂停逐次事件采集"));
+            ? requestingPause ? "正在暂停采集" : "正在继续采集"
+            : (failed ? "重试" : "") + (paused ? "继续采集" : "暂停采集"));
         AutomationProperties.SetItemStatus(SideEventCaptureButton, status);
-        AutomationProperties.SetHelpText(SideEventCaptureButton, status + "\n" + detail);
+        AutomationProperties.SetHelpText(SideEventCaptureButton, help);
         SideEventCaptureButton.SetResourceReference(Control.ForegroundProperty, failed ? "Danger" : "Ink");
     }
 

@@ -87,12 +87,12 @@ internal static class EventCapturePauseTests
                 localError.SetValue(window, "");
                 Publish();
                 Check(skin + " running offers a keyboard-accessible pause action",
-                    window.SideEventCaptureButton.Content as string == "暂停事件" && window.SideEventCaptureButton.IsEnabled &&
+                    window.SideEventCaptureButton.Content as string == "暂停采集" && window.SideEventCaptureButton.IsEnabled &&
                     window.SideEventCaptureButton.Focusable && window.SideEventCaptureButton.IsTabStop &&
-                    AutomationProperties.GetName(window.SideEventCaptureButton) == "暂停逐次事件采集");
-                Check(skin + " scope and the unrecoverable event gap are explained",
-                    AutomationProperties.GetHelpText(window.SideEventCaptureButton).Contains("累计快照与FPS继续") &&
-                    AutomationProperties.GetHelpText(window.SideEventCaptureButton).Contains("无法补采"));
+                    AutomationProperties.GetName(window.SideEventCaptureButton) == "暂停采集");
+                Check(skin + " pause help explains the coarse statistics option",
+                    AutomationProperties.GetHelpText(window.SideEventCaptureButton) == "遭遇卡顿时可以暂停事件采集，仅保留粗口径统计。" &&
+                    window.SideEventCaptureButton.ToolTip as string == "遭遇卡顿时可以暂停事件采集，仅保留粗口径统计。");
                 Capture(skin, "running");
 
                 pending.SetValue(window, true); requested.SetValue(window, true);
@@ -108,8 +108,9 @@ internal static class EventCapturePauseTests
 
                 Publish("paused", paused: true, wanted: true);
                 Check(skin + " only confirmed pause offers resume",
-                    window.SideEventCaptureButton.Content as string == "继续事件" && window.SideEventCaptureButton.IsEnabled &&
-                    Status() == "事件已暂停 · 快照与FPS继续");
+                    window.SideEventCaptureButton.Content as string == "继续采集" && window.SideEventCaptureButton.IsEnabled &&
+                    Status() == "事件已暂停 · 快照与FPS继续" &&
+                    window.SideEventCaptureButton.ToolTip as string == "低压力场景可以恢复事件采集，获取更多细口径统计信息。");
                 fps.Invoke(window, new object[] { JsonSerializer.SerializeToElement(new
                 {
                     game_fps = new { status = "ok", fps = 45, source = "dxgi_present", sample_seq = skin.Length,

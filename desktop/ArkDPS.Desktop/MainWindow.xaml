@@ -1,8 +1,9 @@
-<Window x:Class="ArkDPS.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:ArkDPS.Desktop"
+<Window x:Class="ArkDPS.Desktop.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="clr-namespace:ArkDPS.Desktop" xmlns:sys="clr-namespace:System;assembly=mscorlib"
  Style="{StaticResource {x:Type Window}}" Title="ArkDPS · 局内统计" WindowStyle="None" Width="1672" Height="941" MinWidth="560" MinHeight="540" Closing="OnClosing" SizeChanged="OnResize"
  UseLayoutRounding="True" SnapsToDevicePixels="True">
  <WindowChrome.WindowChrome><WindowChrome CaptionHeight="0" ResizeBorderThickness="6" GlassFrameThickness="0" CornerRadius="0"/></WindowChrome.WindowChrome>
  <Window.Resources>
+  <sys:String x:Key="NativeEventBackendAdvice">遇到“检测到环境存在异常”报错时，选择 ArkPie。</sys:String>
   <Style x:Key="ResearchFrame" TargetType="HeaderedContentControl">
    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
    <Setter Property="VerticalContentAlignment" Value="Stretch"/>
@@ -509,12 +510,13 @@
         </StackPanel>
         <StackPanel x:Name="NativeEventNotes" Visibility="Collapsed">
          <TextBlock Text="PC 事件后端" Style="{StaticResource FieldLabel}" Margin="0,0,0,5"/>
-         <ComboBox x:Name="NativeEventBackend" SelectedIndex="0" AutomationProperties.Name="PC 事件后端" SelectionChanged="NativeEventBackendChanged" Margin="0,0,0,12">
-          <ComboBoxItem Content="Frida" Tag="frida"/>
-          <ComboBoxItem Content="ArkPie" Tag="native"/>
+         <ComboBox x:Name="NativeEventBackend" SelectedIndex="0" AutomationProperties.Name="PC 事件后端" SelectionChanged="NativeEventBackendChanged" Margin="0,0,0,12"
+                   ToolTip="{StaticResource NativeEventBackendAdvice}" AutomationProperties.HelpText="{StaticResource NativeEventBackendAdvice}">
+          <ComboBoxItem Content="Frida" Tag="frida" ToolTip="{StaticResource NativeEventBackendAdvice}" AutomationProperties.HelpText="{StaticResource NativeEventBackendAdvice}"/>
+          <ComboBoxItem Content="ArkPie" Tag="native" ToolTip="{StaticResource NativeEventBackendAdvice}" AutomationProperties.HelpText="{StaticResource NativeEventBackendAdvice}"/>
          </ComboBox>
+         <TextBlock x:Name="NativeEventBackendHint" Text="{StaticResource NativeEventBackendAdvice}" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
          <StackPanel x:Name="NativeHookNotes" Visibility="Collapsed">
-          <TextBlock Text="遇到“检测到环境存在异常”报错时，选择 ArkPie。" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
           <TextBlock Text="启动步骤" Foreground="{DynamicResource Ink}" FontSize="13" FontWeight="SemiBold" Margin="0,2,0,8"/>
           <TextBlock Foreground="{DynamicResource Muted}" FontSize="13" LineHeight="22" TextWrapping="Wrap">
            <Run Text="1. 选择游戏目录，启用战斗事件观察者。"/><LineBreak/>
@@ -701,10 +703,10 @@
      <TextBlock x:Name="SideStackCaptureStatus" Visibility="Collapsed" Foreground="{DynamicResource Muted}" FontSize="11"
                 Margin="0,0,0,3" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite"/>
      <DockPanel x:Name="SideStatusLine" ToolTip="{Binding ToolTip, ElementName=StatusBadge}">
-      <Button x:Name="SideEventCaptureButton" DockPanel.Dock="Right" Content="暂停事件" Click="ToggleEventCapture"
+      <Button x:Name="SideEventCaptureButton" DockPanel.Dock="Right" Content="暂停采集" Click="ToggleEventCapture"
               MinWidth="82" MinHeight="30" Padding="7,3" Margin="6,0,0,0" IsEnabled="False"
               ToolTip="等待采集端报告事件采集状态" ToolTipService.ShowOnDisabled="True"
-              AutomationProperties.Name="暂停逐次事件采集" AutomationProperties.LiveSetting="Polite"/>
+              AutomationProperties.Name="暂停采集" AutomationProperties.LiveSetting="Polite"/>
       <TextBlock x:Name="SideGameFpsStatus" DockPanel.Dock="Right" Text="FPS —" Width="68" Margin="6,0,0,0"
                  Foreground="{DynamicResource Muted}" FontFamily="{DynamicResource DataFont}" FontSize="11"
                  TextAlignment="Right" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
