@@ -5,6 +5,7 @@
 #include "engine_capture_config.h"
 #include "engine_capture_pipeline.h"
 #include "engine_terminal_fence.h"
+#include "engine_capture_timing.h"
 #include <windows.h>
 #include <psapi.h>
 #include <MinHook.h>
@@ -55,6 +56,7 @@ struct Runtime {
     std::uint64_t processed_ticket = 0, closed_ticket = 0, delivered_sequence = 0, published_sequence = 0;
     bool replay_active = false;
     arkdps::capture::TerminalFence terminal_fence;
+    arkdps::capture::CallbackTimingRegistry callback_timings;
     JSValue prefix_projection = JS_UNDEFINED;
     JSValue publication_publish = JS_UNDEFINED, publication_request = JS_UNDEFINED;
     JSValue mode_state = JS_UNDEFINED, mode_install = JS_UNDEFINED, graph_retire = JS_UNDEFINED;
@@ -118,6 +120,39 @@ TimingState timing_state;
 std::uint64_t ticks_now() noexcept {
     LARGE_INTEGER value; QueryPerformanceCounter(&value); return value.QuadPart;
 }
+class CallbackTimer final {
+public:
+    explicit CallbackTimer(bool leave) noexcept : leave_(leave) {
+        auto& runtime=state();
+        if (!timing_state.enabled.load(std::memory_order_relaxed) || !runtime.lanes->enabled.load(std::memory_order_acquire)
+            || runtime.lanes->failure.load(std::memory_order_relaxed)) return;
+        const auto tid=GetCurrentThreadId();
+        for (unsigned i=0;i<arkdps::capture::lane_count;++i) {
+            if (runtime.lanes->lanes[i]->owner.load(std::memory_order_acquire)!=tid) continue;
+            if(runtime.callback_timings.select(i)){index_=i;start_=ticks_now();}
+            break;
+        }
+    }
+    void bind(arkdps::capture::Lane& lane,unsigned hook) noexcept {
+        if (!start_ || hook>=arkdps::capture::timing_hooks || state().lanes->lanes[index_].get()!=&lane) {start_=0;return;}
+        hook_=hook;generation_=lane.generation.load(std::memory_order_acquire);bound_=true;
+    }
+    void stack_read() noexcept {++extra_reads_;extra_bytes_+=8;}
+    void capture(const arkdps::capture::Snapshot& snapshot,unsigned parents,bool queued) noexcept {
+        reads_=snapshot.read_count;bytes_=snapshot.read_bytes;dropped_=!queued;
+        if(queued)enqueued_=sizeof(arkdps::capture::RecordHeader)+parents*sizeof(arkdps::capture::ParentCheckpoint)
+            +snapshot.segment_count*sizeof(arkdps::capture::Segment)+snapshot.field_count*sizeof(arkdps::capture::FieldState)+snapshot.byte_count;
+    }
+    ~CallbackTimer(){
+        if(!start_ || !bound_)return;
+        const auto end=ticks_now();
+        state().callback_timings.cell(index_,hook_,leave_).record(generation_,end>=start_?end-start_:0,
+            reads_+extra_reads_,bytes_+extra_bytes_,enqueued_,dropped_);
+    }
+private:
+    unsigned index_=0,hook_=0;bool leave_=false,bound_=false,dropped_=true;
+    std::uint64_t start_=0,generation_=0,reads_=0,bytes_=0,enqueued_=0,extra_reads_=0,extra_bytes_=0;
+};
 TimingThread* timing_slot() noexcept {
     const auto id = GetCurrentThreadId();
     for (auto& slot : timing_state.threads)
@@ -881,15 +916,18 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     const auto pinned_mode=pin_mode_entry(runtime.active,runtime.activity_generation,runtime.capture_mode_epoch);
     const auto scope_mode=runtime.capture_mode_epoch.load(std::memory_order_acquire);
     frame->return_target=2;
+    CallbackTimer callback_timer(false);
     auto& lanes=*runtime.lanes;
     if (!lanes.enabled.load(std::memory_order_acquire) || lanes.failure.load(std::memory_order_relaxed)) return hook->original;
     auto* lane=lanes.current();
     if (!lane) return hook->original;
+    callback_timer.bind(*lane,hook->timing_id);
     if (lane->depth>=invocation_depth) { lanes.poison(LaneFault::depth_full); return hook->original; }
     auto& call=lane->calls[lane->depth];
     call.hook=hook; call.mode_epoch=pinned_mode;
     call.apply_modifier=hook->capture_plan.apply_modifier; call.buff_damage=hook->capture_plan.buff_damage;
     call.configuration=runtime.configurations.pin(pinned_mode);
+    callback_timer.stack_read();
     if (!capture_read(nullptr,frame->stack,&call.return_address,sizeof call.return_address)) { lanes.poison(LaneFault::invalid_stack); return hook->original; }
     call.id=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
     call.parent=lane->depth ? lane->calls[lane->depth-1].id : 0;
@@ -900,8 +938,11 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     for (unsigned index=0;index<hook->capture_plan.plan->arg_count;++index) {
         if (!(hook->capture_plan.plan->arg_mask&(1u<<index))) continue;
         if (index<4) context.args[index]=gp[index];
-        else if (!capture_read(nullptr,frame->stack+40+(index-4)*8,&context.args[index],8)) {
-            lanes.poison(LaneFault::invalid_stack); return hook->original;
+        else {
+            callback_timer.stack_read();
+            if (!capture_read(nullptr,frame->stack+40+(index-4)*8,&context.args[index],8)) {
+                lanes.poison(LaneFault::invalid_stack); return hook->original;
+            }
         }
         context.args_valid|=1u<<index;
     }
@@ -926,12 +967,14 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
                         capture_read,nullptr,lane->snapshot,header,lane,
                         header.publication_request && runtime.cold_publication_request.load(std::memory_order_acquire)==header.publication_request);
     save_entry_roots(hook->capture_plan,lane->snapshot,context);
-    lanes.publish(*lane,header);
+    const bool queued=lanes.publish(*lane,header);
+    callback_timer.capture(lane->snapshot,header.parent_checkpoint_count,queued);
     return hook->original;
 }
 extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcept {
     using namespace arkdps::capture;
     auto& runtime=state();
+    CallbackTimer callback_timer(true);
     auto& lanes=*runtime.lanes;
     if (mode==2) {
         runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel);
@@ -947,6 +990,7 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     }
     auto& call=lane->calls[lane->depth-1];
     auto* hook=static_cast<Hook*>(call.hook);
+    callback_timer.bind(*lane,hook->timing_id);
     RecordHeader header{};
     header.ticket=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
     header.invocation=call.id; header.parent=call.parent; header.mode_epoch=call.mode_epoch;
@@ -974,7 +1018,8 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     header.activity=runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel)+1;
     header.active_after=runtime.active.fetch_sub(1,std::memory_order_acq_rel)-1;
     header.closed_after=header.active_after==0 && header.activity==header.activity_begin+1;
-    lanes.publish(*lane,header);
+    const bool queued=lanes.publish(*lane,header);
+    callback_timer.capture(lane->snapshot,header.parent_checkpoint_count,queued);
     --lane->depth;
     return nullptr;
 }
@@ -1122,6 +1167,12 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
         state["queue_age_available"]=age;
         state["queue_age_qpc_frequency"]=frequency.QuadPart;
         state["lane_metrics"]=nlohmann::json::array();
+        state["callback_timing"]={{"enabled",age},{"selection","xorshift_approximately_1_in_128"},
+            {"includes_first_touch",false},{"includes_original_function",false},
+            {"scope","after_sampling_decision_through_capture_enqueue"},
+            {"includes_identity_lookup",true},{"includes_metrics_recording",false},
+            {"sample_sums_are_not_extrapolated",true},{"qpc_frequency",frequency.QuadPart},
+            {"samples",nlohmann::json::array()}};
         for (unsigned index=0;index<capture::lane_count;++index) {
             auto& lane=*runtime.lanes->lanes[index];
             const auto owner=lane.owner.load(std::memory_order_acquire);
@@ -1138,6 +1189,16 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
                 {"last_capture_to_replay_qpc",optional(snapshot.last_age)},
                 {"maximum_capture_to_replay_qpc",optional(snapshot.maximum_age)},
                 {"observed_pending_age_lower_bound_qpc",optional(snapshot.observed_pending_age)}};
+            for(unsigned hook=0;hook<runtime.hooks.size() && hook<capture::timing_hooks;++hook)
+                for(unsigned edge=0;edge<2;++edge) {
+                    const auto sample=runtime.callback_timings.cell(index,hook,edge!=0).snapshot(snapshot.generation);
+                    if(!sample)continue;
+                    state["callback_timing"]["samples"].push_back({{"lane",index},{"lane_generation",sample->generation},
+                        {"hook_id",hook},{"hook",runtime.hooks[hook]->timing_name},{"edge",edge?"leave":"entry"},
+                        {"sample_count",sample->samples},{"sample_sum_qpc",sample->ticks},{"sample_max_qpc",sample->maximum},
+                        {"sample_native_reads",sample->reads},{"sample_native_read_bytes",sample->read_bytes},
+                        {"sample_enqueued_bytes",sample->enqueued_bytes},{"sample_drops",sample->drops}});
+                }
             state["lane_metrics"].push_back(std::move(row));
         }
         return state;
@@ -1153,7 +1214,7 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
             const auto active=runtime.active.load(std::memory_order_acquire);
             const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
             const auto activity=runtime.activity_generation.load(std::memory_order_acquire);
-            if (!runtime.terminal_fence.accepts(active,reserved,activity,capture::capture_read,nullptr)) return false;
+            if (!runtime.terminal_fence.accepts(active,reserved,activity,arkdps::capture::capture_read,nullptr)) return false;
             std::atomic_thread_fence(std::memory_order_seq_cst);
             return runtime.active.load(std::memory_order_acquire)==0
                 && runtime.lanes->reserved.load(std::memory_order_acquire)==reserved
