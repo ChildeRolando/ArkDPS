@@ -18,11 +18,11 @@ from native_pc import event_source
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_native_quiet_mark_checks_real_adapter_and_invalid_fences():
+def test_native_statistics_has_no_live_dispatch_fallback():
     completed = subprocess.run(
         ['node', str(ROOT / 'tests/native_pc_autochess_quiet_boundary_fixture.js')],
         cwd=ROOT, capture_output=True, text=True, encoding='utf-8', timeout=30, check=True)
-    assert completed.stdout.strip() == 'PASS_OWNED_QUIET_BOUNDARY'
+    assert completed.stdout.strip() == 'PASS_OWNED_NATIVE_RPC_ROUTING'
 
 
 def test_native_mark_requests_the_immutable_publication_protocol(monkeypatch):
