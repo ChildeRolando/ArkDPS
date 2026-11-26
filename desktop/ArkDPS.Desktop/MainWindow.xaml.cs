@@ -1309,7 +1309,7 @@ public partial class MainWindow : Window
         var replacement=new BridgeClient(App.Root,App.Python,App.BridgeArguments.ToArray(),App.StateDirectory);
         bridge=replacement;
         var timeout=TimeSpan.FromSeconds(5);
-        await replacement.ConnectAsync(timeout);
+        await replacement.ConnectAsync(cancellationToken:stop);
         stop.ThrowIfCancellationRequested();
         var reply=await replacement.RequestAsync("snapshot",timeoutOverride:timeout);
         stop.ThrowIfCancellationRequested();
