@@ -3,7 +3,7 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const text=fs.readFileSync('event_probe_native_pc.js','utf8');
 const context=vm.createContext({});vm.runInContext(text.slice(text.indexOf('function nativeCapturePlan(')),context);
 const meta={clock:{toString:()=> '0x1000'},string_class:'0x2000',skill_offsets:{charSkill:0x100,owner:0x20,data:0x28,prefab:0x10,id:0x18,name:0x20},skill_wait:0x50,attack_type_offset:0x30,classes:{Character:'0x3000'},factory_addresses:['0x7000','0x8000']};
-const names=['Entity.ApplyModifier','Entity.OnAfterOutputDamage','Unit.OnAfterOutputDamage','Unit.OnTakeDamage','Entity.OnTakeDamage','hp.Entity.SetHpInternal','hp.Entity.SetHpInternalDirectly','hp.Entity.OnAttributeDirty','enemy entry Born','enemy entry _UpdatePlayerSideAndMapLayer','Enemy.DoFakeDeath','Enemy.DoReborn','Enemy.OnFinish','Entity.OnFinish','BObject.OnRecycle','Character.Born','BasicSkill.OnCastFinish','Character.OnSkillStart','Character.SwitchToSkillState','Character.OnSkillCastSucceed','Character.OnToggleSkillStart','Character.OnSkillRetriggered','Character.OnSkillFinish','Character.SwitchOutFromSkillState','Character.OnAfterSkill','BattleController.OnCharacterFinished','Buff.OnTakeDamage','BlockDamage._AssignDynamicVar','BattleFormula.CalculateDamage','BattleFormula.CalculateDamageNoEvent','BattleFormula.CalculateDamageInternal','AttackInfo.GetFinalAtk','Modifier.NewDamageModifierAfterCalculate','BattleController.set_state','BattleController.Destroy','BattleController.ClearRunTimeData'];
+const names=require('./fixtures/native_capture/hook-names.json');
 for(const name of names){
  const address=name==='Modifier.NewDamageModifierAfterCalculate'?'0x7000':'0x9000';
  const plan=context.nativeCapturePlan(name,{toString:()=>address},meta);

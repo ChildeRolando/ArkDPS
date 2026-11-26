@@ -25,7 +25,7 @@ write(assemblyList,assembly);const names=new Map();
 function klass(name,namespace,parent=zero){const k=alloc();names.set(k.toString(),{name,namespace});classes.push(k);write(k.add(0x58),parent);return k;}
 const systemObject=klass('Object','System'),string=klass('String','System',systemObject);
 const ns='Torappu.Battle.AutoChess';
-const definitions=[['BattleController','Torappu.Battle'],['Character','Torappu.Battle'],['BObject','Torappu.Battle'],
+const definitions=[['BattleController','Torappu.Battle'],['Character','Torappu.Battle'],['BObject','Torappu.Battle'],['Entity','Torappu.Battle'],['Enemy','Torappu.Battle'],['BasicSkill','Torappu.Battle'],['LevelData','Torappu'],
  ['SingletonHost',''],['AutoChessGameManager',ns],['AutoChessGameStatus',ns],['AutoChessGameStateModel',''],['AutoChessGameStateMachine',''],
  ['AutoChessDataCenter','Torappu.Battle.DataCenter'],['AutoChessPlayerDataModel',ns],['ScenePlayerData',''],['PlayerCard',ns],
  ['AutoChessBattleDataModel',ns],['ChessInst',ns],['UnitManager','Torappu.Battle'],['BattleCharacterData','Torappu.Battle']];
@@ -70,7 +70,7 @@ const context=vm.createContext({ArrayBuffer,DataView,Uint8Array,domain,ptr,Memor
   }));
  },__arkdpsReplayActive:()=>replaying,__arkdpsReplayGap:message=>{throw Error('GAP '+message);}});
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../native_pc/native_event_runtime/cold_plan.js'),'utf8'),context);
-context.meta={found,clock:object};
+context.meta={found,clock:object,mitigationMethods:{damageType:0x18,factories:[alloc(),alloc()]},skillCastStateMethods:{wait:0x98}};
 const metadata=vm.runInContext('__arkdpsPrepareColdMetadata(meta)',context);
 assert.equal(metadata.cold_metadata_ready,true);
 assert.equal(metadata.classes.AutoChessGameManager,found.AutoChessGameManager.toString());
@@ -82,7 +82,7 @@ found.SkillData=skillData;apiTable.il2cpp_field_get_type=f=>f.add(8).readPointer
 const adapter=fs.readFileSync(path.join(__dirname,'../event_probe_native_pc.js'),'utf8');
 const setup=adapter.slice(adapter.indexOf('function prepareNativeCaptureMetadata('),adapter.indexOf('const nativeCaptureColdBindings='));
 vm.runInContext("let nativeCaptureMetadata=null;const nativeCaptureModeHistory=new Map();const nativeAutoDesiredMode='all';const coalesceEnemyHp=true;globalThis.arkdpsNativeAsyncCapture=true;"+setup,context);
-vm.runInContext('prepareNativeCaptureMetadata({...meta,skillF:{charSkill:1,owner:2,data:3,prefab:4,id:5,name:6}});globalThis.adapterMetadata=nativeCaptureMetadata;',context);
+vm.runInContext('prepareNativeCaptureMetadata({...meta,skillF:{charSkill:0x3c8,owner:0xa8,data:0xb0,prefab:0x50,id:0x18,name:0x10}});globalThis.adapterMetadata=nativeCaptureMetadata;',context);
 assert.equal(context.adapterMetadata.cold_metadata_ready,true);assert.equal(context.adapterMetadata.immutable_class_parents,true);assert.equal(context.adapterMetadata.coalesce_enemy_hp,true);
 assert.equal(context.adapterMetadata.cold_plan.fields.length,3);assert.equal(context.adapterMetadata.classes.AutoChessGameManager,found.AutoChessGameManager.toString());
 const before={reads,calls};replaying=true;
@@ -101,4 +101,24 @@ assert.deepEqual({reads,calls},before);
 context.playerElement=elements.get(player.list.toString());context.groupElement=elements.get(group.list.toString());
 const p=vm.runInContext('__arkdpsColdMetadataRead(playerElement,8)',context),g=vm.runInContext('__arkdpsColdMetadataRead(groupElement,8)',context);
 assert.notEqual(new DataView(p).getBigUint64(0,true),new DataView(g).getBigUint64(0,true));
+if(process.argv[2]){
+ // Compiler fixture only: the metadata helper/setup and finalizer are real,
+ // but six native capabilities below are synthetic, never runtime enablement.
+ const bridge=fs.readFileSync(path.join(__dirname,'../native_pc/native_event_runtime/bridge.js'),'utf8');
+ context.NativePointer=Pointer;context.NativeInteger=class{};
+ vm.runInContext(bridge.slice(bridge.indexOf('function __integer('),bridge.indexOf('class NativeInteger')),context);
+ vm.runInContext(adapter.slice(adapter.indexOf('function nativeCapturePlan(')),context);
+ const names=require('./fixtures/native_capture/hook-names.json');
+ const capabilities={version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys']};
+ const plans=[];
+ for(const name of names){
+  const addresses=name==='Modifier.NewDamageModifierAfterCalculate'?context.adapterMetadata.factory_addresses:['0x700000'];
+  for(const address of addresses){
+   const original=context.nativeCapturePlan(name,ptr(address),context.adapterMetadata),contract=context.finalizeNativeCapturePlan(original,context.adapterMetadata,capabilities);
+   assert.equal(contract.complete,true);assert.deepEqual([...contract.required_projections],[...original.required_projections]);
+   plans.push({name,address,contract});
+  }
+ }
+ fs.writeFileSync(process.argv[2],JSON.stringify({kind:'owned metadata production Prepare/Builder/finalizer compiler oracle; fake capabilities only',hook_names:names.length,contracts:plans.length,plans},null,2));
+}
 process.stdout.write(JSON.stringify({metadata_ready:true,generic_instantiations:2,replay_live_reads:reads-before.reads,replay_native_calls:calls-before.calls})+'\n');
