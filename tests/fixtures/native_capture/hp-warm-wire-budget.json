@@ -102,6 +102,41 @@
     "source_base": "b1e78dbfc9529f11a24fc31415f7ba6c8470d578",
     "strict_compiler": "aa59caac87b9a725f644b4fdb41af4292c9169b6",
     "scope": "owned warm graph only; cold plan retained but not activated; no runtime readiness/FPS claim",
-    "generation": "production nativeCapturePlan/finalizeNativeCapturePlan/nativeCaptureScopeGraph/publicationGuardFields over existing owned world, 40 ChessInst + 1 token"
-  }
+    "generation": "production nativeCapturePlan/finalizeNativeCapturePlan/nativeCaptureScopeGraph/publicationGuardFields over existing owned world, 40 ChessInst + 1 token",
+    "pressure": "Actual captured Snapshot used metadata/payload copied per edge; no synthetic padding. Burst offered 500ms equivalent volume before consumer releases; not callback cost, replayed stats, or FPS."
+  },
+  "spill_pressure": [
+    {
+      "bank_mib": 24,
+      "offered_edges": 30000,
+      "offered_setters_per_second_equivalent": 30000,
+      "consumer_pause_ms_at_least": 500,
+      "host_claim_bursts": 2,
+      "accepted_edges": 28851,
+      "failure_code": 4,
+      "peak_records": 28851,
+      "peak_serialized_bytes": 102754516,
+      "producer_elapsed_us": 9867,
+      "producer_met_500ms_offering_window": true,
+      "hot_cpp_allocations": 0,
+      "transport_shape_only": true,
+      "fifo_complete_for_accepted_prefix": true
+    },
+    {
+      "bank_mib": 32,
+      "offered_edges": 30000,
+      "offered_setters_per_second_equivalent": 30000,
+      "consumer_pause_ms_at_least": 500,
+      "host_claim_bursts": 2,
+      "accepted_edges": 30000,
+      "failure_code": 0,
+      "peak_records": 30000,
+      "peak_serialized_bytes": 106964468,
+      "producer_elapsed_us": 10617,
+      "producer_met_500ms_offering_window": true,
+      "hot_cpp_allocations": 0,
+      "transport_shape_only": true,
+      "fifo_complete_for_accepted_prefix": true
+    }
+  ]
 }

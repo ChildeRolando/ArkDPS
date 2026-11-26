@@ -27,11 +27,11 @@ def test_actual_hp_warm_plan_wire_budget(tmp_path):
         assert result.returncode==0,result.stdout+result.stderr
     source=ROOT/'native_pc/native_event_runtime'
     binary=tmp_path/'hp-wire-budget.exe'
-    build=subprocess.run([compiler,'-std=c++17','-static','-O2','-Wall','-Wextra','-Werror',
+    build=subprocess.run([compiler,'-std=c++17','-static','-O2','-pthread','-Wall','-Wextra','-Werror',
         '-I',str(source),'-I',str(header.parent),str(ROOT/'tests/native_hp_wire_budget_owned.cpp'),
         str(source/'native_capture.cpp'),'-o',str(binary)],capture_output=True,text=True,timeout=60)
     assert build.returncode==0,build.stdout+build.stderr
-    result=subprocess.run([str(binary),str(plan)],capture_output=True,text=True,timeout=15)
+    result=subprocess.run([str(binary),str(plan),'--spill-pressure'],capture_output=True,text=True,timeout=15)
     assert result.returncode==0,(result.returncode,result.stdout,result.stderr)
     receipt=json.loads(result.stdout)
     assert receipt['fixture_only'] is True and receipt['publication_guards']==788
@@ -41,4 +41,9 @@ def test_actual_hp_warm_plan_wire_budget(tmp_path):
     assert heal['first_max_hp']==200 and heal['leave']['scope_revision']==1
     assert nested['fresh_max_hp']==240 and nested['leave']['publication_revision']==1
     assert nested['leave']['compact_bytes']>heal['leave']['compact_bytes']>plain['leave']['compact_bytes']
+    small,large=receipt['spill_pressure']
+    assert small['failure_code']==4 and small['accepted_edges']<30000
+    assert large['failure_code']==0 and large['accepted_edges']==30000
+    assert large['peak_serialized_bytes']==15000*(heal['entry']['compact_bytes']+heal['leave']['compact_bytes'])+2*(nested['leave']['compact_bytes']-heal['leave']['compact_bytes'])
+    assert large['hot_cpp_allocations']==0
     print(json.dumps(receipt,sort_keys=True))
