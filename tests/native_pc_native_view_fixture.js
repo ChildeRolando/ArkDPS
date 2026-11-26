@@ -11,6 +11,7 @@ v.setBigUint64(16,0xfedcba9876543210n,true);v.setBigInt64(24,-922337203685477580
 function __read(){live++;throw Error('LIVE');}function __pid(){return 1;}function __nativeActive(){return 0;}
 function __nativeOwnedLease(ticket){return leased&&ticket==='17';}
 function resolve(role,cp,id,address,size){
+ if(typeof address!=='bigint')throw Error('legacy provider received numeric address');
  calls.push({role,cp,id,address,size});
  if(!leased){status=2;return false;}if(fault){status=fault;return false;}
  if(role==='unreadable'){status=5;return false;}if(role==='guard'){status=8;return false;}
@@ -97,6 +98,16 @@ globalThis.__nativeOwnedRead=(...args)=>savedRead(...args);__arkdpsReplayBegin(n
 status=0;__arkdpsReplayBegin(nativeRecord());leased=false;globalThis.compactExpired=__arkdpsReplayEnd(true);leased=true;
 status=0;__arkdpsReplayBegin(nativeRecord());status=9;globalThis.compactPoison=__arkdpsReplayEnd(true);status=0;
 status=0;__arkdpsReplayBegin(nativeRecord());globalThis.unknownOperation=rejects(()=>__arkdpsNativeCall('unknown'));globalThis.unknownOperationEnd=__arkdpsReplayEnd();
+const legacyRead=__nativeOwnedRead,legacyScalar=__nativeOwnedScalar,numericAddresses=[];
+globalThis.__nativeOwnedRead=function(role,cp,id,address,size){if(arguments.length!==5)throw Error('numeric read argc');numericAddresses.push({kind:'read',type:typeof address,value:String(address)});status=0;return new ArrayBuffer(size);};
+globalThis.__nativeOwnedScalar=function(role,cp,id,address,kind){if(arguments.length!==5)throw Error('numeric scalar argc');numericAddresses.push({kind:'scalar',type:typeof address,value:String(address)});status=0;return 7;};
+globalThis.__nativeOwnedNumericAddress=true;status=0;__arkdpsReplayBegin(nativeRecord());const numericProvider=__arkdpsReplay.native;
+__arkdpsReplayPoint('body',()=>{for(const address of [0n,9007199254740991n,9007199254740992n,0xffffffffffffffffn]){ptr(address).readU8();ptr(address).readByteArray(1);}});
+globalThis.__nativeOwnedNumericAddress=false;__arkdpsReplayPoint('body',()=>ptr(4096).readU8());globalThis.numericPinned=__arkdpsReplayEnd();
+__arkdpsReplayBegin(nativeRecord());globalThis.numericFlagRebuilt=numericProvider!==__arkdpsReplay.native;__arkdpsReplayPoint('body',()=>ptr(4096).readU8());__arkdpsReplayEnd();
+globalThis.numericCalls=numericAddresses;
+globalThis.__nativeOwnedRead=legacyRead;globalThis.__nativeOwnedScalar=legacyScalar;delete globalThis.__nativeOwnedNumericAddress;status=0;
+__arkdpsReplayBegin(nativeRecord());globalThis.unsafeAddress=rejects(()=>__arkdpsReplayPoint('body',()=>__arkdpsOwnedRead(9007199254740992,1)));globalThis.unsafeAddressEnd=__arkdpsReplayEnd();
 globalThis.liveCount=live;
 `,c);
 assert.deepEqual(Array.from(c.values),[251,65000,0xfedcba98,-123456,'18364758544493064720','-9223372036854775807',-13.25,'0xfedcba9876543210']);
@@ -120,3 +131,5 @@ assert(c.providerFrozen);assert(c.providerReused);assert(c.providerRebuilt);asse
 assert(c.unknownOperation);assert.equal(c.unknownOperationEnd.complete,false);
 
 assert.equal(c.factsWithoutRecordMethods.mode,3);assert.equal(c.factsWithoutRecordMethods.scope,4);assert.equal(c.factsWithoutRecordMethods.parents[0].invocation_id,'9007199254741001');assert(c.sharedParentArray);assert.equal(c.retainedFactsProof.mode,3);assert.equal(c.retainedFactsProof.scope,21);assert.equal(c.retainedFactsProof.parents[0].invocation_id,'9007199254741001');assert(c.retainedFactsProof.frozen);
+
+assert.equal(c.numericPinned.complete,true);assert(c.numericFlagRebuilt);assert.deepEqual(Array.from(c.numericCalls,x=>[x.type,x.value]),[['number','0'],['number','0'],['number','9007199254740991'],['number','9007199254740991'],['bigint','9007199254740992'],['bigint','9007199254740992'],['bigint','18446744073709551615'],['bigint','18446744073709551615'],['number','4096'],['bigint','4096']]);assert(c.unsafeAddress);assert.equal(c.unsafeAddressEnd.complete,false);

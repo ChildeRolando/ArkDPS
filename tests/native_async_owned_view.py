@@ -55,6 +55,10 @@ const hook=Interceptor.attach(address,{arkdpsName:'owned.native-view',arkdpsCapt
    // read. Independent native poison must still seal this replay.
    try{__nativeOwnedRead('body',0,-1,owned.value+4096n,4);}catch(ignored){}
    __nativeOwnedScalar('body',0,-1,owned.value,0);
+  }else if(mode.startsWith('numeric-')){
+   const invalid=mode==='numeric-nan'?NaN:mode==='numeric-unsafe'?9007199254740992:4096.5;
+   try{__nativeOwnedRead('body',0,-1,invalid,4);}catch(ignored){}
+   __nativeOwnedScalar('body',0,-1,Number(owned.value),0);
   }else if(mode==='guard'){
    try{__nativeOwnedRead('guard',0,-1,owned.value,8);}catch(ignored){}
    __nativeOwnedScalar('body',0,-1,owned.value,0);
@@ -68,7 +72,7 @@ const hook=Interceptor.attach(address,{arkdpsName:'owned.native-view',arkdpsCapt
  }});
 globalThis.__arkdpsPublicationServed=through=>served=Math.max(served,through);
 globalThis.__arkdpsOnClosedRecord=record=>({mark:{sequence:0,epoch:entries,frame:leaves,game_time:leaves/30,
- active:0,active_hooks:[],error:null,stopped:false,entries,leaves,checks,source_assertion_errors:assertionErrors.slice(),scalar_debug:scalarDebug,owned_native_view:record.native_view,
+ active:0,active_hooks:[],error:null,stopped:false,entries,leaves,checks,source_assertion_errors:assertionErrors.slice(),scalar_debug:scalarDebug,native_numeric_address:globalThis.__nativeOwnedNumericAddress===true,owned_native_view:record.native_view,
  native_capture_scope_mode_epoch:record.facts.scope_mode_epoch??record.facts.mode_epoch},acknowledged:0,
  events_after:0,events_through:0,events:[],hp_context:[],read_fields:{sequence:0,epoch:entries},terminal_read:null});
 rpc.exports={mark(){throw Error('legacy live mark');},readEvents(){throw Error('legacy live read');},
@@ -118,7 +122,7 @@ def run(binary, case):
                 mark = fresh_mark(pipe, fixture)
                 assert mark.get('retry') is not True and mark.get('error') is None, mark
                 assert mark.get('source_assertion_errors') == [], mark
-                assert mark['owned_native_view'] is True, mark
+                assert mark['owned_native_view'] is True and mark['native_numeric_address'] is True, mark
                 assert mark['entries'] == mark['leaves'] == fresh_mark.last_nudges >= 1, mark
                 assert mark['checks'] == 31*fresh_mark.last_nudges, mark
                 assert int(mark['native_publication']['closed_ticket']) == 2*fresh_mark.last_nudges, mark
@@ -149,10 +153,10 @@ def main():
     parser = ArgumentParser()
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--receipt', type=Path, required=True)
-    parser.add_argument('--case', choices=['all','positive','invalid','late-lease','guard'], default='all')
+    parser.add_argument('--case', choices=['all','positive','invalid','late-lease','guard','numeric-nan','numeric-unsafe','numeric-fractional'], default='all')
     options = parser.parse_args()
     binary = options.binary.resolve()
-    cases = ['positive','invalid','late-lease','guard'] if options.case == 'all' else [options.case]
+    cases = ['positive','invalid','late-lease','guard','numeric-nan','numeric-unsafe','numeric-fractional'] if options.case == 'all' else [options.case]
     receipt = {'kind':'real DLL/QuickJS self-owned semantic test; no game or throughput claim',
                'binary_sha256':sha256(binary.read_bytes()).hexdigest(),'cases':{}}
     try:

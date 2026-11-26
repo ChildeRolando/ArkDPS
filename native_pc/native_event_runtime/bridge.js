@@ -103,12 +103,12 @@ function __arkdpsReplayBegin(record){
  if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('invalid record checkpoint');
  if(record.native_view===true){
   const lease=globalThis.__nativeOwnedLease,read=globalThis.__nativeOwnedRead,scalar=globalThis.__nativeOwnedScalar,
-   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint;
+   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true;
   if(typeof lease!=='function'||typeof read!=='function'||typeof scalar!=='function'||typeof status!=='function'||typeof point!=='function')
    throw new Error('native owned provider unavailable');
   let native=__arkdpsNativeProvider;
-  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point)
-   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point});
+  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric)
+   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric});
   if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||native.__nativeOwnedLease(record.ticket)!==true)throw new Error('native owned lease unavailable');
   __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};return;
  }
@@ -257,9 +257,14 @@ function __arkdpsNativePoint(role,checkpoint){
  if(count>2||status>10)__arkdpsReplayGap('invalid native owned point shape');
  return packed;
 }
+function __arkdpsNativeAddress(address){
+ // Only the ABI parameter changes representation. Pointer values and wide
+ // addresses remain full uint64 BigInts; legacy providers never see Numbers.
+ return __arkdpsReplay.native.__nativeOwnedNumericAddress&&typeof address==='bigint'&&address>=0n&&address<=9007199254740991n?Number(address):address;
+}
 function __arkdpsOwnedScalar(address,kind){
  const replay=__arkdpsReplay;
- const value=__arkdpsNativeCall('__nativeOwnedScalar',replay.role,replay.checkpoint,replay.fieldId===null?-1:replay.fieldId,address,kind);
+ const value=__arkdpsNativeCall('__nativeOwnedScalar',replay.role,replay.checkpoint,replay.fieldId===null?-1:replay.fieldId,__arkdpsNativeAddress(address),kind);
  if(value===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
  const bounds=[[0,255],[0,65535],[0,4294967295],[-2147483648,2147483647]];
  if(kind<4){const [lo,hi]=bounds[kind];if(!Number.isInteger(value)||value<lo||value>hi)__arkdpsReplayGap('invalid native scalar integer');}
@@ -277,7 +282,7 @@ function __arkdpsOwnedRead(address,size){
  if(replay.native){
   try{address=__integer(address);}catch(error){__arkdpsReplayGap('invalid native captured address');}
   if(address<0n||address>0xffffffffffffffffn||address+BigInt(size)>0x10000000000000000n)__arkdpsReplayGap('invalid native captured address');
-  const bytes=__arkdpsNativeCall('__nativeOwnedRead',replay.role,replay.checkpoint,replay.fieldId===null?-1:replay.fieldId,address,size);
+  const bytes=__arkdpsNativeCall('__nativeOwnedRead',replay.role,replay.checkpoint,replay.fieldId===null?-1:replay.fieldId,__arkdpsNativeAddress(address),size);
   if(bytes===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
   if(!(bytes instanceof ArrayBuffer)||bytes.byteLength!==size)__arkdpsReplayGap('invalid native owned bytes');
   return bytes;
