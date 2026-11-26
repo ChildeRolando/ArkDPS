@@ -35,7 +35,9 @@ from native_pc.windows_dll_loader import WindowsDllLoader
 DLL_NAME = 'ArkDPS.NativeEvents.dll'
 PROVIDER = 'arkdps-native-hooks'
 PROTOCOL = 1
-RUNTIME_SOURCES = ('engine.cpp', 'engine.h', 'server.cpp', 'hooks.S', 'bridge.js', 'build.py')
+RUNTIME_SOURCES = ('engine.cpp', 'engine.h', 'engine_worker.h', 'engine_capture_lane.h',
+                   'engine_capture_plan.h', 'capture_queue.h', 'native_capture.cpp', 'native_capture.h',
+                   'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'build.py')
 NATIVE_HOOK_LICENSES = {
     'quickjs-LICENSE': '598fd7fc928e4350abce36e337ba5a1346923c5c692f5be92c3d8e29ddd7c18d',
     'minhook-LICENSE.txt': 'd5c2224982b0b95a16b098a561335fa93f3eaf4d0aa964b7843edb986df78dc8',

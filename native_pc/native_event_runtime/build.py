@@ -113,7 +113,9 @@ def build(output=DEFAULT_OUTPUT, *, compiler='g++', c_compiler=None, cache=None,
     env['PATH'] = str(Path(cpp).parent) + os.pathsep + env.get('PATH', '')
     with TemporaryDirectory(prefix='native-runtime-', dir=output.parent) as temporary:
         stage = Path(temporary)
-        source_files = ('engine.cpp', 'engine.h', 'server.cpp', 'hooks.S', 'bridge.js', 'build.py')
+        source_files = ('engine.cpp', 'engine.h', 'engine_worker.h', 'engine_capture_lane.h',
+                        'engine_capture_plan.h', 'capture_queue.h', 'native_capture.cpp', 'native_capture.h',
+                        'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'build.py')
         snapshots = {name: (SOURCE / name).read_bytes() for name in source_files}
         for name, contents in snapshots.items():
             (stage / name).write_bytes(contents)
@@ -134,6 +136,12 @@ def build(output=DEFAULT_OUTPUT, *, compiler='g++', c_compiler=None, cache=None,
         (stage / 'bridge_source.h').write_text(
             'static constexpr const char* arkdps_bridge_source = R"ARKDPS_BRIDGE('
             + bridge + ')ARKDPS_BRIDGE";\n', encoding='utf-8')
+        publication = snapshots['publication.js'].decode('utf-8')
+        if ')ARKDPS_PUB"' in publication:
+            raise ValueError('publication source conflicts with embedding delimiter')
+        (stage / 'publication_source.h').write_text(
+            'static constexpr const char* arkdps_publication_source = R"ARKDPS_PUB('
+            + publication + ')ARKDPS_PUB";\n', encoding='utf-8')
         objects = []
         cflags = ['-O2', '-fwrapv', '-D_GNU_SOURCE', '-D__USE_MINGW_ANSI_STDIO',
                   '-DCONFIG_VERSION="2025-09-13"', '-I', str(quickjs), '-I', str(minhook / 'include')]
@@ -146,7 +154,7 @@ def build(output=DEFAULT_OUTPUT, *, compiler='g++', c_compiler=None, cache=None,
         binary = stage / output.name
         run([cpp, '-std=c++17', '-O2', '-Wall', '-Wextra', '-shared', '-static',
              '-I', str(stage), '-isystem', str(public_headers), '-I', str(minhook / 'include'),
-             str(stage / 'engine.cpp'), str(stage / 'server.cpp'), *objects,
+             str(stage / 'engine.cpp'), str(stage / 'native_capture.cpp'), str(stage / 'server.cpp'), *objects,
              '-lpsapi', '-ladvapi32', '-lwinpthread', '-lm', '-o', str(binary)], env=env, check=True)
         require_windows_x64(binary)
         licenses = {
