@@ -751,7 +751,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     if (runtime.lanes->failure.load(std::memory_order_acquire))
         callback_failure=std::make_exception_ptr(std::runtime_error("native replay violated the capture boundary"));
     JSValue projection=JS_UNDEFINED;
-    if (!callback_failure && header.publication_request && header.closed_after && JS_IsFunction(c,runtime.prefix_projection)) {
+    if (!callback_failure && header.projection_candidate && header.closed_after && JS_IsFunction(c,runtime.prefix_projection)) {
         auto frozen=JS_Call(c,runtime.prefix_projection,JS_UNDEFINED,1,&record);
         if (JS_IsException(frozen)) callback_failure=std::make_exception_ptr(std::runtime_error(exception(c)));
         else projection=JS_DupValue(c,frozen);

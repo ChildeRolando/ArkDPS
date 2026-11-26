@@ -18,7 +18,17 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
                 capture_append(*base.plan,phase,context,reader,user,snapshot,i,i+1);
     };
     base_stage(1);
-    const CaptureGraph* scope=config && config->scope && config->scope->available
+    const bool forced=phase==Phase::entry ? base.force_full_entry
+        : phase==Phase::leave && base.force_cold_leave && (!base.force_cold_conditional
+          || ((context.args_valid&(1u<<base.force_cold_arg)) && context.args[base.force_cold_arg]==base.force_cold_value));
+    const bool cold=base.cold && (forced || (header.publication_request
+        && (!config || !config->scope || !config->scope->available)));
+    header.projection_candidate=forced || header.publication_request;
+    if (cold) {
+        header.cold_revision=1;
+        capture_append(*base.cold->plan,Phase::checkpoint,context,reader,user,snapshot,0,1);
+    }
+    const CaptureGraph* scope=!cold && config && config->scope && config->scope->available
         ? config->scope.get() : nullptr;
     Context graph_context=context;
     if (scope) {
@@ -30,7 +40,7 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
                        snapshot,0,scope->body_insertion);
     }
     base_stage(0);
-    const CaptureGraph* publication=header.publication_request && config
+    const CaptureGraph* publication=!cold && header.projection_candidate && config
         && config->publication && config->publication->available ? config->publication.get() : nullptr;
     if (publication) {
         header.publication_revision=publication->revision;
@@ -38,6 +48,8 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
         capture_append(*publication->code->plan,Phase::checkpoint,graph_context,
                        reader,user,snapshot);
     }
+    if (cold)
+        capture_append(*base.cold->plan,Phase::checkpoint,context,reader,user,snapshot,1,3);
     if (scope)
         capture_append(*scope->code->plan,Phase::checkpoint,graph_context,reader,user,
                        snapshot,scope->body_insertion,scope->code->plan->field_count);

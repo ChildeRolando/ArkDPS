@@ -34,6 +34,7 @@ public:
         role_ids_.emplace(role,id); return id;
     }
     void intern(CompiledPlan& compiled) {
+        if (compiled.cold) intern(*compiled.cold);
         for (unsigned i=0;i<compiled.plan->field_count;++i) {
             auto& field=compiled.plan->fields[i];
             const auto& role=compiled.roles.at(field.role-1);

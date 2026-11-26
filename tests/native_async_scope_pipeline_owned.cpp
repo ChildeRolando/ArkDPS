@@ -42,5 +42,16 @@ int main(){
  reads.count=0;header={};
  capture_scope_point(*base,Phase::entry,context,configs->pin(0),reader,&reads,*snapshot,header);
  assert(snapshot->field_count==5 && !header.publication_captured);
+ J cold{{"version",1},{"max_bytes",1024},{"max_reads",32},
+ {"fields",J::array({field(1,"cold.root_open","checkpoint","before",1),field(2,"cold.body","checkpoint","none",0),field(3,"cold.root_close","checkpoint","after",1)})}};
+ plan["cold_plan"]=cold; plan["force_full_binding"]={{"phase","entry"}};
+ auto boundary=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*boundary);
+ header={};reads.count=0;
+ capture_scope_point(*boundary,Phase::entry,context,nullptr,reader,&reads,*snapshot,header);
+ assert(snapshot->error==Error::ok && snapshot->field_count==6 && reads.count==6);
+ assert(header.cold_revision==1 && header.projection_candidate && !header.publication_request);
+ reads.count=0;reads.mutate=true;header={};
+ capture_scope_point(*boundary,Phase::entry,context,nullptr,reader,&reads,*snapshot,header);
+ assert(snapshot->error==Error::changed_guard);
  std::cout<<"scope bracket, clock spanning graph, pinned immutable revision passed\n";
 }

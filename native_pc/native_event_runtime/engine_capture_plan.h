@@ -24,6 +24,10 @@ struct CompiledPlan {
     std::array<std::uint8_t,max_fields> field_stage{};
     std::array<SavedEntryRoot, max_roots> entry_roots{};
     std::uint8_t entry_root_count=0;
+    std::unique_ptr<CompiledPlan> cold;
+    bool force_cold_leave=false, force_full_entry=false, force_cold_conditional=false;
+    std::uint8_t force_cold_arg=0;
+    std::uint64_t force_cold_value=0;
 };
 inline std::uint64_t plan_uint(const nlohmann::json& value, std::uint64_t maximum) {
     std::uint64_t number=0;
@@ -221,6 +225,49 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         field.root=saved.root; field.root_index=saved.index; field.absolute_address=saved.absolute;
         field.offset=saved.offset; field.bytes=8; field.required=false;
         for (const auto& offset : path) field.pointer_offsets[field.depth++]=plan_uint(offset,UINT32_MAX);
+    }
+    if (source.contains("cold_plan")) {
+        auto cold=source.at("cold_plan");
+        if (!cold.is_object() || cold.contains("cold_plan") || plan_uint(cold.at("version"),1)!=1)
+            throw std::runtime_error("invalid cold capture template");
+        cold["schema_version"]=1; cold["complete"]=true; cold["address"]="1";
+        cold["abi"]="win64-gp"; cold["arg_count"]=0; cold["arg_mask"]=0;
+        cold["globals"]=nlohmann::json::array(); cold["required_projections"]=nlohmann::json::array();
+        for (auto& field : cold.at("fields")) {
+            field["field_id"]=20480+plan_uint(field.at("field_id"),4095);
+            const auto guard=plan_uint(field.value("guard_id",nlohmann::json(0)),479);
+            if (guard) field["guard_id"]=3616+guard;
+        }
+        const auto& cold_fields=cold.at("fields");
+        if (cold_fields.size()!=3 || cold_fields[0].at("role")!="cold.root_open"
+            || cold_fields[1].at("role")!="cold.body" || cold_fields[2].at("role")!="cold.root_close")
+            throw std::runtime_error("invalid cold capture bracket roles");
+        result.cold=std::make_unique<CompiledPlan>(compile_plan(cold,1));
+        const auto& first=result.cold->plan->fields[0];
+        const auto& last=result.cold->plan->fields[2];
+        if (first.phase!=Phase::checkpoint || last.phase!=Phase::checkpoint
+            || result.cold->plan->fields[1].phase!=Phase::checkpoint
+            || first.guard!=Guard::before || last.guard!=Guard::after
+            || !first.guard_id || first.guard_id!=last.guard_id)
+            throw std::runtime_error("cold capture root guard is not paired");
+        if (result.cold->plan->field_count!=3)
+            throw std::runtime_error("cold capture template must bracket one body tree");
+    }
+    if (source.contains("force_cold_boundary")) {
+        const auto& force=source.at("force_cold_boundary");
+        if (force.at("phase")!="leave") throw std::runtime_error("invalid forced cold phase");
+        result.force_cold_leave=true;
+        if (force.at("condition")=="arg_equals") {
+            result.force_cold_conditional=true;
+            result.force_cold_arg=plan_uint(force.at("arg_index"),15);
+            result.force_cold_value=plan_uint(force.at("value"),UINT64_MAX);
+            if (!(result.plan->arg_mask&(1u<<result.force_cold_arg)))
+                throw std::runtime_error("forced cold condition uses uncaptured argument");
+        } else if (force.at("condition")!="always") throw std::runtime_error("invalid forced cold condition");
+    }
+    if (source.contains("force_full_binding")) {
+        if (source.at("force_full_binding").at("phase")!="entry") throw std::runtime_error("invalid full binding phase");
+        result.force_full_entry=true;
     }
     if (validate_plan(*result.plan)!=Error::ok) throw std::runtime_error("invalid native capture plan");
     return result;

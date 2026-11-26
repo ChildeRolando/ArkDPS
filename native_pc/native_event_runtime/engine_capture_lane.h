@@ -39,7 +39,7 @@ struct RecordHeader {
     std::uint64_t return_value = 0, thread_birth = 0, captured_qpc = 0;
     std::uint64_t publication_request = 0, mode_epoch = 0, scope_mode_epoch = 0;
     std::uint64_t configuration_id=0, scope_revision=0, publication_revision=0, cold_revision=0;
-    bool scope_unavailable=true, publication_captured=false;
+    bool scope_unavailable=true, publication_captured=false, projection_candidate=false;
     std::uintptr_t return_address = 0;
     std::array<std::uint64_t, 16> args{};
     std::uint32_t hook_id = 0, thread_id = 0, lane = 0, depth = 0;
