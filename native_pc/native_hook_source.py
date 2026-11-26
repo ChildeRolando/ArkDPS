@@ -36,7 +36,7 @@ DLL_NAME = 'ArkDPS.NativeEvents.dll'
 PROVIDER = 'arkdps-native-hooks'
 PROTOCOL = 1
 RUNTIME_SOURCES = ('engine.cpp', 'engine.h', 'engine_worker.h', 'engine_capture_lane.h',
-                   'engine_capture_plan.h', 'engine_capture_config.h', 'engine_capture_pipeline.h', 'engine_terminal_fence.h',
+                   'engine_capture_plan.h', 'engine_capture_config.h', 'engine_capture_pipeline.h', 'engine_terminal_fence.h', 'engine_capture_timing.h',
                    'capture_queue.h', 'capture_spill_pool.h', 'native_capture.cpp', 'native_capture.h',
                    'owned_replay_view.h', 'owned_replay_js.h',
                    'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'cold_plan.js', 'build.py')

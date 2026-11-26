@@ -207,7 +207,7 @@ def child(binary):
             # This runner owns the process and this DLL. No game PID or
             # external address is accepted by the throughput operation.
             count = command.get('count', 1000)
-            if type(count) is not int or not 1 <= count <= 100000:
+            if type(count) is not int or not 1 <= count <= 300000:
                 raise ValueError('owned burst count exceeds its bound')
             rate = command.get('rate', 0)
             if type(rate) is not int or not 0 <= rate <= 200000:

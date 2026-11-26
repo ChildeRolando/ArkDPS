@@ -9,7 +9,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 from queue import Queue
 from tempfile import TemporaryDirectory
-from threading import Thread
+from threading import Event, Thread
 from hashlib import sha256
 import json
 import sys
@@ -76,11 +76,13 @@ def fresh_mark(pipe, fixture):
     raise RuntimeError('owned consumer failed to catch up in six seconds')
 
 
-def run(binary, count, pause_ms, control=False, rate=30000, progress=None):
+def run(binary, count, pause_ms, control=False, rate=30000, progress=None, monitor=False):
     progress = {} if progress is None else progress
     with TemporaryDirectory(prefix='arkdps-owned-pressure-') as directory:
         fixture = Fixture(Path(directory), binary)
         pipe = None
+        monitoring = None
+        monitor_stop = Event()
         try:
             fixture.configure(source=source(binary, pause_ms, control))
             before = fixture.command('load')
@@ -89,10 +91,32 @@ def run(binary, count, pause_ms, control=False, rate=30000, progress=None):
             progress.update(unhooked=baseline, phase='initializing')
             pipe = NativePipe(fixture.pipe_name, fixture.identity['pid'])
             ready = pipe.request('initialize', token=fixture.token)
+            if monitor:
+                assert not control, 'live lag monitoring requires the asynchronous candidate'
+                pipe.request('mark', native_timing={'version':1, 'enabled':True})
             progress.update(ready=ready, phase='producing')
             started = time.perf_counter()
+            live_marks = []
+            progress['live_marks'] = live_marks
+            if monitor:
+                def observe():
+                    while not monitor_stop.wait(.25):
+                        try:
+                            reply = pipe.request('mark')
+                            live_marks.append(dict(seconds=time.perf_counter()-started,
+                                retry=reply.get('retry',False), state=reply['native_async_capture']))
+                        except BaseException as error:
+                            live_marks.append(dict(seconds=time.perf_counter()-started,
+                                error_type=type(error).__name__, error=str(error)))
+                            break
+                monitoring = Thread(target=observe)
+                monitoring.start()
             burst = fixture.command('burst', count=count, rate=rate)
             wall_seconds = time.perf_counter()-started
+            monitor_stop.set()
+            if monitoring is not None:
+                monitoring.join(timeout=4)
+                assert not monitoring.is_alive(), 'live owned mark did not return'
             assert burst['checksum'] == count*650
             progress.update(captured=burst, producer_wall_seconds=wall_seconds, phase='catching_up')
             # Give the deliberately paused consumer its entire budget. This
@@ -107,8 +131,11 @@ def run(binary, count, pause_ms, control=False, rate=30000, progress=None):
             assert fixture.command('snapshot')['code'] == before['code']
             return dict(identity=fixture.identity, ready=ready, count=count, consumer_pause_ms=pause_ms,
                         payload_bytes_per_edge=128, unhooked=baseline, captured=burst,
-                        producer_wall_seconds=wall_seconds, mark=mark, stopped=stopped)
+                        producer_wall_seconds=wall_seconds, live_marks=live_marks, mark=mark, stopped=stopped)
         finally:
+            monitor_stop.set()
+            if monitoring is not None:
+                monitoring.join(timeout=4)
             if pipe is not None:
                 pipe.close()
             fixture.close()
@@ -122,8 +149,9 @@ def main():
     parser.add_argument('--pauses', type=int, nargs='+', default=[0, 300, 500])
     parser.add_argument('--synchronous-control', action='store_true', help='explicitly label a frozen old DLL control')
     parser.add_argument('--rate', type=int, default=30000, help='setter pairs per second; 0 is an unpaced burst')
+    parser.add_argument('--monitor', action='store_true', help='record live publication lag during the owned burst')
     options = parser.parse_args()
-    if (not 1 <= options.count <= 100000 or any(not 0 <= pause <= 500 for pause in options.pauses)
+    if (not 1 <= options.count <= 300000 or any(not 0 <= pause <= 500 for pause in options.pauses)
             or not 0 <= options.rate <= 200000):
         parser.error('owned count/pause budget exceeded')
     receipt = dict(game_processes_accessed=False, in_game_fps_measured=False,
@@ -135,7 +163,7 @@ def main():
     for pause in options.pauses:
         progress = {}
         try:
-            case = run(options.binary.resolve(), options.count, pause, options.synchronous_control, options.rate, progress)
+            case = run(options.binary.resolve(), options.count, pause, options.synchronous_control, options.rate, progress, options.monitor)
             case['status'] = 'passed'
             report = dict(pause_ms=pause, count=case['count'], captured=case['captured'],
                           wall_seconds=case['producer_wall_seconds'])
