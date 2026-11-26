@@ -144,6 +144,31 @@ function validateNativeTerminalBinding(candidate){
 }
 let nativeCaptureMetadata=null,nativeCaptureModeEpoch=0;
 const nativeCaptureModeHistory=new Map();
+const nativeHpReadPlans=new WeakMap();
+function prepareNativeHpReadPlans(metadata){
+ if(nativeHpReadPlans.has(metadata))return nativeHpReadPlans.get(metadata);
+ if(typeof __arkdpsRegisterOwnedReadPlan!=='function'||typeof __arkdpsOwnedReadBatch!=='function'){
+  nativeHpReadPlans.set(metadata,null);return null;
+ }
+ const body=(tier,offset,bytes,pointer_offsets=[])=>({tier,role:'body',checkpoint:'current',field_id:-1,root:'arg0',pointer_offsets,offset,kind:'bytes',bytes});
+ const clockField=(tier,role,bytes)=>({tier,role,checkpoint:'current',field_id:'unique',root:'absolute',absolute_address:metadata.clock.toString(),pointer_offsets:[],offset:0,kind:'bytes',bytes});
+ const entry=__arkdpsRegisterOwnedReadPlan(metadata,{version:1,fields:[
+  body(1,0,0x1c),body(2,0x25,1),clockField(4,'clock_open',12),clockField(4,'clock_close',4),body(4,0x40,8),
+  {tier:8,role:'body',checkpoint:'current',field_id:-1,root:'arg0',pointer_offsets:[0x148],offset:0,kind:'utf16',max_units:200}]});
+ const leave=__arkdpsRegisterOwnedReadPlan(metadata,{version:1,fields:[
+  body(1,0x18,0x30),clockField(1,'clock_open',12),clockField(1,'clock_close',4),
+  body(2,0x18,4,[0xb0,0x68]),body(4,0x20,0x14,[0xb0,0x68])]});
+ if((entry===null)!==(leave===null))throw new Error('incomplete HP read plans');
+ const plans=entry===null?null:Object.freeze({entry,leave});nativeHpReadPlans.set(metadata,plans);return plans;
+}
+function captureNativeHpRead(edge,enemy,tiers){
+ if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive()||__arkdpsReplayRecord().native_view!==true)return null;
+ const plans=nativeHpReadPlans.get(nativeCaptureMetadata);
+ if(plans===undefined)__arkdpsReplayGap('HP read plans not initialized');
+ if(plans===null)return null;
+ if(edge!=='entry'&&edge!=='leave')__arkdpsReplayGap('invalid HP read plan edge');
+ return __arkdpsOwnedReadBatch(plans[edge],enemy,tiers);
+}
 function prepareNativeCaptureMetadata(meta){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;
  nativeCaptureModeHistory.set(0,nativeAutoDesiredMode);
@@ -238,6 +263,7 @@ function captureNativeInvocationRead(scope,read){
 function prepareNativeCaptureHook(address,callbacks){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;
  if(!nativeCaptureMetadata||typeof callbacks.arkdpsName!=='string')throw new Error('native hook capture metadata/name missing');
+ if(callbacks.arkdpsName.startsWith('hp.'))prepareNativeHpReadPlans(nativeCaptureMetadata);
  const plan=nativeCapturePlan(callbacks.arkdpsName,address,nativeCaptureMetadata);
  const capabilities=typeof __nativeCaptureCapabilities==='function'?__nativeCaptureCapabilities():null;
  callbacks.arkdpsCaptureContract={...finalizeNativeCapturePlan(plan,nativeCaptureMetadata,capabilities),mode_epoch:nativeCaptureModeEpoch};
@@ -268,7 +294,7 @@ const probeAdapter={
   }
   return nativeCapturedPublicationBinding(true);
  },
- captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,retireCaptureGraphs,captureRecordMode:withCapturedMode,captureCollectionMode:capturedCollectionMode,captureInvocationRead:captureNativeInvocationRead,
+ captureHpRead:captureNativeHpRead,captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,retireCaptureGraphs,captureRecordMode:withCapturedMode,captureCollectionMode:capturedCollectionMode,captureInvocationRead:captureNativeInvocationRead,
  captureClassIdentity(klass,name,namespace){
   if(typeof __arkdpsColdClassIdentity!=='function')__arkdpsReplayGap('immutable class identity not frozen');
   return __arkdpsColdClassIdentity(klass,name,namespace);

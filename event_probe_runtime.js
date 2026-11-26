@@ -741,21 +741,34 @@ function checkedNativeView(address,size){
  if(bytes===null||bytes.byteLength!==size)throw new Error('native block read unavailable');
  return new DataView(bytes);
 }
+function validatedClockStamp(view,closingFrame,allowRetry,withEventScope){
+ const frame=view.getUint32(0,true),game_time=Number(view.getBigInt64(4,true))/4294967296;
+ if(closingFrame!==frame){if(allowRetry)return null;throw new Error('unstable callback clock');}
+ if(!Number.isFinite(game_time)||game_time<0)throw new Error('invalid clock');
+ return damageSettlementStamp(frame,game_time,withEventScope);
+}
 function time(allowRetry = false, withEventScope = true) {
- // One owned copy for the opening clock, followed by the same independent
- // frame guard as before. Native PC pays one bridge call instead of two;
- // no frame/time value survives this callback invocation.
+ // The closing frame remains a separate, independently captured witness.
  const bytes=captureRead('clock_open',()=>clock.readByteArray(12));
  if(bytes===null||bytes.byteLength!==12)throw new Error('callback clock unavailable');
- const view=new DataView(bytes),frame=view.getUint32(0,true);
- const game_time=Number(view.getBigInt64(4,true))/4294967296;
- if (captureClockFrame() !== frame) {
-  if (allowRetry) return null;
-  throw new Error('unstable callback clock');
- }
- if (!Number.isFinite(game_time) || game_time < 0) throw new Error('invalid clock');
-  return damageSettlementStamp(frame,game_time,withEventScope);
+ return validatedClockStamp(new DataView(bytes),captureClockFrame(),allowRetry,withEventScope);
 }
+function hpReadBatch(edge,enemy,tiers){
+ return typeof probeAdapter.captureHpRead==='function'?probeAdapter.captureHpRead(edge,enemy,tiers):null;
+}
+function hpBatchClock(batch,opening,closing,withEventScope){
+ const view=batch.slot(opening),close=batch.slot(closing);
+ if(view.byteLength!==12||close.byteLength!==4)throw new Error('callback clock unavailable');
+ return validatedClockStamp(view,close.getUint32(0,true),false,withEventScope);
+}
+function hpBatchId(batch){
+ const view=batch.slot(5),n=view.getInt32(8,true);
+ if(n<0||n>200||view.byteLength!==12+2*n)throw new Error('bad string');
+ let id='';for(let i=0;i<n;i++)id+=String.fromCharCode(view.getUint16(12+2*i,true));
+ if(!id)throw new Error('missing source identity');
+ return id;
+}
+
 function buff(p){return {key:str(p.add(0x208).readPointer()),source:p.add(0x18).readPointer(),hasShield:p.add(0x27c).readU8()};}
 // Modifier callbacks receive a pointer to m_source; the remaining fields follow
 // the verified class metadata shifted by that header (value, realDelta, ...).
@@ -1890,9 +1903,8 @@ function isEnemy(object,klass=object.readPointer()) {
  if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
  return enemyClassCache.get(key);
 }
-function stageTrapId(object) {
- const id=targetKey(object);
- return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,object.readPointer())?id:null;
+function stageTrapId(object,id=targetKey(object),klass=null) {
+ return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,klass??object.readPointer())?id:null;
 }
 function beginEnemyHook(label) {
  epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
@@ -2535,9 +2547,20 @@ function enemyAttribute(data,index) {
  const value=Number(BigInt.asIntN(64,hidden^key))/4294967296;
  return Math.abs(value)<1e10&&(index!==MAX_HP_ATTRIBUTE||value>0)?value:null;
 }
-function enemyMaxHp(enemy) {
+function decodeEnemyMaxHp(view){
+ if(view.byteLength!==0x14)throw new Error('native block read unavailable');
+ if(view.getUint8(0x10)!==1)return null;
+ const value=Number(BigInt.asIntN(64,view.getBigUint64(0,true)^view.getBigUint64(8,true)))/4294967296;
+ return value>0&&value<1e10?value:null;
+}
+function enemyMaxHp(enemy,batchRead=false) {
  if(!enemyAttributesReady)return null;
  try{
+  if(batchRead){
+   const countBatch=hpReadBatch('leave',enemy,2),count=countBatch.slot(3).getUint32(0,true);
+   if(!count||count>64)return null;
+   return decodeEnemyMaxHp(hpReadBatch('leave',enemy,4).slot(4));
+  }
   const attributes=enemy.add(0xb0).readPointer();
   if(attributes.isNull())return null;
   const cached=attributes.add(0x68).readPointer();
@@ -2547,9 +2570,7 @@ function enemyMaxHp(enemy) {
   // Only after the live length admits slot zero, copy its obscuring key,
   // current value and ready flag. No live field survives this invocation.
   const view=checkedNativeView(cached.add(0x20),0x14);
-  if(view.getUint8(0x10)!==1)return null;
-  const value=Number(BigInt.asIntN(64,view.getBigUint64(0,true)^view.getBigUint64(8,true)))/4294967296;
-  return value>0&&value<1e10?value:null;
+  return decodeEnemyMaxHp(view);
  }catch(e){return null;}
 }
 function enemyEntryAttributes(enemy) {
@@ -2781,21 +2802,31 @@ function installEnemyStateHooks() {
        }
        return;
       }
-      const identity=checkedNativeView(enemy,0x1c);
+      const initial=hpReadBatch('entry',enemy,1);
+      const identity=initial?initial.slot(0):checkedNativeView(enemy,0x1c);
       const klass=ptr(identity.getBigUint64(0,true)),uid=identity.getUint32(0x18,true);
       enemyTarget=isEnemy(enemy,klass);
       // Before Born, enemy HP initialization is covered by enemy_enter.
       // Stage traps never create an entry; the host admits them via snapshot.
-      if(enemyTarget&&!enemy.add(0x25).readU8())return;
-      if(!enemyTarget&&(attributeChange||!stageTrapId(enemy)))return;
+      if(enemyTarget&&!(initial?hpReadBatch('entry',enemy,2).slot(1).getUint8(0):enemy.add(0x25).readU8()))return;
+      let capturedId;
+      if(!enemyTarget){
+       if(attributeChange)return;
+       try{capturedId=initial?hpBatchId(hpReadBatch('entry',enemy,8)):targetKey(enemy);}catch(error){return;}
+       if(!stageTrapId(enemy,capturedId,initial?klass:null))return;
+      }
       // This setter publishes only the closing scope. The opening clock still
       // detects a new round and brackets the write with the closing clock.
       const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
-      const when=time(false,!deferScope);
+      const eligible=initial?hpReadBatch('entry',enemy,capturedId===undefined?12:4):null;
+      const when=eligible?hpBatchClock(eligible,2,3,!deferScope):time(false,!deferScope);
       refreshEnemyEntryFrame(when.frame);
       if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
       if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
-      const evidence=enemyIdentity(enemy,uid),hpBefore=targetHp(enemy);
+      if(!uid)throw new Error('missing enemy instance UID');
+      const evidence=eligible?{target:capturedId??hpBatchId(eligible),target_instance:String(uid)}:enemyIdentity(enemy,uid);
+      const rawHp=eligible?Number(eligible.slot(4).getBigInt64(0,true))/4294967296:targetHp(enemy);
+      const hpBefore=Number.isFinite(rawHp)&&rawHp>=0&&rawHp<1e9?rawHp:null;
       if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
       const maxHpBefore=attributeChange?fixedArg(args[2]):null;
       this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,deferScope,thread:this.threadId,superseded:false};
@@ -2815,15 +2846,16 @@ function installEnemyStateHooks() {
       if(enemyHpWrites.get(key)!==write)return;
       enemyHpWrites.delete(key);
       if(stopped||fatal||superseded)return;
-      const end=time(false,!deferScope);
-      const closing=checkedNativeView(enemy.add(0x18),0x30);
+      const batch=hpReadBatch('leave',enemy,1);
+      const end=batch?hpBatchClock(batch,1,2,!deferScope):time(false,!deferScope);
+      const closing=batch?batch.slot(0):checkedNativeView(enemy.add(0x18),0x30);
       if(end.frame!==when.frame||end.game_time!==when.game_time||closing.getUint32(0,true)!==uid)
        throw new Error('enemy HP callback changed identity or crossed a frame');
       const hp=Number(closing.getBigInt64(0x28,true))/4294967296;
       if(!Number.isFinite(hp)||hp<0||hp>=1e9)throw new Error('enemy HP unreadable after callback');
       finishModifierHpWriter(write,end,hp);
       if(hp===hpBefore&&maxHpBefore===null)return;
-      const maxHp=write.enemyTarget?enemyMaxHp(enemy):null;
+      const maxHp=write.enemyTarget?enemyMaxHp(enemy,batch!==null):null;
       if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
       if(deferScope)stampEventScope(end);
       recordEnemyHp(write,end,label,hp,maxHp);
