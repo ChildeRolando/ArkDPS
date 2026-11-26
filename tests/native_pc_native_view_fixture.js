@@ -55,6 +55,7 @@ status=0;__arkdpsReplayBegin(nativeRecord());status=9;globalThis.directPoisonEnd
 globalThis.versionRejected=rejects(()=>__arkdpsReplayBegin({...nativeRecord(),version:2}));
 status=0;const beforeMetadataReads=readCalls;__arkdpsReplayBegin(nativeRecord());globalThis.metadataMissing=rejects(()=>__arkdpsCapturedAssignable(ptr(1),ptr(2)));globalThis.metadataMissingEnd=__arkdpsReplayEnd();globalThis.metadataDidNotRead=readCalls===beforeMetadataReads;
 globalThis.__arkdpsColdMetadataRead=(address,size)=>{if(address.toString()!=='0x5a'||size!==8)throw Error('unexpected immutable key');const owned=new ArrayBuffer(8);new DataView(owned).setBigUint64(0,1n,true);return owned;};status=0;__arkdpsReplayBegin(nativeRecord());globalThis.metadataAssignable=__arkdpsCapturedAssignable(ptr(1),ptr(2));globalThis.metadataGoodEnd=__arkdpsReplayEnd();
+status=0;__arkdpsReplayBegin(nativeRecord());globalThis.badAddress=rejects(()=>__arkdpsOwnedRead('invalid',1));globalThis.badAddressEnd=__arkdpsReplayEnd();
 globalThis.liveCount=live;
 `,c);
 assert.deepEqual(Array.from(c.values),[251,65000,0xfedcba98,-123456,'18364758544493064720','-9223372036854775807',-13.25,'0xfedcba9876543210']);
@@ -68,3 +69,5 @@ console.log('PASS_NATIVE_OWNED_FACADE fake backend only; seven scalar kinds/poin
 assert(Array.from(c.allHelpersRejected).every(Boolean));assert.equal(c.idleExpiredEnd.complete,false);for(const key of ['badScalar','noErrorUndefined','shortBytes','badPoint','nativeCall']){assert(c[key]);assert.equal(c[key+'End'].complete,false);}assert.equal(c.directPoisonEnd.complete,false);assert(c.versionRejected);
 
 assert(c.metadataMissing);assert.equal(c.metadataMissingEnd.complete,false);assert(c.metadataDidNotRead);assert(c.metadataAssignable);assert.equal(c.metadataGoodEnd.complete,true);
+
+assert(c.badAddress);assert.equal(c.badAddressEnd.complete,false);

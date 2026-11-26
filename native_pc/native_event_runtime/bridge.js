@@ -174,7 +174,7 @@ function __arkdpsOwnedRead(address,size){
  const replay=__arkdpsReplay;
  if(replay===null)return __read(address,size);
  if(replay.native){
-  address=__integer(address);
+  try{address=__integer(address);}catch(error){__arkdpsReplayGap('invalid native captured address');}
   if(address<0n||address>0xffffffffffffffffn||address+BigInt(size)>0x10000000000000000n)__arkdpsReplayGap('invalid native captured address');
   const bytes=__arkdpsNativeCall('__nativeOwnedRead',replay.role,replay.checkpoint,replay.fieldId===null?-1:replay.fieldId,address,size);
   if(bytes===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
