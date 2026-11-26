@@ -28,7 +28,7 @@ assert(graph.fields.slice(0,graph.body_insertion_index).every(f=>f.guard_side===
 assert(graph.fields.slice(graph.body_insertion_index).every(f=>f.guard_side==='after'));
 assert(graph.fields.every(f=>f.root==='absolute'));
 assert(graph.fields.some(f=>f.role==='scope.singleton.before'&&f.pointer_offsets.join(',')==='88,184'));
-assert.equal(context.nativeCaptureScopeGraph(null,null,pointer('0x1'),2).available,false);
+const unavailable=context.nativeCaptureScopeGraph(null,null,pointer('0x1'),2);assert.equal(unavailable.available,false);assert.equal(unavailable.mode_epoch,0);assert.equal(unavailable.raw_collection,'all');
 console.log('PASS_CAPTURE_SCOPE_GRAPH independent singleton/owner/clock/account brackets');
 
 const frozenHp=context.nativeCapturePlan('hp.Entity.SetHpInternal',{toString:()=> '0x9000'},{...meta,immutable_class_parents:true});assert(frozenHp.fields.every(f=>!f.name.includes('lineage')));assert.equal(frozenHp.fields.length,11);assert(frozenHp.fields.find(f=>f.name==='hp.identity'&&f.bytes===0x1c));assert(frozenHp.fields.find(f=>f.name==='hp.closing'&&f.offset===0x18&&f.bytes===0x30));assert(frozenHp.fields.filter(f=>f.tier==='changed').length===2);

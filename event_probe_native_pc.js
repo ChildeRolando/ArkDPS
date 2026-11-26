@@ -487,7 +487,7 @@ function nativeCapturePlan(name,address,metadata){
 // copies both live observations; no cached HP/phase/round value is evidence.
 function nativeCaptureScopeGraph(cache,stage,clockAddress,revision){
  if(!Number.isSafeInteger(revision)||revision<=0)throw new Error('invalid capture scope revision');
- if(!cache||!stage)return {version:1,revision,available:false,fields:[]};
+ if(!cache||!stage)return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,raw_collection:'all',available:false,fields:[]};
  const fields=[];let next=1;
  const add=(role,address,bytes,guard,side,expected)=>fields.push({field_id:next++,phase:'checkpoint',role,root:'absolute',root_index:0,absolute_address:address.toString(),pointer_offsets:[],offset:0,bytes,kind:'bytes',required:true,guard_id:guard,guard_side:side,...(expected!==undefined?{expected}:{} )});
  add('scope.clock_open',clockAddress,12,1,'before');
