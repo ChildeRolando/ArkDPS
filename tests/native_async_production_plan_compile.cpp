@@ -10,7 +10,8 @@ int main(int argc,char** argv){
  std::ifstream stream(argv[1]);J fixture;stream>>fixture;
  check(capture_capabilities(false)["lowered_projections"].empty());check(capture_capabilities(true)["lowered_projections"].size()==6);
  unsigned accepted=0,rejected=0;
- for(const auto& plan:fixture.at("plans")) {
+ for(const auto& entry:fixture.at("plans")) {
+   const auto& plan=entry.contains("contract")?entry.at("contract"):entry;
    const auto address=plan_address(plan.at("address"));
    try {auto compiled=compile_plan(plan,address);check(compiled.cold&&compiled.cold->plan->projection_count>0);++accepted;}
    catch(const std::exception& e){std::cerr<<plan.at("name")<<": "<<e.what()<<'\n';return 3;}
@@ -38,5 +39,5 @@ int main(int argc,char** argv){
       bad=plan;bad["hp_filter"]["defer_entry_scope"]="true";reject(bad);
    }
  }
- check(accepted==36);std::cout<<"PASS production recipe compiler: "<<accepted<<" exact source plans, "<<rejected<<" strict negatives; runtime gate remains closed\n";
+ check(accepted==fixture.value("contracts",36u));std::cout<<"PASS production recipe compiler: "<<accepted<<" exact source plans, "<<rejected<<" strict negatives; runtime gate remains closed\n";
 }
