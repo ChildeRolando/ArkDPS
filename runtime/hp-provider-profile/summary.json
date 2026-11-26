@@ -1,0 +1,42 @@
+[
+  {
+    "branch": "input_only_baseline",
+    "calls": 0,
+    "capture_us_per_edge": null,
+    "view_init_us_per_edge": null,
+    "native_hp_sample_mean_us": null,
+    "scope_sample_mean_us": 0.0
+  },
+  {
+    "branch": "unchanged",
+    "calls": 10000,
+    "capture_us_per_edge": 0.5266100000000389,
+    "view_init_us_per_edge": 0.22448999999998642,
+    "native_hp_sample_mean_us": 2.421518987341771,
+    "scope_sample_mean_us": 0.0
+  },
+  {
+    "branch": "changed_damage",
+    "calls": 10000,
+    "capture_us_per_edge": 1.669320000000096,
+    "view_init_us_per_edge": 1.4345999999999939,
+    "native_hp_sample_mean_us": 2.2468354430379742,
+    "scope_sample_mean_us": 67.28250160813332
+  },
+  {
+    "branch": "heal_coalesced",
+    "calls": 10000,
+    "capture_us_per_edge": 2.05081999999989,
+    "view_init_us_per_edge": 1.7160999999999607,
+    "native_hp_sample_mean_us": 3.2417721518987332,
+    "scope_sample_mean_us": 77.69500091671944
+  },
+  {
+    "branch": "maxhp_dirty",
+    "calls": 10000,
+    "capture_us_per_edge": 1.875820000000073,
+    "view_init_us_per_edge": 1.612389999999991,
+    "native_hp_sample_mean_us": 2.620253164556962,
+    "scope_sample_mean_us": 76.7925001680851
+  }
+]
