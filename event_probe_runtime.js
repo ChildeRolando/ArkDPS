@@ -1903,8 +1903,8 @@ function isEnemy(object,klass=object.readPointer()) {
  if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
  return enemyClassCache.get(key);
 }
-function stageTrapId(object,id=targetKey(object),klass=null) {
- return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,klass??object.readPointer())?id:null;
+function stageTrapId(object,id=targetKey(object)) {
+ return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,object.readPointer())?id:null;
 }
 function beginEnemyHook(label) {
  epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
@@ -2813,17 +2813,18 @@ function installEnemyStateHooks() {
       if(!enemyTarget){
        if(attributeChange)return;
        try{capturedId=initial?hpBatchId(hpReadBatch('entry',enemy,8)):targetKey(enemy);}catch(error){return;}
-       if(!stageTrapId(enemy,capturedId,initial?klass:null))return;
+       if(!stageTrapId(enemy,capturedId))return;
       }
       // This setter publishes only the closing scope. The opening clock still
       // detects a new round and brackets the write with the closing clock.
       const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
-      const eligible=initial?hpReadBatch('entry',enemy,capturedId===undefined?12:4):null;
-      const when=eligible?hpBatchClock(eligible,2,3,!deferScope):time(false,!deferScope);
+      const clockBatch=initial?hpReadBatch('entry',enemy,4):null;
+      const when=clockBatch?hpBatchClock(clockBatch,2,3,!deferScope):time(false,!deferScope);
       refreshEnemyEntryFrame(when.frame);
       if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
       if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
       if(!uid)throw new Error('missing enemy instance UID');
+      const eligible=initial?hpReadBatch('entry',enemy,capturedId===undefined?24:16):null;
       const evidence=eligible?{target:capturedId??hpBatchId(eligible),target_instance:String(uid)}:enemyIdentity(enemy,uid);
       const rawHp=eligible?Number(eligible.slot(4).getBigInt64(0,true))/4294967296:targetHp(enemy);
       const hpBefore=Number.isFinite(rawHp)&&rawHp>=0&&rawHp<1e9?rawHp:null;

@@ -153,7 +153,7 @@ function prepareNativeHpReadPlans(metadata){
  const body=(tier,offset,bytes,pointer_offsets=[])=>({tier,role:'body',checkpoint:'current',field_id:-1,root:'arg0',pointer_offsets,offset,kind:'bytes',bytes});
  const clockField=(tier,role,bytes)=>({tier,role,checkpoint:'current',field_id:'unique',root:'absolute',absolute_address:metadata.clock.toString(),pointer_offsets:[],offset:0,kind:'bytes',bytes});
  const entry=__arkdpsRegisterOwnedReadPlan(metadata,{version:1,fields:[
-  body(1,0,0x1c),body(2,0x25,1),clockField(4,'clock_open',12),clockField(4,'clock_close',4),body(4,0x40,8),
+  body(1,0,0x1c),body(2,0x25,1),clockField(4,'clock_open',12),clockField(4,'clock_close',4),body(16,0x40,8),
   {tier:8,role:'body',checkpoint:'current',field_id:-1,root:'arg0',pointer_offsets:[0x148],offset:0,kind:'utf16',max_units:200}]});
  const leave=__arkdpsRegisterOwnedReadPlan(metadata,{version:1,fields:[
   body(1,0x18,0x30),clockField(1,'clock_open',12),clockField(1,'clock_close',4),
