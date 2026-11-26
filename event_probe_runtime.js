@@ -2772,6 +2772,11 @@ const pointerHpIo=Object.freeze({
  attributeCount(attributes){return attributes.add(0x18).readU32();},
  attributeWords(attributes){const view=checkedNativeView(attributes.add(0x20),0x14);return [view.getBigUint64(0,true),view.getBigUint64(8,true),view.getUint8(0x10)];}
 });
+function hpObservationIo(edge,enemy){
+ if(typeof probeAdapter.captureHpObservation!=='function')return pointerHpIo;
+ const observation=probeAdapter.captureHpObservation(edge,enemy);
+ return observation===null?pointerHpIo:observation;
+}
 function applyHpEntry(receiver,args,io,label,attributeChange){
  if(stopped||fatal||(attributeChange&&args[1].toInt32()!==MAX_HP_ATTRIBUTE))return;
  let enemyTarget=true;
@@ -2793,6 +2798,7 @@ function applyHpEntry(receiver,args,io,label,attributeChange){
    }
    return;
   }
+  if(io===null)io=hpObservationIo('entry',enemy);
   const identity=io.identity(enemy);
   const klass=ptr(identity[0]),uid=identity[1];
   enemyTarget=isEnemy(enemy,klass);
@@ -2837,6 +2843,7 @@ function applyHpLeave(receiver,io,label){
   if(enemyHpWrites.get(key)!==write)return;
   enemyHpWrites.delete(key);
   if(stopped||fatal||superseded)return;
+  if(io===null)io=hpObservationIo('leave',enemy);
   const clockValues=io.clock();
   const end=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope);
   const closing=io.closing(enemy);
@@ -2866,8 +2873,8 @@ function installEnemyStateHooks() {
   for(const [label,address] of writes){
    const attributeChange=label==='Entity.OnAttributeDirty';
    const callbacks={
-    onEnter(args){return applyHpEntry(this,args,pointerHpIo,label,attributeChange);},
-    onLeave(){return applyHpLeave(this,pointerHpIo,label);}
+    onEnter(args){return applyHpEntry(this,args,null,label,attributeChange);},
+    onLeave(){return applyHpLeave(this,null,label);}
    };
    try{
     callbacks.arkdpsName='hp.'+label;

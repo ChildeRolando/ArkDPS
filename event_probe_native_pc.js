@@ -144,6 +144,13 @@ function validateNativeTerminalBinding(candidate){
 }
 let nativeCaptureMetadata=null,nativeCaptureModeEpoch=0;
 const nativeCaptureModeHistory=new Map();
+let nativeActiveHpContract=null;
+function captureNativeHpObservation(edge,enemy){
+ if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive()||__arkdpsReplayRecord().native_view!==true)return null;
+ if(typeof __arkdpsOwnedHpObservation!=='function')return null;
+ if(!nativeActiveHpContract||__arkdpsReplayRecord().edge!==edge)__arkdpsReplayGap('HP observation contract unavailable');
+ return __arkdpsOwnedHpObservation(nativeActiveHpContract,enemy);
+}
 function prepareNativeCaptureMetadata(meta){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;
  nativeCaptureModeHistory.set(0,nativeAutoDesiredMode);
@@ -267,8 +274,12 @@ function prepareNativeCaptureHook(address,callbacks){
  const capabilities=typeof __nativeCaptureCapabilities==='function'?__nativeCaptureCapabilities():null;
  callbacks.arkdpsCaptureContract=sealedCaptureContract({...finalizeNativeCapturePlan(plan,nativeCaptureMetadata,capabilities),mode_epoch:nativeCaptureModeEpoch});
  for(const edge of ['onEnter','onLeave'])if(typeof callbacks[edge]==='function'){
-  const callback=callbacks[edge];
-  callbacks[edge]=function(...args){
+  const callback=callbacks[edge],contract=callbacks.arkdpsCaptureContract;
+  callbacks[edge]=contract.profile==='hp'?function(...args){
+   const previous=nativeActiveHpContract;nativeActiveHpContract=contract;
+   try{return withCapturedMode(__arkdpsReplayActive()?__arkdpsReplayRecord():null,()=>__arkdpsReplayPoint('body',()=>callback.apply(this,args)));}
+   finally{nativeActiveHpContract=previous;}
+  }:function(...args){
    return withCapturedMode(__arkdpsReplayActive()?__arkdpsReplayRecord():null,()=>__arkdpsReplayPoint('body',()=>callback.apply(this,args)));
   };
  }
@@ -293,7 +304,7 @@ const probeAdapter={
   }
   return nativeCapturedPublicationBinding(true);
  },
- captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,retireCaptureGraphs,captureRecordMode:withCapturedMode,captureCollectionMode:capturedCollectionMode,captureInvocationRead:captureNativeInvocationRead,
+ captureHpObservation:captureNativeHpObservation,captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,retireCaptureGraphs,captureRecordMode:withCapturedMode,captureCollectionMode:capturedCollectionMode,captureInvocationRead:captureNativeInvocationRead,
  captureClassIdentity(klass,name,namespace){
   if(typeof __arkdpsColdClassIdentity!=='function')__arkdpsReplayGap('immutable class identity not frozen');
   return __arkdpsColdClassIdentity(klass,name,namespace);
