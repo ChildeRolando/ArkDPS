@@ -758,8 +758,8 @@ _PENDING_SCOPE_PAGE_SIZE = 2048
 _PENDING_SCOPE_BYTES = 32 * 1024 * 1024
 
 
-def pending_scope_anchor(sample, evidence, roster_frame):
-    """Freeze an independently guarded empty positive-time window, never zero."""
+def pending_scope_anchor(sample, evidence, roster_frame, *, allow_epoch_advance=False):
+    """Freeze an independently guarded empty positive-time window."""
     native = sample.get('native_session', sample.get('session'))
     point = {key: deepcopy(value) for key, value in sample.items() if key in _PENDING_SCOPE_SAMPLE_FIELDS}
     point.update(session=native, native_session=native)
@@ -767,7 +767,7 @@ def pending_scope_anchor(sample, evidence, roster_frame):
         'platform', 'source_build', 'stage_id') if key in sample['battle_metadata']}
     anchor = dict(sample=point, roster_frame=roster_frame,
                   **{key: deepcopy(evidence[key]) for key in ('before', 'after', 'sequence', 'drain')})
-    _verified_pending_scope_anchor(anchor)
+    _verified_pending_scope_anchor(anchor, allow_epoch_advance=allow_epoch_advance)
     return anchor
 
 
@@ -837,7 +837,7 @@ def _pending_scope_identity(sample, mark, *, read=False):
     return context, _autochess_scope_accounts(context)
 
 
-def _verified_pending_scope_anchor(anchor):
+def _verified_pending_scope_anchor(anchor, *, allow_epoch_advance=False):
     if not isinstance(anchor, dict) or set(anchor) != {'sample', 'roster_frame', 'before', 'after', 'sequence', 'drain'}:
         raise StreamGap('invalid pending scope anchor shape')
     point, before, after, drained = (anchor[key] for key in ('sample', 'before', 'after', 'drain'))
@@ -850,9 +850,11 @@ def _verified_pending_scope_anchor(anchor):
             or not isinstance(before, dict) or not isinstance(after, dict) or not isinstance(drained, dict)
             or not _round_start_integer(anchor['sequence'])
             or any(mark.get('sequence') != anchor['sequence'] for mark in (before, after))
-            or before.get('epoch') != after.get('epoch')
+            or (not allow_epoch_advance and before.get('epoch') != after.get('epoch'))
             or drained.get('events') != [] or drained.get('error') or drained.get('stopped') or drained.get('retry')):
         raise StreamGap('invalid positive-time empty scope witness')
+    # A later endpoint can span callbacks with no new events. The guarded event
+    # window still requires monotone epochs and independently verifies both marks.
     raw_anchor = point.get('autochess_snapshot_anchor', point)
     context, sequence = verified_autochess_event_window(point, before, after, anchor=raw_anchor)
     if context != point.get('autochess_context') or sequence != anchor['sequence']:

@@ -206,7 +206,7 @@ def _native_pc_guarded_clock_reset(previous, successor):
 def _verified_pending_empty_handoff(anchor, latest, successor):
     """Distinguish a real empty serial reset from a legal late zero-output exit."""
     origin, _, _ = _verified_pending_scope_anchor(anchor)
-    previous, _, _ = _verified_pending_scope_anchor(latest)
+    previous, _, _ = _verified_pending_scope_anchor(latest, allow_epoch_advance=True)
     evidence = {key: latest[key] for key in ('before', 'after', 'sequence', 'drain')}
     evidence['pending_scope_start'] = dict(version=1, anchor=anchor, pages=[])
     verified_pending_scope_start(previous, evidence, previous_sequence=anchor['sequence'])
@@ -651,8 +651,7 @@ class BattleFeed:
                 if observer is not pending['observer']:
                     raise CaptureRetry('pending scope observer changed before its departure')
                 check_cursor_lifetime(observer, pending['cursor_lifetime'])
-            latest = pending_scope_anchor(pending['latest']['sample'], pending['latest']['evidence'],
-                                          pending['latest']['roster_frame'])
+            latest = pending['latest']
             held = deepcopy(latest['sample'])
             held['session'] = f'{self.id}:{pending["generation"]}'
             evidence = {key: deepcopy(latest[key]) for key in ('before', 'after', 'sequence', 'drain')}
@@ -921,8 +920,14 @@ class BattleFeed:
                 raise CaptureRetry('pending scope exit awaits its retained empty-scope handoff')
             result = read_pending_scope_prefix(observer, anchor, evidence, sample,
                                                cursor_lifetime=pending['cursor_lifetime'])
-            pending['latest'] = deepcopy(dict(sample=sample, evidence=result, roster_frame=roster.frame))
-            return result, evidence['sequence'] == anchor['sequence']
+            if evidence['sequence'] != anchor['sequence']:
+                return result, False
+            try:
+                pending['latest'] = pending_scope_anchor(sample, result, roster.frame, allow_epoch_advance=True)
+            except (StreamGap, BarrierBusy):
+                # The read can await its first event without proving a new empty endpoint.
+                pass
+            return result, True
         result = self._drain(observer, evidence, sample, capture=capture)
         check_cursor_lifetime(observer, cursor_lifetime)
         stream = published_capture.adapter.event_stream if published_capture is not None else None
@@ -947,8 +952,8 @@ class BattleFeed:
                 # Legacy snapshots without the new raw independent proof retain
                 # their existing explicit late-baseline behavior; never retag zero.
                 return result, False
-            self._pending_scope = dict(observer=observer, cursor_lifetime=cursor_lifetime, generation=generation, anchor=anchor,
-                latest=deepcopy(dict(sample=sample, evidence=result, roster_frame=roster.frame)))
+            self._pending_scope = dict(observer=observer, cursor_lifetime=cursor_lifetime, generation=generation,
+                                       anchor=anchor, latest=anchor)
             return result, True
         return result, False
 
@@ -1117,8 +1122,7 @@ class BattleFeed:
                 raise CaptureRetry('pending scope observer changed before its empty handoff')
             check_cursor_lifetime(observer, pending['cursor_lifetime'])
             check_cursor_lifetime(observer, self._acquiring_cursor[1])
-            latest = pending_scope_anchor(pending['latest']['sample'], pending['latest']['evidence'],
-                                          pending['latest']['roster_frame'])
+            latest = pending['latest']
             successor = pending_scope_successor(sample, events)
             mode = _verified_pending_empty_handoff(pending['anchor'], latest, successor)
             pending_handoff = dict(version=1, anchor=deepcopy(pending['anchor']),
@@ -1730,6 +1734,8 @@ class BattleSessions:
                 start = (observation.events or {}).get('pending_scope_start')
                 if not valid_end or not isinstance(start, dict) or start.get('pages') != []:
                     raise StreamGap('pending scope end lacks its original lifecycle departure')
+                pending_scope_anchor(observation.sample, observation.events, observation.roster.frame,
+                                     allow_epoch_advance=True)
             superseded = (observation.events or {}).get('pending_scope_superseded')
             if superseded is not None:
                 if (not isinstance(superseded, dict)
@@ -1752,7 +1758,8 @@ class BattleSessions:
                 start = (observation.events or {}).get('pending_scope_start')
                 if not isinstance(start, dict) or start.get('pages') != []:
                     raise StreamGap('pending empty scope exit contains an unexpected event prefix')
-                latest = pending_scope_anchor(observation.sample, observation.events, observation.roster.frame)
+                latest = pending_scope_anchor(observation.sample, observation.events, observation.roster.frame,
+                                              allow_epoch_advance=True)
                 if _verified_pending_empty_handoff(start['anchor'], latest, pending_exit['successor']) != 'scope_end':
                     raise StreamGap('pending scope exit cannot discard a reset fragment')
             if observation.generation <= 0 or observation.sample['session'] != f'{self.feed_id}:{observation.generation}':
