@@ -65,12 +65,21 @@ function read(j,p,after,through,operation='read',served=()=>{}){
 }
 {
  const j=new Journal(),p=projection(2);
- p.terminal_read={retry:false,error:null,terminal_boundary:{sequence:2,scope:'old'},terminal_only:true,frame:2};
+ p.mark.damage_settlement_scope=1;
+ p.mark.terminal_boundary={sequence:2,epoch:p.mark.epoch,frame:2,game_time:p.mark.game_time,damage_settlement_scope:1,scope:'old'};
+ p.terminal_read={...p.mark,retry:false,error:null,terminal_read_version:1,
+  after:0,through:2,events:p.events,terminal_only:true};
  const m=j.publish(record(1),p);
+ check(m.native_publication.terminal_verified===true);
  check(read(j,m,0,1,'terminal_read').retry===true);
  const batch=read(j,m,0,2,'terminal_read');
  check(batch.terminal_only&&batch.terminal_read_version===1&&batch.events.length===2&&batch.terminal_boundary.scope==='old');
  check(j.ack(2,n=>({acknowledged:n,error:null})).acknowledged===2);
+}
+{
+ const j=new Journal(),p=projection(0);
+ p.terminal_read={terminal_boundary:{sequence:0},retry:false};
+ check(j.publish(record(1),p).retry&&j.failure==='invalid terminal publication endpoint');
 }
 {
  const j=new Journal({maxMarks:2}),a=j.publish(record(1),projection(0));

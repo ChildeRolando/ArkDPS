@@ -31,6 +31,23 @@ class ArkdpsPublicationJournal {
  retry(reason){return {retry:true,error:null,stopped:false,events:[],hp_context:[],
   mark_retry_reason:reason,native_publication_version:1};}
  fail(reason){this.failure=String(reason);return this.retry(this.failure);}
+ terminalVerified(mark,terminal,acknowledged){
+  if(terminal==null)return false;
+  const boundary=terminal.terminal_boundary;
+  if(terminal.terminal_only!==true||terminal.terminal_read_version!==1||terminal.retry!==false
+     ||terminal.error||terminal.stopped||terminal.active!==0||!Array.isArray(terminal.active_hooks)
+     ||terminal.active_hooks.length!==0||terminal.after!==acknowledged||terminal.through!==mark.sequence
+     ||!boundary||!mark.terminal_boundary||JSON.stringify(boundary)!==JSON.stringify(mark.terminal_boundary)
+     ||!Array.isArray(terminal.events)||terminal.events.length!==mark.sequence-acknowledged
+     ||terminal.events.some((event,i)=>event.sequence!==acknowledged+i+1))
+   throw new Error('invalid terminal publication endpoint');
+  for(const key of ['sequence','epoch','frame','game_time','damage_settlement_scope'])
+   if(boundary[key]!==mark[key]||terminal[key]!==mark[key])throw new Error('terminal publication changed its final fence');
+  for(const key of Object.keys(mark))if(key.startsWith('native_')&&key!=='native_publication'
+     &&JSON.stringify(terminal[key])!==JSON.stringify(mark[key]))
+   throw new Error('terminal publication changed its native binding');
+  return true;
+ }
  publish(record,projection){
   if(this.failure)return this.retry(this.failure);
   try{return this.publishChecked(record,projection);}
@@ -66,13 +83,19 @@ class ArkdpsPublicationJournal {
    if(item.eventSequence<=this.publishedThrough)continue;
    if(item.eventSequence<=m.sequence){const owned=this.own(item);contexts.push(owned);cost+=owned.bytes;}
   }
+  const terminal_verified=this.terminalVerified(m,p.terminal_read,p.acknowledged);
   const token=ticket.toString()+':'+(this.serial+1);
   const fence={version:1,token,closed_ticket:ticket.toString(),activity_begin:begin.toString(),
-   activity_end:end.toString(),sequence:m.sequence,epoch:m.epoch};
+   activity_end:end.toString(),sequence:m.sequence,epoch:m.epoch,terminal_verified};
   const mark=this.own({...m,native_publication:fence}),fields=this.own(p.read_fields);
-  const terminal=p.terminal_read==null?null:this.own(p.terminal_read);
+  // The event journal is the sole owner of retained normalized events.
+  // Terminal metadata must not duplicate the entire unacknowledged prefix.
+  const terminal=p.terminal_read==null?null:this.own({...p.terminal_read,events:[],hp_context:[]});
   cost+=mark.bytes+fields.bytes+(terminal?.bytes??0);
-  const evicted=this.marks.length>=this.maxMarks?this.marks[0].bytes:0;
+  let retire=Math.max(0,this.marks.length-this.maxMarks+1),evicted=0;
+  for(let i=0;i<retire;i++)evicted+=this.marks[i].bytes;
+  while(this.bytes+cost-evicted>this.maxBytes&&retire<this.marks.length)
+   evicted+=this.marks[retire++].bytes;
   if(this.events.length+delta.length>this.maxEvents||this.bytes+cost-evicted>this.maxBytes)
    throw new Error('native publication retention budget exceeded');
   const published={token,mark:mark.value,fields:fields.value,terminal:terminal?.value??null,
@@ -81,7 +104,7 @@ class ArkdpsPublicationJournal {
   for(const item of contexts)this.contexts.push(item);
   this.bytes+=cost;
   this.marks.push(published);
-  while(this.marks.length>this.maxMarks){const old=this.marks.shift();this.bytes-=old.bytes;}
+  for(let i=0;i<retire;i++){const old=this.marks.shift();this.bytes-=old.bytes;}
   this.latest=published;this.rawClosed=ticket;this.publishedThrough=m.sequence;this.serial++;
   return this.copy(published.mark);
  }
