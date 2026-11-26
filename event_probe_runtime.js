@@ -1073,6 +1073,32 @@ function verifiedZeroCancellation(scope,hit,when,amount){
    evidence.hp_before>0&&evidence.hp_before===evidence.hp_after&&evidence.shield_absorbed===0;
  }catch(e){return false;}
 }
+// One independent native HP writer may close the same modifier when the
+// target/output notifications are absent. This supplies witnesses to the
+// canonical verifier; it never computes damage from the nominal amount.
+function noteModifierHpWriterAttempt(target){
+ if(!activeApplyScopes.size)return;
+ for(const calls of activeApplyScopes.values())for(const scope of calls)
+  if(scope.target?.equals(target))scope.hpWriterCount=(scope.hpWriterCount||0)+1;
+}
+function beginModifierHpWriter(write,klass,label){
+ const calls=activeApplyScopes.get(write.thread);
+ if(activeApplyScopes.size!==1||calls?.length!==1)return;
+ const scope=calls[0],a=scope.settlementAnchor;
+ if(!a||!scope.target?.equals(write.enemy)||a.targetUid!==write.uid||
+    !a.targetClass.equals(klass)||!sameMitigationTime(scope.when,write.when))return;
+ if(scope.hpWriterCount!==1)return;
+ write.modifierScope=scope;write.modifierMethod=label;
+}
+function finishModifierHpWriter(write,end,hp){
+ const scope=write.modifierScope;
+ if(!scope||scope.hpWriterCount!==1||write.maxHpBefore!==null||
+    scope.hpWriterEvidence||!sameMitigationTime(write.when,end)||
+    activeApplyScopes.size!==1||activeApplyScopes.get(write.thread)?.length!==1||
+    activeApplyScopes.get(write.thread)[0]!==scope)return;
+ scope.hpWriterEvidence={target:write.enemy,uid:write.uid,hpBefore:write.hpBefore,hpAfter:hp,
+  when:end,method:write.modifierMethod};
+}
 function verifiedTargetSettlement(scope,target,when,amount,type){
  if(!enemyDamageReady)return null;
  const qualification=settlementScopeQualification(scope,when,target);
@@ -1087,7 +1113,24 @@ function verifiedTargetSettlement(scope,target,when,amount,type){
   if(qualification==='unknown')return reject('unverified enemy settlement domain');
   if(scope.settlementAnchor&&!stableSettlementAnchor(scope,when,false))
    return reject('modifier scope identity or clock changed');
-  if(!commit)return null;
+  if(!commit){
+   const writer=scope.hpWriterEvidence;
+   if(!writer||scope.hpWriterCount!==1||scope.targetHit||scope.outputSeen||scope.outputSettlement||
+      scope.hpWriterUncertain||scope.targetSettlementNested||scope.nestedBeforeTarget||scope.nestedCrossThreadActivity||
+      scope.targetObservationCrossThreadActivity||scope.nestedModifierConflict||
+      scope.targetHitAmbiguous||scope.outputAmbiguous||scope.settlementAmbiguous||
+      activeTargetSettlementOverlap(scope,target)||!stableSettlementAnchor(scope,when)||
+      !writer.target.equals(target)||writer.uid!==scope.settlementTargetUid||
+      !sameMitigationTime(writer.when,when)||writer.hpBefore!==scope.hpBefore||
+      targetHp(target)!==writer.hpAfter)return null;
+   const evidence=overkillEvidence(scope.mod,target,writer.hpBefore,when.frame,scope);
+   if(!evidence||evidence.hp_after!==writer.hpAfter||evidence.cancel_reason!==0||
+      !Number.isFinite(amount)||amount<0||amount+0.01<-evidence.real_delta+(scope.numericShield||0)||
+      fp(scope.mod.add(0x30))!==amount)return null;
+   scope.hpWriterSettlementMethod=writer.method;
+   scope.targetSettlementEvidence=evidence;
+   return evidence;
+  }
   if(scope.targetSettlementNested){
    const nested=verifiedParentBeforeNestedSettlement(scope,target,when,amount,type);
    if(nested){scope.targetSettlementEvidence=nested;return nested;}
@@ -2003,6 +2046,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  }
  const output=scope.outputSettlement;
  const targetCommit=!!exactEvidence&&scope.targetSettlementEvidence===exactEvidence;
+ const hpWriterCommit=targetCommit&&!!scope.hpWriterSettlementMethod;
  // Signed result from the exact output callback or a checked elemental
  // ApplyModifier. Do not promote the nominal value of an unmatched callback.
  const real=scope.settlementAmbiguous||
@@ -2040,6 +2084,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
     Number.isFinite(exactEvidence.hp_before)&&Number.isFinite(exactEvidence.hp_after)&&
     Math.abs(exactEvidence.hp_before-exactEvidence.hp_after+real)<=Math.max(0.01,Math.abs(real)*1e-6)&&
     (type===5&&exactEvidence.hp_before===scope.hpBefore||
+     hpWriterCommit&&exactEvidence.hp_before===scope.hpBefore||
      (targetCommit||output)&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
      !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===checkedHpBefore);
  let killed;
@@ -2078,10 +2123,10 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
                    targetCheckpoint:(targetCommit||nested&&scope.nestedParentSettlementProof)&&hit?.commit?.returned?
                     {version:1,method:'Unit.OnTakeDamage',returned:true,source:scope.source,source_character_uid:scope.sourceCharacterUid,
                      target_uid:String(hit.uid),hp_before:hit.hpBefore,frame:hit.commit.when.frame,game_time:hit.commit.when.game_time}:undefined,
-                   evidenceMethod:targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
+                   evidenceMethod:hpWriterCommit?scope.hpWriterSettlementMethod+'+Entity.ApplyModifier':targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
                    complete:consistent&&absorbed!==null&&!scope.numericShieldUnknown&&!unverified});
  if(event){scope.settlementRecordEmitted=true;scope.settlementRecord=event;}
- if(event&&targetCommit&&capturedHp&&[1,2,3].includes(type))
+ if(event&&targetCommit&&!hpWriterCommit&&capturedHp&&[1,2,3].includes(type))
   rememberNestedOrdinarySettlement(scope,when,exactEvidence,event);
  return true;
 }
@@ -2735,6 +2780,7 @@ function installEnemyStateHooks() {
        }
        return;
       }
+      noteModifierHpWriterAttempt(enemy);
       const identity=checkedNativeView(enemy,0x1c);
       const klass=ptr(identity.getBigUint64(0,true)),uid=identity.getUint32(0x18,true);
       enemyTarget=isEnemy(enemy,klass);
@@ -2753,6 +2799,7 @@ function installEnemyStateHooks() {
       if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
       const maxHpBefore=attributeChange?fixedArg(args[2]):null;
       this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,deferScope,thread:this.threadId,superseded:false};
+      beginModifierHpWriter(this.write,klass,label);
       enemyHpWrites.set(key,this.write);
       beginEnemyHook(label);
      }catch(e){
@@ -2774,6 +2821,7 @@ function installEnemyStateHooks() {
        throw new Error('enemy HP callback changed identity or crossed a frame');
       const hp=Number(closing.getBigInt64(0x28,true))/4294967296;
       if(!Number.isFinite(hp)||hp<0||hp>=1e9)throw new Error('enemy HP unreadable after callback');
+      finishModifierHpWriter(write,end,hp);
       if(hp===hpBefore&&maxHpBefore===null)return;
       const maxHp=write.enemyTarget?enemyMaxHp(enemy):null;
       if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
@@ -3021,6 +3069,9 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
    if(this.name==='Entity.ApplyModifier'){
     let raw=activeApplyScopes.get(this.tid);
     if(raw){
+     // The independent-writer certificate requires an unnested raw call,
+     // including foreign/unknown calls absent from the money stack.
+     this.hpWriterUncertain=true;for(const parent of raw)parent.hpWriterUncertain=true;
      this.settlementDomainNested=true;
      for(const parent of activeModifiers.get(this.tid)||[])
       if(parent.settlementDomainEntry?.nonEnemyCharacter)parent.settlementDomainNested=true;
