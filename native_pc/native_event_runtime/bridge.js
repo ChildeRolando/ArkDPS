@@ -67,6 +67,27 @@ class __ArkDpsCaptureRecord {
  get facts(){return this.#facts??(this.#facts=new __ArkDpsCaptureFacts(this));}
 }
 function __arkdpsPackedCaptureRecord(bytes){return new __ArkDpsCaptureRecord(bytes);}
+// One C++ -> JS entry per edge. The native owned-view lease is established
+// by the worker before calling this function and remains live through End.
+// The result is only a transport envelope; C++ must independently inspect its
+// poison flag and complete bit before passing the projection to the journal.
+function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix){
+ const record=__arkdpsPackedCaptureRecord(header);
+ __arkdpsReplayBegin(record);
+ let projection,summary,healthy=false;
+ try{
+  if(typeof __nativeReplayHealthy!=='function')__arkdpsReplayGap('native replay health helper unavailable');
+  if(typeof callback==='function'){
+   if(record.edge==='entry')callback.call(receiver,__arkdpsArguments(payload,argumentMask));
+   else callback.call(receiver,ptr(payload));
+  }
+  healthy=__nativeReplayHealthy();
+  if(typeof healthy!=='boolean')__arkdpsReplayGap('invalid native replay health');
+  if(healthy&&__arkdpsReplay.structural.length===0&&record.edge==='leave'&&record.closed_after&&typeof prefix==='function')
+   projection=prefix(record);
+ }finally{summary=__arkdpsReplayEnd();}
+ return [record,projection,healthy&&summary.complete];
+}
 function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read','invalid_phase'].includes(status);}
 function __arkdpsReplayBegin(record){
  if(__arkdpsReplay!==null)throw new Error('replay already active');
@@ -350,7 +371,14 @@ function __arkdpsArguments(bytes,mask=null){
  const count=bytes.byteLength/8,allowed=(1<<count)-1;
  if(mask===null)mask=allowed;
  if(!Number.isInteger(mask)||mask<0||mask>65535||(mask&~allowed)!==0)__arkdpsReplayGap('invalid native argument mask');
- const view=new DataView(bytes),args=Array(count).fill(__deferredArgument);
+ const view=new DataView(bytes);
+ // Small fully captured signatures dominate HP/lifecycle callbacks. Eager
+ // owned pointers preserve ordinary Array descriptors without Proxy/WeakMaps.
+ if(count<=3&&mask===allowed){
+  const args=[];for(let i=0;i<count;i++)args.push(new NativePointer(view.getBigUint64(i*8,true)));
+  return args;
+ }
+ const args=Array(count).fill(__deferredArgument);
  __argumentViews.set(args,view);__argumentMasks.set(args,mask);
  return new Proxy(args,__argumentHandler);
 }
