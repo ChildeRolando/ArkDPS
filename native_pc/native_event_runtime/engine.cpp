@@ -74,7 +74,6 @@ struct Runtime {
     std::array<std::byte, arkdps::capture::record_capacity> consume_buffer{};
     JSRuntime* runtime = nullptr;
     JSContext* context = nullptr;
-    JSValue pointer = JS_UNDEFINED;
     JSValue dispatch = JS_UNDEFINED;
     std::vector<std::unique_ptr<Hook>> hooks;
     std::vector<Allocation> allocations;
@@ -328,12 +327,7 @@ void read(std::uintptr_t address, void* destination, std::size_t count) {
     if (count && (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), destination, count, &actual) || actual != count))
         throw std::runtime_error("unreadable native memory");
 }
-JSValue pointer(JSContext* context, std::uintptr_t address) {
-    auto argument = JS_NewBigUint64(context, address);
-    auto value = JS_Call(context, state().pointer, JS_UNDEFINED, 1, &argument);
-    JS_FreeValue(context, argument);
-    return value;
-}
+
 template <typename Operation>
 JSValue guarded(JSContext* context, Operation&& operation) {
     try { return operation(); }
@@ -641,9 +635,7 @@ void configure_mode(const nlohmann::json& command) {
         throw std::runtime_error("native capture mode installation mismatch");
     install_mode_state(state);
 }
-void js_property(JSContext* c, JSValue object, const char* name, JSValue value) {
-    if (JS_SetPropertyStr(c,object,name,value)<0) throw std::runtime_error(exception(c));
-}
+
 void replay_record(const std::byte* bytes, std::size_t length) {
     using namespace arkdps::capture;
     auto& runtime=state(); auto* c=runtime.context;
@@ -663,11 +655,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     if (header.phase==Phase::entry) {
         if (header.depth!=depth+1 || call.id || header.parent!=(depth ? runtime.receivers[header.lane][depth-1].id : 0))
             throw std::runtime_error("native capture parent/entry topology mismatch");
-        call.id=header.invocation; call.hook=hook; call.receiver=JS_NewObject(c); ++depth;
-        js_property(c,call.receiver,"threadId",JS_NewUint32(c,header.thread_id));
-        js_property(c,call.receiver,"returnAddress",pointer(c,header.return_address));
-        js_property(c,call.receiver,"nativeCaptureInvocation",JS_NewString(c,std::to_string(header.invocation).c_str()));
-        js_property(c,call.receiver,"nativeCaptureModeEpoch",JS_NewInt64(c,header.mode_epoch));
+        call.id=header.invocation; call.hook=hook; ++depth;
     } else if (header.depth!=depth || call.id!=header.invocation || call.hook!=hook
                || header.parent!=(depth>1 ? runtime.receivers[header.lane][depth-2].id : 0))
         throw std::runtime_error("native capture leave topology mismatch");
@@ -706,12 +694,14 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     auto callback_payload=header.phase==Phase::entry
         ? JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(header.args.data()),hook->capture_plan.plan->arg_count*8)
         : JS_NewBigUint64(c,header.return_value);
-    std::array<JSValue,6> dispatch_args{{packed_bytes,method,call.receiver,callback_payload,
-        JS_NewUint32(c,header.arg_mask),header.projection_candidate && header.closed_after ? runtime.prefix_projection : JS_UNDEFINED}};
+    auto raw_return_address=header.phase==Phase::entry ? JS_NewBigUint64(c,header.return_address) : JS_UNDEFINED;
+    std::array<JSValue,7> dispatch_args{{packed_bytes,method,call.receiver,callback_payload,
+        JS_NewUint32(c,header.arg_mask),header.projection_candidate && header.closed_after ? runtime.prefix_projection : JS_UNDEFINED,
+        raw_return_address}};
     JSValue answer=JS_EXCEPTION;
-    if (!JS_IsException(method) && !JS_IsException(callback_payload))
+    if (!JS_IsException(method) && !JS_IsException(callback_payload) && !JS_IsException(raw_return_address))
         answer=JS_Call(c,runtime.replay_dispatch,JS_UNDEFINED,dispatch_args.size(),dispatch_args.data());
-    JS_FreeValue(c,packed_bytes);JS_FreeValue(c,method);JS_FreeValue(c,callback_payload);
+    JS_FreeValue(c,packed_bytes);JS_FreeValue(c,method);JS_FreeValue(c,callback_payload);JS_FreeValue(c,raw_return_address);
     runtime.replay_active=false;
     if (const auto failure=runtime.lanes->failure.load(std::memory_order_acquire)) {
         if (JS_IsException(answer)) {auto ignored=JS_GetException(c);JS_FreeValue(c,ignored);}
@@ -723,12 +713,16 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     auto record=JS_GetPropertyUint32(c,answer,0);
     auto projection=JS_GetPropertyUint32(c,answer,1);
     auto complete=JS_GetPropertyUint32(c,answer,2);
-    const bool valid=JS_IsBool(complete) && JS_ToBool(c,complete)==1;
+    auto receiver=JS_GetPropertyUint32(c,answer,3);
+    const bool valid=JS_IsBool(complete) && JS_ToBool(c,complete)==1 && JS_IsObject(receiver)
+        && (header.phase==Phase::entry || JS_VALUE_GET_PTR(receiver)==JS_VALUE_GET_PTR(call.receiver));
     JS_FreeValue(c,complete);JS_FreeValue(c,answer);
     if (!valid || JS_IsException(record) || JS_IsException(projection)) {
-        JS_FreeValue(c,record);JS_FreeValue(c,projection);
+        JS_FreeValue(c,record);JS_FreeValue(c,projection);JS_FreeValue(c,receiver);
         throw std::runtime_error("native callback replay has structural gaps");
     }
+    if (header.phase==Phase::entry) call.receiver=receiver;
+    else JS_FreeValue(c,receiver);
     if (header.phase==Phase::leave) {
         JS_FreeValue(c,call.receiver); call={}; --depth;
     }
@@ -1032,7 +1026,6 @@ void initialize_on_worker(const std::string& source) {
         evaluate(c, "globalThis.arkdpsNativeAsyncCapture=true;", "native-async.js");
         runtime.replay_dispatch=JS_GetPropertyStr(c,global,"__arkdpsReplayDispatch");
         if (!JS_IsFunction(c,runtime.replay_dispatch)) throw std::runtime_error("native replay dispatch unavailable");
-        runtime.pointer = JS_GetPropertyStr(c, global, "__arkdpsPointer");
         runtime.dispatch = JS_GetPropertyStr(c, global, "__arkdpsRequest");
         evaluate(c, source, "event-probe.js");
         runtime.prefix_projection=JS_GetPropertyStr(c,global,"__arkdpsOnClosedRecord");
