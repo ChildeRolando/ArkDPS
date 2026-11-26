@@ -25,7 +25,7 @@ def test_native_quiet_mark_checks_real_adapter_and_invalid_fences():
     assert completed.stdout.strip() == 'PASS_OWNED_QUIET_BOUNDARY'
 
 
-def test_only_ordinary_native_mark_opts_into_the_versioned_boundary(monkeypatch):
+def test_native_mark_requests_the_immutable_publication_protocol(monkeypatch):
     probe = module.NativeHookEventProbe(collector())
     requests = []
 
@@ -40,7 +40,7 @@ def test_only_ordinary_native_mark_opts_into_the_versioned_boundary(monkeypatch)
     probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)))
     probe.mark()
     probe.read_terminal_mark()
-    assert requests == [('mark', {'timeout': None, 'native_quiet_boundary_version': 1}),
+    assert requests == [('mark', {'timeout': None, 'native_publication_version': 1}),
                         ('mark', {'timeout': probe.terminal_mark_timeout})]
     kind, timing = records[0]
     assert kind == 'native_hook_request_timing'
@@ -254,7 +254,7 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
     assert probe.mark()['native_session'] == 'bound-session'
     assert probe.mark()['source_build'] == source_build
     assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=False,
-                                             native_quiet_boundary_version=1))
+                                             native_publication_version=1))
     probe.stop()
     assert loaders[0].closed and pipes[0].closed
     assert probe.hook_disable_confirmed
@@ -525,7 +525,7 @@ def test_read_cursor_and_ack_are_idempotent_not_reconstructed(setup_probe):
     probe = make()
     probe.start()
     probe.read_baseline(2)
-    assert pipes[0].calls[-1][1] == dict(timeout=5.0, after=2, through=2)
+    assert pipes[0].calls[-1][1] == dict(timeout=5.0, after=2, through=2, baseline=True)
     assert probe.commit_events(2) is True
     assert probe.commit_events(2) is True
     assert len([x for x in pipes[0].calls if x[0] == 'ack']) == 1
@@ -874,7 +874,7 @@ def test_prepared_ui_preference_uses_initial_then_dynamic_mark_without_rewriting
     selected[0] = not enabled
     result = probe.mark()
     assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=not enabled,
-                                             native_quiet_boundary_version=1))
+                                             native_publication_version=1))
     assert result['native_autochess_context']['collection_mode'] == 'all'
     assert not any(operation in ('read', 'ack') for operation, _ in pipes[0].calls)
     probe.stop()

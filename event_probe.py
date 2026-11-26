@@ -1447,7 +1447,10 @@ def acquire_native_terminal_tail(observer, raw_request, after, *, deadline=None)
     observer.last_terminal_response = deepcopy(raw)
     opening = observer.binding.bind_terminal_tail_mark(raw, after)
     through = opening['terminal_boundary']['sequence']
-    raw_batch = request('terminal_read', after=after, through=through)
+    publication = opening.get('native_publication')
+    token = ({'publication_token': publication['token']}
+             if isinstance(publication, dict) and isinstance(publication.get('token'), str) else {})
+    raw_batch = request('terminal_read', after=after, through=through, **token)
     observer.last_terminal_batch = deepcopy(raw_batch)
     batch = observer.binding.bind_terminal_tail_batch(raw_batch, opening, after)
     raw = request('mark', **options)

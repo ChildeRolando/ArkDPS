@@ -712,6 +712,7 @@ class NativeHookEventProbe:
         self._performance_next_snapshot = 0.0
         self._native_timing_may_be_enabled = False
         self._native_timing_confirmed = False
+        self._publication_token = None
 
     def set_request_timing_audit(self, sink=None, *, enabled=None):
         self._timing_sink, self._timing_enabled = sink, enabled
@@ -885,8 +886,25 @@ class NativeHookEventProbe:
 
     @timed('native_request_and_binding')
     def _request(self, operation, *, timeout=None, **arguments):
+        requested_publication = None
+        if operation == 'read' and self._publication_token is not None:
+            requested_publication = self._publication_token
+            arguments['publication_token'] = requested_publication
+
+        def bind(raw):
+            result = self.binding.bind(operation, raw)
+            if operation in ('mark', 'read') and not any(result.get(key) for key in ('retry', 'error', 'stopped')):
+                publication = result.get('native_publication')
+                if publication is not None or 'native_async_capture' in result:
+                    token = self._validated_publication_token(result)
+                    if operation == 'mark':
+                        self._publication_token = token
+                    elif token != requested_publication:
+                        raise RuntimeError('PC 异步采集读取更换了已选定的发布前缀')
+            return result
+
         if self._timing_sink is None or (self._timing_enabled and not self._timing_enabled()):
-            return self.binding.bind(operation, self._raw_request(operation, timeout=timeout, **arguments))
+            return bind(self._raw_request(operation, timeout=timeout, **arguments))
         started = time.perf_counter()
         received = raw = None
         outcome = 'transport_error'
@@ -894,7 +912,7 @@ class NativeHookEventProbe:
             raw = self._raw_request(operation, timeout=timeout, **arguments)
             received = time.perf_counter()
             outcome = 'binding_error'
-            result = self.binding.bind(operation, raw)
+            result = bind(raw)
             outcome = 'success'
             return result
         except ObserverReadRetry:
@@ -922,7 +940,27 @@ class NativeHookEventProbe:
         return {} if self._autochess_enabled is None else dict(autochess_enabled=self._autochess_enabled())
 
     def mark(self):
-        return self._request('mark', native_quiet_boundary_version=1, **self._mark_options())
+        return self._request('mark', native_publication_version=1, **self._mark_options())
+
+    @staticmethod
+    def _validated_publication_token(result):
+        publication = result.get('native_publication')
+        if (not isinstance(publication, dict) or type(publication.get('version')) is not int
+                or publication['version'] != 1 or not isinstance(publication.get('token'), str)
+                or re.fullmatch(r'[0-9]{1,20}:[1-9][0-9]{0,15}', publication['token']) is None
+                or any(not isinstance(publication.get(key), str)
+                       or re.fullmatch(r'(?:0|[1-9][0-9]{0,19})', publication[key]) is None
+                       or int(publication[key]) > 0xffffffffffffffff
+                       for key in ('closed_ticket', 'activity_begin', 'activity_end'))
+                or int(publication['closed_ticket']) <= 0
+                or publication['token'].split(':', 1)[0] != publication['closed_ticket']
+                or int(publication['activity_end']) != int(publication['activity_begin']) + 1
+                or any(type(publication.get(key)) is not int or publication[key] < 0
+                       for key in ('sequence', 'epoch'))
+                or 'sequence' in result and publication['sequence'] != result['sequence']
+                or 'epoch' in result and publication['epoch'] != result['epoch']):
+            raise RuntimeError('PC 异步采集缺少完整闭合发布前缀')
+        return publication['token']
 
     def read_terminal_mark(self):
         self.last_terminal_response = None
@@ -937,7 +975,9 @@ class NativeHookEventProbe:
         return self._read_range(self._committed_sequence, sequence)
 
     def read_baseline(self, sequence):
-        return self._read_range(sequence, sequence)
+        if self._ack_error:
+            raise RuntimeError(self._ack_error)
+        return self._request('read', after=sequence, through=sequence, baseline=True)
 
     def read_round_start_range(self, after, through):
         check_round_start_range(self, after)
