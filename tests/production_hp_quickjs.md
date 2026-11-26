@@ -58,3 +58,11 @@ For a replacement HookPoint implementation, record its native entry calls
 separately from underlying owned field reads. A legal unrequested slot may be
 absent; actually requesting an absent slot must preserve native structural
 poison and JS replay-gap. Do not count a fallback path as an active treatment.
+
+Sealed provider A/B uses `--unsealed-provider` (install-time boolfalse) against
+samebinary defaulttrue. Neither group overrides any legacynative helper after
+install; both keep identical nativefunction references and rawObservation enabled.
+`native_request_counts` counts only calls routed through JS NativeCall; directlease
+calls and internal OwnedView reads are excluded. C++I/O counts are null with
+availabilityfalse rather than fakezero. Bothgroups must show2*count actual routed
+HpObservation requests and the same NativeGraphCheck request count.

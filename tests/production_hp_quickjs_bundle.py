@@ -40,10 +40,12 @@ f.write(enemy,f.enemyClass);f.write(enemy.add(0x40),fp(100));f.write(enemy.add(0
 const setter=f.callback('SetHpInternal',f.entity),dirty=f.callback('OnAttributeDirty',f.entity);
 
 OWNED_SETUP
+let nativeRequests={};
+if(OWNED){const originalNativeCall=__arkdpsNativeCall;__arkdpsNativeCall=function(name,a,b,c,d,e){nativeRequests[name]=(nativeRequests[name]??0)+1;return originalNativeCall(name,a,b,c,d,e);};}
 const results=[];
 if(!QUEUE_MODE)for(const branch of ['input_only_baseline','unchanged','changed_damage','heal_coalesced','maxhp_dirty']){
  let hp=100000,dirtyCount=0;f.write(enemy.add(0x40),fp(hp));const initial=f.vm.runInContext('sequence',f.context);const stampsBefore=stamps;const publicationsBefore=OWNED?publicationCount:0;
- if(OWNED){__ownedProfile(true);scopeMs=scopeInPubMs=prefixMs=journalMs=0;}const start=__monotonicMs();
+ if(OWNED){__ownedProfile(true);nativeRequests={};scopeMs=scopeInPubMs=prefixMs=journalMs=0;}const start=__monotonicMs();
  for(let i=0;i<COUNT;i++){
   let call={threadId:1};if(branch!=='input_only_baseline'){if(OWNED)call=dispatch(0,undefined);else setter.onEnter.call(call,[enemy]);}
   if(branch!=='unchanged'){hp=branch==='changed_damage'?100000-i-1:100000+i+1;f.write(enemy.add(0x40),fp(hp));}
@@ -56,7 +58,7 @@ if(!QUEUE_MODE)for(const branch of ['input_only_baseline','unchanged','changed_d
  assertion.equal(f.vm.runInContext('enemyStateUnknown',f.context),false,'HP unknown must not become benchmark success');
  if(branch==='changed_damage')assertion.equal(mark.sequence-initial,COUNT);if(branch==='heal_coalesced')assertion.equal(mark.sequence-initial,FULL_SCOPE?Math.ceil(COUNT/PUB_EVERY)+1:2);
  if(branch==='changed_damage'||branch==='heal_coalesced'){assertion.equal(events[0].hp_before,100000);assertion.equal(events.at(-1).hp_after,branch==='changed_damage'?100000-COUNT:100000+COUNT);}
- results.push({js_profile:OWNED?{scope_ms:scopeMs,scope_inside_pub_ms:scopeInPubMs,prefix_ms:prefixMs,journal_ms:journalMs}:null,native_profile:OWNED?JSON.parse(__ownedProfile(false)):null,branch,setters:COUNT,dirty:dirtyCount,elapsed_ms:ms,setters_per_second:COUNT*1000/ms,publication_count:OWNED?publicationCount-publicationsBefore:0,scope_stamps:stamps-stampsBefore,sequence_delta:mark.sequence-initial,event_kinds:events.filter(e=>e.sequence>initial).reduce((a,e)=>(a[e.kind]=(a[e.kind]||0)+1,a),{})});
+ results.push({native_request_counts:OWNED?{...nativeRequests}:null,js_profile:OWNED?{scope_ms:scopeMs,scope_inside_pub_ms:scopeInPubMs,prefix_ms:prefixMs,journal_ms:journalMs}:null,native_profile:OWNED?JSON.parse(__ownedProfile(false)):null,branch,setters:COUNT,dirty:dirtyCount,elapsed_ms:ms,setters_per_second:COUNT*1000/ms,publication_count:OWNED?publicationCount-publicationsBefore:0,scope_stamps:stamps-stampsBefore,sequence_delta:mark.sequence-initial,event_kinds:events.filter(e=>e.sequence>initial).reduce((a,e)=>(a[e.kind]=(a[e.kind]||0)+1,a),{})});
 }
 QUEUE_CODE
 print(JSON.stringify({queue:QUEUE_MODE?queueReport:null,kind:OWNED?'actual_shared_hp_callback_quickjs_native_owned':'actual_shared_hp_callback_quickjs_fixture_backend',includes:OWNED?['actual HP field plan and compile_plan','native capture and strict OwnedReplayView','actual bridge fused packed dispatch and argument proxy','actual adapter withCapturedMode wrapper','actual shared HP callback',...(QUEUE_MODE?['actual CaptureLanes private queue and four 32MiB spill banks','independent paced producer and actual serialized consumer']:[]),...(FULL_SCOPE?['real prepared full scope graph','785-guard publication graph and actual source prefix/journal']:[])]:['actual shared HP callback'],excluded:OWNED?[...(FULL_SCOPE?[]:['scope guard validation','production publication']),...(QUEUE_MODE?['IPC and native hook trampoline']:['IPC/queue']),'native dirty callback snapshots',...(FULL_SCOPE?[]:['full metadata discovery (fixture graph sealed at setup)'])]:['native capture','native owned view','scope guard validation','production publication','IPC/queue'],results}));

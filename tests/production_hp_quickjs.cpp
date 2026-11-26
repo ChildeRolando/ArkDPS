@@ -96,6 +96,8 @@ struct FunctionTiming {
 };
 static FunctionTiming hook_timing, graph_timing;
 static bool sample_functions = false;
+static bool native_wrappers = true;
+static bool sealed_owner = true;
 struct SampleTimer {
   FunctionTiming &t;
   bool sampled;
@@ -293,6 +295,12 @@ static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
          {"capture_read_bytes", profile.read_bytes},
          {"capture_ms", profile.capture_ms},
          {"view_initialize_ms", profile.view_ms}};
+  j["cpp_io_counters_available"] = native_wrappers;
+#ifdef ARKDPS_SEALED_PROVIDER
+  j["sealed_owner"] = sealed_owner;
+#else
+  j["sealed_owner"] = nullptr;
+#endif
   j["batch_calls"] = batch_calls;
   for (const auto &pair : {std::pair<const char *, FunctionTiming *>{
                                "hook_point_timing", &hook_timing},
@@ -320,6 +328,13 @@ static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
   j["registered_plans"] = 0;
   j["plans_sealed"] = false;
 #endif
+  if (!native_wrappers)
+    for (const auto *key :
+         {"scalar_calls", "byte_read_calls", "point_calls", "batch_calls",
+          "batch_output_bytes", "graph_calls", "graph_check_calls",
+          "graph_output_bytes", "selected_field_slots", "hook_point_calls",
+          "missing_hook_calls", "hp_observation_calls", "hp_failure_calls"})
+      j[key] = nullptr;
   const auto text = j.dump();
   return JS_NewStringLen(c, text.data(), text.size());
 }
@@ -388,7 +403,16 @@ int main(int argc, char **argv) {
   arkdps::owned_js::binding().poison = []() noexcept { poisoned = true; };
   auto *rt = JS_NewRuntime();
   auto *c = JS_NewContext(rt);
+#ifdef ARKDPS_SEALED_PROVIDER
+  native_wrappers = false;
+  for (int i = 2; i < argc; i++)
+    if (std::string(argv[i]) == "--unsealed-provider")
+      sealed_owner = false;
+  arkdps::owned_js::install(
+      c, []() noexcept { poisoned = true; }, sealed_owner);
+#else
   arkdps::owned_js::install(c, []() noexcept { poisoned = true; });
+#endif
   JS_SetMemoryLimit(rt, 512 * 1024 * 1024);
   auto g = JS_GetGlobalObject(c);
   JS_SetPropertyStr(c, g, "print", JS_NewCFunction(c, print, "print", 1));
@@ -402,56 +426,61 @@ int main(int argc, char **argv) {
                     JS_NewCFunction(c, put, "__ownedPut", 2));
   JS_SetPropertyStr(c, g, "__ownedEdge",
                     JS_NewCFunction(c, edge, "__ownedEdge", 2));
-  JS_SetPropertyStr(c, g, "__nativeOwnedRead",
-                    JS_NewCFunction(c, owned_bytes, "__nativeOwnedRead", 5));
-  JS_SetPropertyStr(c, g, "__nativeOwnedScalar",
-                    JS_NewCFunction(c, owned_scalar, "__nativeOwnedScalar", 5));
-  JS_SetPropertyStr(c, g, "__nativeOwnedPoint",
-                    JS_NewCFunction(c, owned_point, "__nativeOwnedPoint", 2));
-  JS_SetPropertyStr(
-      c, g, "__nativeOwnedStatus",
-      JS_NewCFunction(c, arkdps::owned_js::status, "__nativeOwnedStatus", 0));
-  JS_SetPropertyStr(
-      c, g, "__nativeOwnedLease",
-      JS_NewCFunction(c, arkdps::owned_js::lease, "__nativeOwnedLease", 1));
-  JS_SetPropertyStr(c, g, "__nativeOwnedNumericAddress", JS_TRUE);
+  if (native_wrappers) {
+    JS_SetPropertyStr(c, g, "__nativeOwnedRead",
+                      JS_NewCFunction(c, owned_bytes, "__nativeOwnedRead", 5));
+    JS_SetPropertyStr(
+        c, g, "__nativeOwnedScalar",
+        JS_NewCFunction(c, owned_scalar, "__nativeOwnedScalar", 5));
+    JS_SetPropertyStr(c, g, "__nativeOwnedPoint",
+                      JS_NewCFunction(c, owned_point, "__nativeOwnedPoint", 2));
+    JS_SetPropertyStr(
+        c, g, "__nativeOwnedStatus",
+        JS_NewCFunction(c, arkdps::owned_js::status, "__nativeOwnedStatus", 0));
+    JS_SetPropertyStr(
+        c, g, "__nativeOwnedLease",
+        JS_NewCFunction(c, arkdps::owned_js::lease, "__nativeOwnedLease", 1));
+    JS_SetPropertyStr(c, g, "__nativeOwnedNumericAddress", JS_TRUE);
+  }
   JS_SetPropertyStr(c, g, "__nativeReplayHealthy",
                     JS_NewCFunction(c, healthy, "__nativeReplayHealthy", 0));
   JS_SetPropertyStr(c, g, "__ownedProfile",
                     JS_NewCFunction(c, report, "__ownedProfile", 1));
   JS_SetPropertyStr(c, g, "__sealReadonlyPlans",
                     JS_NewCFunction(c, seal_plans, "__sealReadonlyPlans", 0));
+  if (native_wrappers) {
 #ifdef ARKDPS_CAPTURE_GRAPH_BATCH
-  JS_SetPropertyStr(
-      c, g, "__nativeOwnedGraphReadBatch",
-      JS_NewCFunction(c, owned_graph, "__nativeOwnedGraphReadBatch", 4));
+    JS_SetPropertyStr(
+        c, g, "__nativeOwnedGraphReadBatch",
+        JS_NewCFunction(c, owned_graph, "__nativeOwnedGraphReadBatch", 4));
 #ifdef ARKDPS_CAPTURE_GRAPH_CHECK
-  JS_SetPropertyStr(
-      c, g, "__nativeOwnedGraphCheck",
-      JS_NewCFunction(c, owned_graph_check, "__nativeOwnedGraphCheck", 3));
+    JS_SetPropertyStr(
+        c, g, "__nativeOwnedGraphCheck",
+        JS_NewCFunction(c, owned_graph_check, "__nativeOwnedGraphCheck", 3));
 #endif
 #endif
 #ifdef ARKDPS_CAPTURE_READ_BATCH
-  JS_SetPropertyStr(
-      c, g, "__nativeOwnedReadBatch",
-      JS_NewCFunction(c, owned_batch, "__nativeOwnedReadBatch", 5));
+    JS_SetPropertyStr(
+        c, g, "__nativeOwnedReadBatch",
+        JS_NewCFunction(c, owned_batch, "__nativeOwnedReadBatch", 5));
 #endif
 #ifdef ARKDPS_CAPTURE_HOOK_POINT
-  JS_SetPropertyStr(
-      c, g, "__nativeOwnedHookPoint",
-      JS_NewCFunction(c, owned_hook_point, "__nativeOwnedHookPoint", 2));
-  JS_SetPropertyStr(c, g, "__nativeOwnedMissingHookSlot",
-                    JS_NewCFunction(c, owned_missing_hook,
-                                    "__nativeOwnedMissingHookSlot", 1));
+    JS_SetPropertyStr(
+        c, g, "__nativeOwnedHookPoint",
+        JS_NewCFunction(c, owned_hook_point, "__nativeOwnedHookPoint", 2));
+    JS_SetPropertyStr(c, g, "__nativeOwnedMissingHookSlot",
+                      JS_NewCFunction(c, owned_missing_hook,
+                                      "__nativeOwnedMissingHookSlot", 1));
 #endif
 #ifdef ARKDPS_CAPTURE_HP_OBSERVATION
-  JS_SetPropertyStr(c, g, "__nativeOwnedHpObservation",
-                    JS_NewCFunction(c, owned_hp_observation,
-                                    "__nativeOwnedHpObservation", 2));
-  JS_SetPropertyStr(
-      c, g, "__nativeOwnedConsumeHpFailure",
-      JS_NewCFunction(c, owned_hp_failure, "__nativeOwnedConsumeHpFailure", 1));
+    JS_SetPropertyStr(c, g, "__nativeOwnedHpObservation",
+                      JS_NewCFunction(c, owned_hp_observation,
+                                      "__nativeOwnedHpObservation", 2));
+    JS_SetPropertyStr(c, g, "__nativeOwnedConsumeHpFailure",
+                      JS_NewCFunction(c, owned_hp_failure,
+                                      "__nativeOwnedConsumeHpFailure", 1));
 #endif
+  }
   for (int i = 2; i < argc; i++) {
     if (std::string(argv[i]) == "--sample-functions")
       sample_functions = true;

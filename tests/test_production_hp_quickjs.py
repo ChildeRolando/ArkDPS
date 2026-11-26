@@ -18,8 +18,14 @@ def test_actual_hp_fused_quickjs_semantics(tmp_path):
         if branch=='input_only_baseline':
             continue
         assert row['native_profile']['edges']==200
-        assert row['native_profile']['point_calls']>0
-        assert row['native_profile']['scalar_calls']>0
+        if row['native_profile'].get('cpp_io_counters_available',True):
+            assert row['native_profile']['point_calls']>0
+            assert row['native_profile']['scalar_calls']>0
+        else:
+            assert row['native_profile']['point_calls'] is None
+            assert row['native_profile']['scalar_calls'] is None
+            # Routed requests only; no assertion pretends to count native lease.
+            assert sum(row['native_request_counts'].values())>0
     assert report['readiness'].startswith('NOT_FULL_WORKER_ACCEPTANCE')
 
 def test_prepared_full_scope_publication_and_owned_queue(tmp_path):
