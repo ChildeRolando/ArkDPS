@@ -15,6 +15,7 @@ struct CaptureGraph {
     bool available=false;
     std::uint16_t body_insertion=0;
     std::unique_ptr<CompiledPlan> code;
+    std::vector<OwnedReadProgram> read_chunks;
 };
 struct CaptureConfiguration {
     std::uint64_t id=0, mode_epoch=0;
@@ -55,7 +56,22 @@ public:
         next->mode_epoch=plan_uint(graph.at("mode_epoch"),capture_mode_slots-1);
         if (!next->revision) throw std::runtime_error("invalid capture graph revision");
         next->available=graph.at("available").get<bool>();
-        if (next->available) next->code=compile_graph(graph,publication);
+        if (next->available) {
+            next->code=compile_graph(graph,publication);
+            for(unsigned i=0;i<next->code->plan->field_count;++i) {
+                if(i%32==0)next->read_chunks.emplace_back();
+                const auto& field=next->code->plan->fields[i];
+                if(field.root!=Root::absolute || (field.kind!=Kind::bytes&&field.kind!=Kind::utf16)
+                    || (field.kind==Kind::bytes&&(!field.bytes||field.bytes>128)))
+                    {next->read_chunks.clear();break;}
+                OwnedReadField op;op.role_id=field.role;op.selector=-2;op.expected_field_id=field.id;op.tier=1;
+                op.absolute_root=true;op.absolute=field.absolute_address;op.depth=field.depth;
+                op.path=field.pointer_offsets;op.offset=field.offset;op.bytes=field.bytes;
+                op.kind=field.kind==Kind::utf16?1:0;op.max_units=field.max_units;
+                op.current_checkpoint=true;
+                auto& chunk=next->read_chunks.back();chunk.tiers=1;chunk.fields.push_back(std::move(op));
+            }
+        }
         if (!publication && next->available) {
             next->body_insertion=plan_uint(graph.at("body_insertion_index"),next->code->plan->field_count);
             for (unsigned i=0;i<next->code->plan->field_count;++i) {
@@ -81,6 +97,7 @@ public:
         if (owned_.size()>=512) throw std::runtime_error("native capture configuration retention budget exceeded");
         auto* pointer=config.get();
         owned_.push_back(std::move(config));
+        try {by_id_.emplace(pointer->id,pointer);} catch (...) {owned_.pop_back();throw;}
         current_[next->mode_epoch].store(pointer,std::memory_order_release);
         // Store->load grace checks on a different atomic need this fence.
         std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -95,13 +112,17 @@ public:
             if (epoch!=producer_epoch) current_[epoch].store(nullptr,std::memory_order_release);
         const auto previous=owned_.size();
         owned_.erase(std::remove_if(owned_.begin(),owned_.end(),[&](const auto& config) {
-            return config.get()!=latest;
+            if(config.get()==latest)return false;
+            by_id_.erase(config->id);return true;
         }),owned_.end());
         if (previous==owned_.size()) return nullptr;
         nlohmann::json bounds{{"mode_before",producer_epoch}};
         if (latest->scope) bounds["scope_before"]=latest->scope->revision;
         if (latest->publication) bounds["publication_before"]=latest->publication->revision;
         return bounds;
+    }
+    const CaptureConfiguration* find(std::uint64_t id) const noexcept {
+        const auto found=by_id_.find(id);return found==by_id_.end()?nullptr:found->second;
     }
     std::vector<std::string> roles;
 private:
@@ -147,6 +168,7 @@ private:
     std::array<std::atomic<const CaptureConfiguration*>,capture_mode_slots> current_{};
     std::vector<std::unique_ptr<CaptureConfiguration>> owned_;
     std::unordered_map<std::string,std::uint16_t> role_ids_;
+    std::unordered_map<std::uint64_t,const CaptureConfiguration*> by_id_;
     std::uint64_t serial_=0;
 };
 } // namespace arkdps::capture

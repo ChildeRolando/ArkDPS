@@ -274,3 +274,26 @@ klass8+signed length4+UTF16 bytes；原JS业务验证继续唯一消费。所有
 保留它不延长native lease，也不授权下一record复用事实。注册/执行函数同其余provider一起
 固定身份，midrecord替换global不改变当前选择，下一record失配拒收，不回退现场读取。
 
+
+### Captured graph raw batches
+
+`__arkdpsOwnedGraphReadBatch(kind, graph, chunkIndex)` pins the native provider
+at ReplayBegin. Engine binds the exact retained header.configuration_id plus
+scope/publication revision and entry mode. JS cannot select another config.
+Native ABI: (kind, revision, graphModeEpoch, chunkIndex).
+
+Programs derive once from the compiled CaptureGraph after role/ID interning,
+retain flattened field order and split into 32-slot chunks. They share the
+setup ReadPlan executor and AB ABI. Each field requires the original unique
+role/checkpoint witness and expected remapped ID before independently reading
+all pointer links and final bytes through OwnedReplayView. Planned guard error
+priority remains unchanged; genuine structural failures poison the replay.
+
+JS still performs every canonical expected-value, clock, class, phase, round
+and ownership comparison. Programs retire with CaptureGraph, not a parallel
+revision registry. Game callbacks gain no VM calls, locks, waits or allocations.
+The optimization supports absolute-root bytes 1..128 and UTF16 up to 200 units.
+Other legal geometry keeps the original capture contract and is statically
+selected for strict scalar reading; missing old-provider API does the same.
+Present-helper execution errors never fall back. Offline semantic PASS does
+not establish sustained production throughput or game FPS improvement.

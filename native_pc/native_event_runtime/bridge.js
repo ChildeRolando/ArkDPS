@@ -107,13 +107,13 @@ function __arkdpsReplayBegin(record){
  if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('invalid record checkpoint');
  if(record.native_view===true){
   const lease=globalThis.__nativeOwnedLease,read=globalThis.__nativeOwnedRead,scalar=globalThis.__nativeOwnedScalar,
-   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,batch=globalThis.__nativeOwnedReadBatch,register=globalThis.__nativeOwnedReadPlanRegister;
+   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,graphBatch=globalThis.__nativeOwnedGraphReadBatch,batch=globalThis.__nativeOwnedReadBatch,register=globalThis.__nativeOwnedReadPlanRegister;
   if(typeof lease!=='function'||typeof read!=='function'||typeof scalar!=='function'||typeof status!=='function'||typeof point!=='function')
    throw new Error('native owned provider unavailable');
   if((batch!==undefined||register!==undefined)&&(typeof batch!=='function'||typeof register!=='function'))throw new Error('native owned batch provider unavailable');
   let native=__arkdpsNativeProvider;
-  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedReadBatch!==batch||native.__nativeOwnedReadPlanRegister!==register)
-   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedReadBatch:batch,__nativeOwnedReadPlanRegister:register});
+  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedGraphReadBatch!==graphBatch||native.__nativeOwnedReadBatch!==batch||native.__nativeOwnedReadPlanRegister!==register)
+   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedGraphReadBatch:graphBatch,__nativeOwnedReadBatch:batch,__nativeOwnedReadPlanRegister:register});
   if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||native.__nativeOwnedLease(record.ticket)!==true)throw new Error('native owned lease unavailable');
   __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};return;
  }
@@ -272,6 +272,7 @@ function __arkdpsNativeCall(name,a,b,c,d,e){
    case '__nativeOwnedPoint':return native.__nativeOwnedPoint(a,b);
    case '__nativeOwnedRead':return native.__nativeOwnedRead(a,b,c,d,e);
    case '__nativeOwnedScalar':return native.__nativeOwnedScalar(a,b,c,d,e);
+   case '__nativeOwnedGraphReadBatch':return native.__nativeOwnedGraphReadBatch(a,b,c,d);
    case '__nativeOwnedReadBatch':return native.__nativeOwnedReadBatch(a,b,c,d,e);
   }
  }catch(error){__arkdpsReplayGap('native owned provider failed '+name);}
@@ -342,6 +343,37 @@ function __arkdpsOwnedReadBatch(handle,root,tiers){
  const bytes=__arkdpsNativeCall('__nativeOwnedReadBatch',state.id,state.owner,__arkdpsNativeAddress(address),tiers,replay.checkpoint);
  if(bytes===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
  return new __ArkDpsOwnedBatch(bytes,state,tiers);
+}
+const __arkdpsGraphReadGeometry=new WeakMap();
+function __arkdpsOwnedGraphReadBatch(kind,graph,chunk){
+ const replay=__arkdpsReplay;
+ if(!replay?.native)__arkdpsReplayGap('owned graph batch requires native replay');
+ const execute=replay.native.__nativeOwnedGraphReadBatch;
+ if(execute===undefined)return null;
+ if(typeof execute!=='function'||(kind!=='scope'&&kind!=='publication')||!graph||typeof graph!=='object'||
+    !Number.isSafeInteger(graph.revision)||graph.revision<=0||!Number.isSafeInteger(graph.mode_epoch)||graph.mode_epoch<0||
+    !Number.isInteger(chunk)||chunk<0)__arkdpsReplayGap('invalid owned graph batch');
+ let geometry=__arkdpsGraphReadGeometry.get(graph);
+ if(!geometry){
+  const fields=kind==='scope'?graph.fields:graph.chunks?.flatMap(part=>part.fields);
+  if(!Array.isArray(fields)||!fields.length)__arkdpsReplayGap('invalid owned graph geometry');
+  const chunks=[];
+  // Unsupported optimization geometry keeps the original strict reader; it is
+  // never an execution-error fallback and cannot suppress a native failure.
+  if(fields.some(field=>!field||field.root!=='absolute'||!['bytes','utf16'].includes(field.kind)||
+     (field.kind==='bytes'?(!Number.isInteger(field.bytes)||field.bytes<1||field.bytes>128):(!Number.isInteger(field.max_units)||field.max_units<1||field.max_units>200))))return null;
+  for(let start=0;start<fields.length;start+=32){
+   const part=fields.slice(start,start+32);
+   if(part.some(field=>!field||!['bytes','utf16'].includes(field.kind)||
+      (field.kind==='bytes'?(!Number.isInteger(field.bytes)||field.bytes<1||field.bytes>128):(!Number.isInteger(field.max_units)||field.max_units<1||field.max_units>200))))__arkdpsReplayGap('invalid owned graph field');
+   chunks.push(Object.freeze({tiers:Object.freeze(part.map(()=>1)),kinds:Object.freeze(part.map(f=>f.kind==='utf16'?1:0)),sizes:Object.freeze(part.map(f=>f.kind==='utf16'?f.max_units:f.bytes))}));
+  }
+  geometry=Object.freeze({kind,chunks:Object.freeze(chunks),revision:graph.revision,mode:graph.mode_epoch});__arkdpsGraphReadGeometry.set(graph,geometry);
+ }
+ if(geometry.kind!==kind||geometry.revision!==graph.revision||geometry.mode!==graph.mode_epoch||chunk>=geometry.chunks.length)__arkdpsReplayGap('owned graph geometry changed');
+ const bytes=__arkdpsNativeCall('__nativeOwnedGraphReadBatch',kind,geometry.revision,geometry.mode,chunk);
+ if(bytes===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
+ return new __ArkDpsOwnedBatch(bytes,geometry.chunks[chunk],1);
 }
 function __arkdpsOwnedScalar(address,kind){
  const replay=__arkdpsReplay;

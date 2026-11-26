@@ -27,6 +27,44 @@ static JSValue batch(JSContext* c,unsigned id,unsigned mask,unsigned metadata=1,
  auto value=owned::read_batch(c,JS_UNDEFINED,5,args);for(auto arg:args)JS_FreeValue(c,arg);return value;
 }
 template<class T>static T number(const std::uint8_t* p,unsigned at){T value;std::memcpy(&value,p+at,sizeof value);return value;}
+static void graph_contract(JSContext* c){
+ CaptureConfigurations configurations;Json specs=Json::array();
+ for(unsigned i=0;i<33;++i)specs.push_back({{"field_id",i+1},{"phase","checkpoint"},{"role","scope."+std::to_string(i)},
+  {"root","absolute"},{"absolute_address","0x"+std::string(i?"1000":"2000")},{"pointer_offsets",Json::array()},
+  {"offset",i?i*4:0},{"bytes",4},{"kind","bytes"},{"required",true},{"guard_id",0},{"guard_side","none"}});
+ Json graph{{"version",1},{"revision",1},{"mode_epoch",1},{"available",true},{"raw_collection","all"},{"body_insertion_index",33},{"fields",specs}};
+ configurations.publish(graph,false);const auto* config=configurations.pin(1);assert(config&&config->scope->read_chunks.size()==2);
+ std::vector<Segment> ss;std::vector<FieldState> fs;std::array<std::byte,132> data{};
+ for(unsigned i=0;i<33;++i){
+  const auto& op=config->scope->code->plan->fields[i];const std::uint32_t value=100+i;std::memcpy(data.data()+i*4,&value,4);
+  ss.push_back(Segment{op.absolute_address+op.offset,op.id,op.role,i*4,4,0,0});FieldState state{};
+  state.error=Error::ok;state.id=op.id;state.role=op.role;state.segment_begin=i;state.segment_end=i+1;state.final_segment=i;
+  state.attempted_address=op.absolute_address+op.offset;state.attempted_size=4;fs.push_back(state);
+ }
+ const auto start=[&](){poisoned=false;assert(owned::begin(ss.data(),ss.size(),fs.data(),fs.size(),data.data(),data.size(),configurations.roles,99,Error::ok)==Error::ok);owned::bind_graphs(config,1,0,1);};
+ const auto run=[&](unsigned chunk,unsigned revision=1,unsigned mode=1){JSValue args[]{JS_NewString(c,"scope"),JS_NewUint32(c,revision),JS_NewUint32(c,mode),JS_NewUint32(c,chunk)};auto result=owned::graph_read_batch(c,JS_UNDEFINED,4,args);for(auto arg:args)JS_FreeValue(c,arg);return result;};
+ start();auto value=run(0);std::size_t size=0;auto* bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&number<std::uint32_t>(bytes,4)==32);assert(number<std::uint32_t>(bytes,number<std::uint32_t>(bytes,20))==100);JS_FreeValue(c,value);
+ value=run(1);bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&number<std::uint32_t>(bytes,4)==1&&number<std::uint32_t>(bytes,number<std::uint32_t>(bytes,20))==132);JS_FreeValue(c,value);
+ for(auto bad:{2u,3u}){start();value=run(0,bad);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);}
+ start();value=run(0,1,2);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);
+ fs[0].attempted_address=0x9000;fs[0].attempted_size=1;
+ fs[0].error=Error::changed_guard;start();value=run(0);bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&number<std::uint16_t>(bytes,16)==8&&!poisoned);JS_FreeValue(c,value);
+ // Original Witness rejects multiple fields before any geometry lookup.
+ auto extra=fs[0];extra.id=9000;extra.error=Error::field_unreadable;extra.segment_begin=33;extra.segment_end=33;extra.final_segment=0xffff;fs.push_back(extra);
+ start();value=run(0);assert(JS_IsUndefined(value)&&owned::binding().error==Error::ambiguous_read&&poisoned);JS_FreeValue(c,value);fs.pop_back();
+ // Eager batch cannot hide a later genuine structural missing range behind a planned guard failure.
+ ss[1].address+=1024;start();value=run(0);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);ss[1].address-=1024;fs[0].error=Error::ok;
+ owned::end();value=run(0);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);
+ // Batch geometry cannot narrow the capture contract: a legal 129-byte field
+ // still publishes, but its optimization program is unavailable.
+ auto large=graph;large["revision"]=2;large["fields"][0]["bytes"]=129;
+ configurations.publish(large,false);const auto* large_config=configurations.pin(1);
+ assert(large_config&&large_config->scope->code&&large_config->scope->read_chunks.empty());
+ assert(configurations.find(config->id)==config);
+ const auto old_id=config->id;configurations.collect_quiescent(1);assert(configurations.find(old_id)==nullptr);
+ assert(configurations.find(large_config->id)==large_config);
+
+}
 int main(){
  auto* rt=JS_NewRuntime();auto* c=JS_NewContext(rt);owned::install(c,[]() noexcept{poisoned=true;});
  const Json spec{{"version",1},{"fields",Json::array({
@@ -61,5 +99,6 @@ int main(){
  fixture(Error::ok,Error::ok,true);value=batch(c,id,1,1,0x7000);assert(JS_IsUndefined(value)&&owned::binding().error==Error::missing_plan_field&&poisoned);JS_FreeValue(c,value);
  fixture(Error::field_unreadable);value=batch(c,id,1);bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&number<std::uint16_t>(bytes,16)==5&&!poisoned);JS_FreeValue(c,value);
  fixture();owned::end();value=batch(c,id,1);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);
+ graph_contract(c);
  JS_FreeContext(c);JS_FreeRuntime(rt);std::cout<<"PASS owned read plans: raw tiers/UTF16/immutable ABI/metadata/seal/guard priority/concurrent/range/lease\n";
 }

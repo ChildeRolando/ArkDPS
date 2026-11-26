@@ -28,7 +28,7 @@ def test_owned_read_plan_native_boundaries(tmp_path):
     binary=tmp_path/'owned-read-plan.exe'
     built=subprocess.run([compiler,'-std=c++17','-static','-O2','-pthread','-Wall','-Wextra','-Werror',
         '-I',str(ROOT/'native_pc/native_event_runtime'),'-isystem',str(headers),'-isystem',str(stage),
-        str(ROOT/'tests/owned_read_plan_test.cpp'),*[str(p) for p in objects],'-o',str(binary)],
+        str(ROOT/'tests/owned_read_plan_test.cpp'),str(ROOT/'native_pc/native_event_runtime/native_capture.cpp'),*[str(p) for p in objects],'-o',str(binary)],
         capture_output=True,text=True,timeout=60)
     assert built.returncode==0,built.stdout+built.stderr
     run=subprocess.run([str(binary)],capture_output=True,text=True,timeout=10)

@@ -1,7 +1,7 @@
 #pragma once
 #include "owned_replay_view.h"
 #include "owned_role_index.h"
-#include "engine_capture_plan.h"
+#include "engine_capture_config.h"
 #include "quickjs.h"
 #include <cmath>
 #include <charconv>
@@ -15,16 +15,8 @@ namespace arkdps::owned_js {
 // consumer buffer only for the current replay lease, never game memory.
 constexpr unsigned read_plan_slots=32, read_plan_limit=32, read_batch_bytes=16384;
 static_assert(16+read_plan_slots*16+read_plan_slots*(12+capture::max_string_units*2)<=read_batch_bytes,"owned read batch output bound");
-struct ReadPlanField {
-    std::string role;
-    std::uint32_t checkpoint=0,offset=0,bytes=0,max_units=0;
-    std::array<std::uint32_t,capture::max_depth> path{};
-    std::uintptr_t absolute=0;
-    int selector=-1;
-    std::uint8_t tier=0,depth=0,kind=0;
-    bool current_checkpoint=false,absolute_root=false;
-};
-struct ReadPlan {std::uint64_t metadata=0;unsigned tiers=0;std::vector<ReadPlanField> fields;};
+using ReadPlanField=capture::OwnedReadField;
+using ReadPlan=capture::OwnedReadProgram;
 struct Binding {
     capture::OwnedReplayView view;
     capture::OwnedRoleIndex role_index;
@@ -35,6 +27,8 @@ struct Binding {
     bool active = false;
     bool concurrent = false;
     bool js_exception = false;
+    const capture::CaptureConfiguration* configuration=nullptr;
+    std::uint64_t scope_revision=0,publication_revision=0,graph_mode=0;
     bool read_plans_open=true;
     std::vector<ReadPlan> read_plans;
 };
@@ -49,7 +43,7 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
                            const std::vector<std::string>& roles,std::uint64_t ticket,
                            capture::Error record_error,bool concurrent=false) noexcept {
     auto& owner=binding();owner.roles=&roles;owner.ticket=ticket;owner.concurrent=concurrent;
-    owner.js_exception=false;
+    owner.js_exception=false;owner.configuration=nullptr;
     owner.error=owner.view.initialize(segments,segment_count,fields,field_count,payload,payload_bytes,
                                      static_cast<std::uint16_t>(roles.size()),record_error);
     owner.active=owner.error==capture::Error::ok;
@@ -57,7 +51,7 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
     return owner.error;
 }
 inline void end() noexcept {
-    auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.view.reset();
+    auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.configuration=nullptr;owner.view.reset();
 }
 struct Lease {
     Lease()=default;Lease(const Lease&)=delete;Lease& operator=(const Lease&)=delete;
@@ -225,18 +219,8 @@ inline JSValue register_read_plan(JSContext* c,JSValueConst,int count,JSValueCon
         return JS_ThrowInternalError(c,"invalid owned read plan");
     }
 }
-inline JSValue read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args) {
-    auto& owner=binding();owner.js_exception=false;double id=0,metadata=0,tiers=0,checkpoint=0;std::uintptr_t base=0;
-    if(count!=5 || !owner.active || !owner.roles || !number(c,args[0],id,1,owner.read_plans.size())
-        || !number(c,args[1],metadata,1,9007199254740991.0) || !address(c,args[2],base)
-        || !number(c,args[3],tiers,1,255) || !number(c,args[4],checkpoint,0,UINT32_MAX)) {
-        if(!owner.js_exception)error(capture::Error::invalid_plan);
-        return unavailable();
-    }
-    const auto& plan=owner.read_plans[static_cast<std::size_t>(id)-1];const auto mask=static_cast<unsigned>(tiers);
-    if(plan.metadata!=static_cast<std::uint64_t>(metadata)||(mask&~plan.tiers)||!owner.role_index.ensure(*owner.roles)) {
-        error(capture::Error::invalid_plan);return JS_UNDEFINED;
-    }
+inline JSValue execute_read_batch(JSContext* c,const ReadPlan& plan,unsigned mask,std::uintptr_t base,std::uint32_t checkpoint) {
+    auto& owner=binding();
     std::array<std::byte,read_batch_bytes> output;const auto head=16+16*plan.fields.size();std::size_t cursor=head;
     const auto put=[&](std::size_t at,auto value){std::memcpy(output.data()+at,&value,sizeof value);};
     put(0,std::uint32_t{1});put(4,static_cast<std::uint32_t>(plan.fields.size()));put(8,static_cast<std::uint32_t>(mask));
@@ -244,8 +228,8 @@ inline JSValue read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args
         const auto& field=plan.fields[i];const auto entry=16+i*16;const auto start=cursor;
         put(entry,std::uint16_t{0xffff});put(entry+2,static_cast<std::uint16_t>(field.kind));put(entry+4,std::uint32_t{0});put(entry+8,std::uint32_t{0});put(entry+12,std::uint32_t{0});
         if(!(mask&field.tier))continue;
-        auto status=capture::Error::ok;const auto role_id=owner.role_index.find(*owner.roles,field.role);
-        const auto cp=field.current_checkpoint?static_cast<std::uint32_t>(checkpoint):field.checkpoint;
+        auto status=capture::Error::ok;const auto role_id=field.role_id?field.role_id:owner.role_index.find(*owner.roles,field.role);
+        const auto cp=field.current_checkpoint?checkpoint:field.checkpoint;
         std::optional<std::uint16_t> selected;
         if(!role_id)status=capture::Error::missing_plan_field;
         else if(field.selector==-2){const auto point=owner.view.point_info(role_id,cp);
@@ -253,6 +237,7 @@ inline JSValue read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args
             else if(point.field_count!=1)status=point.field_count?capture::Error::ambiguous_read:capture::Error::missing_plan_field;
             else if(point.single_field_error!=capture::Error::ok)status=point.single_field_error;
             else if(owner.concurrent)status=capture::Error::changed_guard;
+            else if(field.expected_field_id&&field.expected_field_id!=point.single_field_id)status=capture::Error::missing_plan_field;
             else selected=point.single_field_id;
         }else if(field.selector>=0)selected=static_cast<std::uint16_t>(field.selector);
         const auto read=[&](std::uintptr_t address,std::size_t bytes,void* target) noexcept {
@@ -283,6 +268,45 @@ inline JSValue read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args
     }
     put(12,static_cast<std::uint32_t>(cursor-head));error(capture::Error::ok);
     return allocated(JS_NewArrayBufferCopy(c,reinterpret_cast<const std::uint8_t*>(output.data()),cursor));
+}
+inline JSValue read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args) {
+    auto& owner=binding();owner.js_exception=false;double id=0,metadata=0,tiers=0,checkpoint=0;std::uintptr_t base=0;
+    if(count!=5 || !owner.active || !owner.roles || !number(c,args[0],id,1,owner.read_plans.size())
+        || !number(c,args[1],metadata,1,9007199254740991.0) || !address(c,args[2],base)
+        || !number(c,args[3],tiers,1,255) || !number(c,args[4],checkpoint,0,UINT32_MAX)) {
+        if(!owner.js_exception)error(capture::Error::invalid_plan);
+        return unavailable();
+    }
+    const auto& plan=owner.read_plans[static_cast<std::size_t>(id)-1];const auto mask=static_cast<unsigned>(tiers);
+    if(plan.metadata!=static_cast<std::uint64_t>(metadata)||(mask&~plan.tiers)||!owner.role_index.ensure(*owner.roles)) {
+        error(capture::Error::invalid_plan);return JS_UNDEFINED;
+    }
+    return execute_read_batch(c,plan,mask,base,static_cast<std::uint32_t>(checkpoint));
+}
+// Exact record configuration is selected by engine, never by a JS supplied id.
+inline void bind_graphs(const capture::CaptureConfiguration* config,std::uint64_t scope,
+                        std::uint64_t publication,std::uint64_t mode) noexcept {
+    auto& owner=binding();owner.configuration=config;owner.scope_revision=scope;
+    owner.publication_revision=publication;owner.graph_mode=mode;
+}
+inline JSValue graph_read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args) {
+    auto& owner=binding();owner.js_exception=false;double revision=0,mode=0,chunk=0;
+    if(count!=4||!owner.active||!owner.configuration||!JS_IsString(args[0])
+        ||!number(c,args[1],revision,1,9007199254740991.0)
+        ||!number(c,args[2],mode,0,9007199254740991.0)||!number(c,args[3],chunk,0,65535)) {
+        if(!owner.js_exception)error(capture::Error::invalid_plan);
+        return unavailable();
+    }
+    const auto* kind=JS_ToCString(c,args[0]);if(!kind){conversion_exception();return JS_EXCEPTION;}
+    const bool scope=std::string_view(kind)=="scope",publication=std::string_view(kind)=="publication";
+    JS_FreeCString(c,kind);
+    const auto* graph=scope?owner.configuration->scope.get():publication?owner.configuration->publication.get():nullptr;
+    const auto recorded=scope?owner.scope_revision:owner.publication_revision;
+    if(!graph||!graph->available||revision!=recorded||revision!=graph->revision||mode!=graph->mode_epoch
+        ||mode!=owner.graph_mode||owner.configuration->mode_epoch!=owner.graph_mode||chunk>=graph->read_chunks.size()) {
+        error(capture::Error::missing_plan_field);return JS_UNDEFINED;
+    }
+    return execute_read_batch(c,graph->read_chunks[static_cast<std::size_t>(chunk)],1,0,0);
 }
 inline JSValue status(JSContext* c,JSValueConst,int,JSValueConst*) {return JS_NewInt32(c,static_cast<int>(binding().error));}
 inline JSValue point(JSContext* c,JSValueConst,int count,JSValueConst* args) {
@@ -316,6 +340,7 @@ inline void install(JSContext* c,void(*poison)() noexcept) {
     const Entry entries[]{
         {"__nativeOwnedRead",bytes,5},{"__nativeOwnedScalar",scalar,5},{"__nativeOwnedStatus",status,0},
         {"__nativeOwnedPoint",point,2},{"__nativeOwnedLease",lease,1},
+        {"__nativeOwnedGraphReadBatch",graph_read_batch,4},
         {"__nativeOwnedReadPlanRegister",register_read_plan,2},{"__nativeOwnedReadBatch",read_batch,5}};
     for(const auto& entry:entries)JS_SetPropertyStr(c,global,entry.name,JS_NewCFunction(c,entry.function,entry.name,entry.arguments));
     JS_FreeValue(c,global);

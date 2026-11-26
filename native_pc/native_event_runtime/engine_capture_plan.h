@@ -16,6 +16,18 @@ inline nlohmann::json capture_capabilities(bool product_ready=false) {
     return {{"version",1},{"raw_collection","all"},{"lowered_projections",std::move(names)}};
 }
 
+struct OwnedReadField {
+    std::string role;
+    std::uint16_t role_id=0,expected_field_id=0;
+    std::uint32_t checkpoint=0,offset=0,bytes=0,max_units=0;
+    std::array<std::uint32_t,capture::max_depth> path{};
+    std::uintptr_t absolute=0;
+    int selector=-1;
+    std::uint8_t tier=0,depth=0,kind=0;
+    bool current_checkpoint=false,absolute_root=false;
+};
+struct OwnedReadProgram {std::uint64_t metadata=0;unsigned tiers=0;std::vector<OwnedReadField> fields;};
+
 struct SavedEntryRoot {
     std::uint8_t slot=0, index=0;
     Root root=Root::arg;

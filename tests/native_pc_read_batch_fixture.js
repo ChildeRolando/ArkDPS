@@ -69,4 +69,31 @@ assert.equal(c.oldProvider,null);assert(c.handleFrozen);assert.equal(c.bytesValu
 assert(c.planned);assert(c.plannedEnd.complete);assert.equal(c.plannedEnd.unreadable_reads,1);assert.equal(c.partialValue,'111');
 assert.equal(c.pinnedValue,'111');assert(c.pinnedEnd.complete);assert(c.changedProvider);assert(!c.changedEnd.complete);
 assert(Array.from(c.bad).every(x=>x.rejected&&!x.complete));for(const k of ['unrequested','forged','late'])assert(c[k==='late'?'lateRegister':k]&&!c[k+'End'].complete);
+vm.runInContext(`
+mode='ok';
+const scopeGraph=Object.freeze({revision:7,mode_epoch:2,fields:Object.freeze([{root:'absolute',kind:'bytes',bytes:8},{root:'absolute',kind:'utf16',max_units:200}])});
+__arkdpsReplayBegin(nativeRecord());globalThis.oldGraph=__arkdpsOwnedGraphReadBatch('scope',scopeGraph,0);__arkdpsReplayEnd();
+const graphPlan=plans.push({metadata:44,spec:{fields:[{tier:1,bytes:8},{tier:1,kind:'utf16',max_units:200}]}});
+let graphCalls=0;
+function graphExecute(kind,revision,epoch,chunk){
+ graphCalls++;if(arguments.length!==4||kind!=='scope'||revision!==7||epoch!==2||chunk!==0)throw Error('graph ABI');
+ return execute(graphPlan,44,4096n,1,3);
+}
+globalThis.__nativeOwnedGraphReadBatch=graphExecute;
+__arkdpsReplayBegin(nativeRecord());
+const graphBatch=__arkdpsOwnedGraphReadBatch('scope',scopeGraph,0);
+globalThis.graphValue=graphBatch.slot(0).getBigUint64(0,true).toString();
+globalThis.graphText=graphBatch.slot(1).getUint16(12,true);
+globalThis.__nativeOwnedGraphReadBatch=()=>{throw Error('new provider');};
+globalThis.graphPinned=__arkdpsOwnedGraphReadBatch('scope',scopeGraph,0).slot(0).getBigUint64(0,true).toString();
+globalThis.graphEnd=__arkdpsReplayEnd();
+__arkdpsReplayBegin(nativeRecord());globalThis.graphReplace=rejects(()=>__arkdpsOwnedGraphReadBatch('scope',scopeGraph,0));globalThis.graphReplaceEnd=__arkdpsReplayEnd();
+globalThis.__nativeOwnedGraphReadBatch=graphExecute;
+mode='planned';__arkdpsReplayBegin(nativeRecord());const graphPartial=__arkdpsOwnedGraphReadBatch('scope',scopeGraph,0);
+globalThis.graphPlanned=rejects(()=>graphPartial.slot(1));globalThis.graphPlannedEnd=__arkdpsReplayEnd();
+mode='ok';__arkdpsReplayBegin(nativeRecord());
+const before=graphCalls;globalThis.graphUnsupported=__arkdpsOwnedGraphReadBatch('scope',{revision:8,mode_epoch:2,fields:[{root:'absolute',kind:'bytes',bytes:129}]},0);globalThis.unsupportedNoCall=before===graphCalls;globalThis.unsupportedEnd=__arkdpsReplayEnd();
+`,c);
+assert.equal(c.oldGraph,null);assert.equal(c.graphValue,'111');assert.equal(c.graphPinned,'111');assert.equal(c.graphText,0x4e2d);assert(c.graphEnd.complete);
+assert(c.graphReplace&&!c.graphReplaceEnd.complete);assert(c.graphPlanned&&c.graphPlannedEnd.complete);assert.equal(c.graphUnsupported,null);assert(c.unsupportedNoCall&&c.unsupportedEnd.complete);
 assert.equal(c.liveCount,0);console.log('PASS owned read batch facade: slots/UTF16/planned/tiers/providerpin/metadatahandle/malformed/registration/no fallback');
