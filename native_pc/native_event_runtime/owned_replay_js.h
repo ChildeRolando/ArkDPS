@@ -76,6 +76,12 @@ inline std::uint16_t role(JSContext* c,JSValueConst value) noexcept {
 inline bool address(JSContext* c,JSValueConst value,std::uintptr_t& out) noexcept {
     // NativePointer has already canonicalized real Windows user addresses.
     // Reject overflow/negative values instead of wrapping an arbitrary BigInt.
+    if (JS_IsNumber(value)) {
+        double numeric=0;
+        const auto maximum=(std::min)(9007199254740991.0,static_cast<double>(std::numeric_limits<std::uintptr_t>::max()));
+        if (!number(c,value,numeric,0,maximum)) return false;
+        out=static_cast<std::uintptr_t>(numeric);return true;
+    }
     if (!JS_IsBigInt(c,value)) return false;
     std::size_t length=0;const auto* text=JS_ToCStringLen(c,&length,value);
     if (!text) {conversion_exception();return false;}
@@ -157,6 +163,7 @@ inline JSValue lease(JSContext* c,JSValueConst,int count,JSValueConst* args) {
 inline void install(JSContext* c,void(*poison)() noexcept) {
     binding().poison=poison;
     auto global=JS_GetGlobalObject(c);
+    JS_SetPropertyStr(c,global,"__nativeOwnedNumericAddress",JS_TRUE);
     struct Entry{const char* name;JSCFunction* function;int arguments;};
     const Entry entries[]{
         {"__nativeOwnedRead",bytes,5},{"__nativeOwnedScalar",scalar,5},{"__nativeOwnedStatus",status,0},
