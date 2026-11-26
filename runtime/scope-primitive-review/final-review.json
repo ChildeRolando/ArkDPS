@@ -1,0 +1,30 @@
+{
+  "decision": "approve",
+  "root_target_base": "4f33715",
+  "reviewed_commits": [
+    "4c9660211838910e2d96979851219d309f8fb38d",
+    "2be35a0497b3e12927e95f1a6a280b7f2c0d4901",
+    "4095d43",
+    "808cf43297ae50f2e84112343dd1a2e363844a41",
+    "c6884ff77704b7614a30fd23a541056a4c149ec1"
+  ],
+  "source_sha256": {
+    "event_probe_native_pc.js": "7e76a48a736572d1991a62866ad113cd8fc8faf5b527c6f891d6b6c9bb393573",
+    "native_pc/native_event_runtime/bridge.js": "34c8745b10c68b47345d9d8ffc13b7e79bf33c8aa6bb7ea239438632068b7017",
+    "native_pc/native_event_runtime/engine_capture_config.h": "865f43a477d356bb31565daee8c241f092269240744593d0290df1ec6ce1379c",
+    "native_pc/native_event_runtime/owned_replay_js.h": "050244e99e47f3e3d5f8d1a3d8d7e6b6fcbffdf3f627af7775e9e50a5ae39e12"
+  },
+  "five_axes": {
+    "correctness": "Format1 uses the same complete read_owned_field and fixed predicate executor as format0. The first planned failure still loses to any later structural failure. Primitive codec offsets and widths are bounded by the original field; i32/u32 and signed/unsigned 64-bit representations remain exact.",
+    "identity_and_ownership": "Native selection binds exact current configuration, captured revision, entry graph mode and checkpoint. The JS header checks count/checkpoint/mode and every dynamic original index/value count. Only a successful native result plus full shape/type validation registers format1 proof. Public raw and primitive constructors cannot mint proof. Both format tags and replay/graph/kind identity are required.",
+    "failure_boundaries": "Only absent provider or statically unsupported geometry returns null. Native undefined/error executes NativeReadFailure and cannot return fallback null. Neither source factory nor canonical scope decoder catches failures to manufacture a verified projection. Scope unsupported blocks retain full strict fallback; codec metadata is emitted only when the new helper exists.",
+    "single_business_owner": "Raw primitives, DataView and pointer acquisition feed one decodeCapturedScopeField. Clock, integer expected values, className admissibility, semantic phase/round/state outputs, autoScope continuity and collection-mode policy remain JavaScript. Four class fields retain original role/checkpoint finally context. No cross-record fact cache or new Game read is added.",
+    "validation_scope": "Read-only final five-commit combination review. Previously recorded 110 targeted functional PASS and provider-owned CPP/Node signed/index/brand/error tests were reused; no repeated heavy test or DLL compilation in this review. Source simulator is explicitly not represented as real native issuance evidence."
+  },
+  "mustfix": [],
+  "boundaries": [
+    "Not a throughput, no-overflow, infinite-stability or game-FPS acceptance.",
+    "Only metadata geometry is retained across records; each primitive proof/tuple belongs to its actual record lease.",
+    "Cold and empty-publication paths retain original behavior; first-zero-frame regression remains in prior functional suite."
+  ]
+}
