@@ -10,7 +10,7 @@
 
 计时保留 `started_monotonic` 供旧采样关联，另以 `started_perf_counter` 和高精度计数器计算 duration，避免 Windows GetTickCount64 将短请求量化为零。自有 PC 观察器允许对明确且尚未消费的忙帧作有限短重试，包括已绑定来源在 mark 中以正数 active 明确报告的 `CallbackBusyMark`。最多三次 read 起点，额外起点须在首次起点后 40ms 内准入，间隔为可取消的 5ms。预算只限制新的请求起点。普通 `ObserverReadRetry` 不因消息文本而获得这项准入。未知错误、真实读失败、映射失败、来源或观察器变化及已消费路径均恢复原节奏。每次重试仍经过生命周期检查，实机刷新间隔须单独验证。
 
-ArkPie 常规轮询显式请求 `native_quiet_boundary_version: 1`。原生引擎在同一互斥锁内运行标记及各 Hook 的 JavaScript；若标记进入时没有任何原生在途调用，之后到达的原生入口会先阻塞在该锁，尚未执行 JS onEnter 或原函数。仅当标记执行未调用 NativeFunction、JS 活动数与 hooks 为空、同次原生绑定确认 PLAYING、卫戍交战范围和精确时钟有效、无错误/重试/终局边界时，才可保持已完成的序号前缀，并将这些新入口留给下一批。结果与计时记录额外保留 `native_deferred_callbacks`。起点已有调用、普通关卡、终局和主动原生调用仍按原规则拒绝；零帧回调继续检查实时活动数，不读标记入口锁存值。读取与 ACK 仍只能达到实际已交付前缀，自有进程并发测试不能代替新包实机更新延迟验收。
+ArkPie 原生引擎由游戏回调发布有界 owned facts，后台单一 QuickJS worker 回放并生成不可变闭合前缀；游戏回调不等待 worker 的 VM 或宿主请求。mark 必须满足请求到达时的 fresh raw-ticket 门槛、当前 mode 和 scope 证据，未完成时只返回真实 retry。read/terminal/ACK 由同一 publication journal 管理，ACK 不能超过实际已交付前缀。旧 `native_quiet_boundary_version` 请求字段不授予任何额外采集或确认权限；当前引擎不再返回 `native_deferred_callbacks`，也不通过阻塞新游戏入口制造静默窗口。具体所有权、水位和终局 fence 见[原生采集 worker](native-capture-worker.md)。自有进程并发测试不能代替实机更新延迟或 FPS 验收。
 
 卫戍按事件统计时，观察者的起止标记分别证明自己的逻辑帧和同一战局归属。MuMu 和 PC 复用 `verified_autochess_event_window`：独立且受守卫的快照须在这段时钟区间内，并与两次标记的进程、战局根、关卡和阶段归属一致。事件批次严格读到结束标记的序号，消费成功后才确认。跨帧时 `autochess_snapshot_anchor` 记录独立快照的帧和时间，显示和回放使用结束标记的事件时钟。此投影只能是 `events_only`，旧累计 rows/global 数值清空，不进入统计或初始点证明。终局、普通关卡和未经认证的阶段继续使用各自原有屏障。
 
