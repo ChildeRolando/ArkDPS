@@ -2,6 +2,7 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const source=fs.readFileSync('event_probe_native_pc.js','utf8');
 const context=vm.createContext({});vm.runInContext(source.slice(source.indexOf('function captureModeState('),source.indexOf('const probeAdapter=')),context);
+vm.runInContext(source.slice(source.indexOf('function finalizeNativeCapturePlan('),source.indexOf('function nativeCaptureScopeGraph(')),context);
 const auto=fs.readFileSync('event_probe_autochess.js','utf8');
 vm.runInContext(auto.slice(auto.indexOf('function autoCollectionMode('),auto.indexOf('function autoEventOwner(')),context);
 vm.runInContext(`

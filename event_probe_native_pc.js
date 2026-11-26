@@ -227,7 +227,9 @@ function captureNativeInvocationRead(scope,read){
 function prepareNativeCaptureHook(address,callbacks){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;
  if(!nativeCaptureMetadata||typeof callbacks.arkdpsName!=='string')throw new Error('native hook capture metadata/name missing');
- callbacks.arkdpsCaptureContract={...nativeCapturePlan(callbacks.arkdpsName,address,nativeCaptureMetadata),mode_epoch:nativeCaptureModeEpoch};
+ const plan=nativeCapturePlan(callbacks.arkdpsName,address,nativeCaptureMetadata);
+ const capabilities=typeof __nativeCaptureCapabilities==='function'?__nativeCaptureCapabilities():null;
+ callbacks.arkdpsCaptureContract={...finalizeNativeCapturePlan(plan,nativeCaptureMetadata,capabilities),mode_epoch:nativeCaptureModeEpoch};
  for(const edge of ['onEnter','onLeave'])if(typeof callbacks[edge]==='function'){
   const callback=callbacks[edge];
   callbacks[edge]=function(...args){
@@ -484,6 +486,27 @@ function nativeCapturePlan(name,address,metadata){
   required_projections:['live_scope_guards','same_point_class_ancestry',...(profile==='modifier'?['open_parent_checkpoint','token_host_and_character_form']:[]),...(profile==='boundary'?['full_native_binding']:[]),...(profile==='shield'?['current_buff_and_blackboard_keys']:[])]};
 }
 // Publish only the already verified address/expected graph. The callback still
+// This is a compatibility gate, not an assertion that native lowering exists.
+// The engine independently checks every retained required_projections name.
+function finalizeNativeCapturePlan(plan,metadata,capabilities){
+ const required=['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys'];
+ if(capabilities===null||capabilities===undefined)return {...plan,complete:false};
+ if(capabilities.version!==1||capabilities.raw_collection!=='all'||!Array.isArray(capabilities.lowered_projections)||
+    capabilities.lowered_projections.some(name=>typeof name!=='string')||new Set(capabilities.lowered_projections).size!==capabilities.lowered_projections.length)
+  throw new Error('unsupported native capture capabilities');
+ const lowered=new Set(capabilities.lowered_projections);
+ const cold=metadata.cold_plan,fields=cold?.fields;
+ const coldReady=metadata.cold_metadata_ready===true&&metadata.immutable_class_parents===true&&
+  Array.isArray(cold?.projections)&&cold.projections.length>0&&Array.isArray(fields)&&fields.length===3&&
+  fields[0].role==='cold.root_open'&&fields[0].guard_side==='before'&&fields[0].required===true&&
+  fields[1].role==='cold.body'&&fields[1].required===false&&fields[1].guard_side==='none'&&
+  fields[2].role==='cold.root_close'&&fields[2].guard_side==='after'&&fields[2].required===true&&
+  fields[0].guard_id>0&&fields[0].guard_id===fields[2].guard_id&&fields[0].projection_root===fields[2].projection_root;
+ const ownedPoints=['__arkdpsReplayPoint','__arkdpsReplayWitness','__arkdpsReplayCheckpoint','__arkdpsReplayOptional','__arkdpsReplayEnd','__arkdpsOwnedRead']
+  .every(name=>typeof globalThis[name]==='function');
+ return {...plan,complete:plan.raw_collection==='all'&&coldReady&&ownedPoints&&required.every(name=>lowered.has(name))&&
+  plan.required_projections.every(name=>lowered.has(name))};
+}
 // copies both live observations; no cached HP/phase/round value is evidence.
 function nativeCaptureScopeGraph(cache,stage,clockAddress,revision){
  if(!Number.isSafeInteger(revision)||revision<=0)throw new Error('invalid capture scope revision');

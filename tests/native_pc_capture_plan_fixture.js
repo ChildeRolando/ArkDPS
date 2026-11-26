@@ -34,3 +34,23 @@ console.log('PASS_CAPTURE_SCOPE_GRAPH independent singleton/owner/clock/account 
 const frozenHp=context.nativeCapturePlan('hp.Entity.SetHpInternal',{toString:()=> '0x9000'},{...meta,immutable_class_parents:true});assert(frozenHp.fields.every(f=>!f.name.includes('lineage')));assert.equal(frozenHp.fields.length,11);assert(frozenHp.fields.find(f=>f.name==='hp.identity'&&f.bytes===0x1c));assert(frozenHp.fields.find(f=>f.name==='hp.closing'&&f.offset===0x18&&f.bytes===0x30));assert(frozenHp.fields.filter(f=>f.tier==='changed').length===2);
 const rawModifier=context.nativeCapturePlan('Entity.ApplyModifier',{toString:()=> '0x9000'},meta),frozenModifier=context.nativeCapturePlan('Entity.ApplyModifier',{toString:()=> '0x9000'},{...meta,immutable_class_parents:true});assert(frozenModifier.fields.length<rawModifier.fields.length);
 console.log('PASS_CAPTURE_FROZEN_LINEAGE modifier '+rawModifier.fields.length+' -> '+frozenModifier.fields.length+' fields; HP exact 11-field plan/no cached live object values');
+
+// Fake capability API checks only the source compatibility gate. It is not
+// evidence that the corresponding native producer operations are implemented.
+const required=['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys'];
+const capabilities={version:1,raw_collection:'all',lowered_projections:required};
+const coldMeta={...meta,cold_metadata_ready:true,immutable_class_parents:true,cold_plan:{projections:[{}],fields:[
+ {role:'cold.root_open',required:true,guard_side:'before',guard_id:1,projection_root:0},
+ {role:'cold.body',required:false,guard_side:'none',guard_id:0,projection_root:0},
+ {role:'cold.root_close',required:true,guard_side:'after',guard_id:1,projection_root:0}]}};
+for(const name of ['__arkdpsReplayPoint','__arkdpsReplayWitness','__arkdpsReplayCheckpoint','__arkdpsReplayOptional','__arkdpsReplayEnd','__arkdpsOwnedRead'])context[name]=()=>{};
+const finish=(m=coldMeta,caps=capabilities)=>context.finalizeNativeCapturePlan(hp,m,caps);
+assert.equal(finish().complete,true);assert.deepEqual([...finish().required_projections],[...hp.required_projections]);
+for(const name of required)assert.equal(finish(coldMeta,{...capabilities,lowered_projections:required.filter(x=>x!==name)}).complete,false,name);
+assert.equal(finish(coldMeta,null).complete,false);assert.equal(finish({...coldMeta,cold_metadata_ready:false}).complete,false);
+assert.equal(finish({...coldMeta,immutable_class_parents:false}).complete,false);assert.equal(finish({...coldMeta,cold_plan:null}).complete,false);
+const invalidCold=JSON.parse(JSON.stringify(coldMeta.cold_plan));invalidCold.fields[2].role='cold.body';assert.equal(finish({...coldMeta,cold_plan:invalidCold}).complete,false);
+const witness=context.__arkdpsReplayWitness;delete context.__arkdpsReplayWitness;assert.equal(finish().complete,false);context.__arkdpsReplayWitness=witness;
+assert.throws(()=>finish(coldMeta,{...capabilities,raw_collection:'local'}));assert.throws(()=>finish(coldMeta,{...capabilities,version:2}));
+assert.throws(()=>finish(coldMeta,{...capabilities,lowered_projections:[...required,required[0]]}));
+console.log('PASS_CAPTURE_CAPABILITY_GATE fake API only; six operations/raw-all/cold/owned-points mandatory, requirements retained');
