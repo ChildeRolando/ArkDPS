@@ -18,23 +18,36 @@ source=source.replace("hooks.push(Interceptor.attach(base.add(offset), {",r"""
  hooks.push(Interceptor.attach(address, {arkdpsCaptureContract:contract,
 """)
 source=source.replace("if(name==='Slow')activity.writeU64(1);",'').replace("if(name==='Slow')activity.writeU64(0);",'')
-source=source.replace('this.serial = ++serial;',"this.serial = ++serial; if(serial===1){const until=Date.now()+400;while(Date.now()<until){}}")
+source=source.replace("records.push({phase:'enter',name,serial:this.serial,values});","records.push({phase:'enter',name,serial:this.serial,values,mode_epoch:this.modeEpoch});")
+source=source.replace("const record={phase:'leave',name,serial:this.serial};","const record={phase:'leave',name,serial:this.serial,mode_epoch:this.modeEpoch};")
+source=source.replace('this.serial = ++serial;',"this.serial = ++serial; this.modeEpoch=this.nativeCaptureModeEpoch; if(serial===1){const until=Date.now()+400;while(Date.now()<until){}}")
 source=source.replace("if(name==='Sret')record.values=", "if(name==='Sret')__arkdpsReplayRole('leave',0,1); if(name==='Sret')record.values=")
 source += r"""
 let lastClosedRecord=null,ownedAcknowledged=0,servedThrough=0;
+// API stub tests only engine epoch handoff. Real shared mode-history behavior
+// is independently covered by the native captured-publication JS fixture.
+let ownedMode={version:1,mode_epoch:0,desired_mode:'all',effective_mode:null};
+globalThis.__arkdpsCaptureModeState=()=>({...ownedMode});
+globalThis.__arkdpsInstallCaptureMode=(enabled,barrier)=>{
+ if(typeof enabled!=='boolean'||barrier.version!==1||barrier.mode_epoch!==ownedMode.mode_epoch+1)
+  throw new Error('invalid owned mode epoch install');
+ ownedMode={...ownedMode,mode_epoch:barrier.mode_epoch,desired_mode:enabled?'all':'local'};
+ return {...ownedMode};
+};
 globalThis.__arkdpsPublicationServed=through=>{servedThrough=Math.max(servedThrough,through);};
 const originalAck=rpc.exports.ackEvents;
 rpc.exports.ackEvents=sequence=>{const answer=originalAck(sequence);ownedAcknowledged=answer.acknowledged;return answer;};
 globalThis.__arkdpsOnClosedRecord=record=>{
  if(record.edge!=='leave'||record.closed_after!==true||record.active_after!==0
     ||BigInt(record.activity_end)!==BigInt(record.activity_begin)+1n
-    ||typeof record.ticket!=='string'||typeof record.thread_birth!=='string')
+    ||typeof record.ticket!=='string'||typeof record.thread_birth!=='string'
+    ||record.facts.mode_epoch!==records.at(-1).mode_epoch)
   throw new Error('invalid owned closed record fence');
  lastClosedRecord=Object.freeze({ticket:record.ticket,activity_begin:record.activity_begin,
   activity_end:record.activity_end,active_after:record.active_after,closed_after:record.closed_after});
  const events=records.map((record,index)=>({...record,sequence:index+1}));
  return Object.freeze({mark:{sequence:records.length,epoch:serial,active:0,active_hooks:[],
-  frame:records.length,game_time:records.length/30,error:null,retry:false,stopped:false,
+  frame:records.length,game_time:records.length/30,error:null,retry:false,stopped:false,mode_epoch:record.facts.mode_epoch,
   records:records.slice(),retained_arguments:retainedArgumentProof(),owned_closed_record:lastClosedRecord},
   acknowledged:ownedAcknowledged,events:events.filter(e=>e.sequence>ownedAcknowledged),
   hp_context:[],read_fields:{error:null,stopped:false},terminal_read:null});
@@ -46,10 +59,10 @@ rpc.exports.readEvents=()=>{throw new Error('legacy live read was called');};
 from threading import Thread
 from queue import Queue
 
-def fresh_mark(pipe,fixture):
+def fresh_mark(pipe,fixture,**options):
  result=Queue()
  def request():
-  try: result.put(pipe.request('mark'))
+  try: result.put(pipe.request('mark',**options))
   except BaseException as error: result.put(error)
  pending=Thread(target=request)
  pending.start()
@@ -90,14 +103,18 @@ with tempfile.TemporaryDirectory(prefix='arkdps-async-owned-') as temp:
   terminal=pipe.request('terminal_read',publication_token=token,after=mark['sequence'],through=mark['sequence']); assert terminal['retry'] and terminal['events']==[],terminal
   receipt['terminal_stage_refusal']=terminal
   f.command('start-threads',function='Slow')
-  pending=pipe.request('mark')
+  pending=pipe.request('mark',autochess_enabled=False)
   assert pending.get('retry') is True and pending['native_async_capture']['active']>0,pending
+  assert pending['native_async_capture']['desired_mode_epoch']==1 and pending['native_async_capture']['published_mode_epoch']==0,pending
   receipt['active_original_mark_retry']=pending
   historical=pipe.request('read',publication_token=token,after=mark['sequence'],through=mark['sequence'])
   assert not historical.get('retry') and historical['events']==[],historical
   receipt['historical_read_during_active_original']=historical
   assert f.command('join-threads')['results']==[523]*4
-  assert not fresh_mark(pipe,f).get('retry')
+  newmode=fresh_mark(pipe,f,autochess_enabled=False)
+  assert not newmode.get('retry') and newmode['mode_epoch']==1,newmode
+  assert all(record['mode_epoch']==0 for record in newmode['records'] if record['name']=='Slow')
+  receipt['newmode_mark']=newmode
   disabled=pipe.request('mark',native_timing={'version':1,'enabled':False})
   assert disabled['native_async_capture']['queue_age_available'] is False,disabled
   assert all(lane['maximum_capture_to_replay_qpc'] is None for lane in disabled['native_async_capture']['lane_metrics'])
