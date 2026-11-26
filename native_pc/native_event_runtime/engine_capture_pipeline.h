@@ -92,9 +92,9 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
     }
     // The canonical normal setter defers stampEventScope until a changed
     // closing HP. time(false,false) still consumes both independent clocks.
-    const bool deferred_open_scope=phase==Phase::entry && base.hp_normal && invocation
+    const bool deferred_open_scope=phase==Phase::entry && base.hp_defer_scope && invocation
         && invocation->hp_exact_enemy && !header.publication_request;
-    const CaptureGraph* scope=!cold && !nochange && !deferred_open_scope && !terminal_leave && config && config->scope && config->scope->available
+    const CaptureGraph* scope=!cold && !(nochange && base.hp_defer_scope) && !deferred_open_scope && !terminal_leave && config && config->scope && config->scope->available
         ? config->scope.get() : nullptr;
     Context graph_context=context;
     if (scope) {

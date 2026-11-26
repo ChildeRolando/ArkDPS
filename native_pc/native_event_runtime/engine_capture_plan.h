@@ -27,7 +27,7 @@ struct CompiledPlan {
     std::array<std::uint16_t,3> terminal_guard_fields{};
     bool terminal_destroy=false;
     bool apply_modifier=false, buff_damage=false, parent_checkpoint_fields=false;
-    bool hp_profile=false, hp_dirty=false, hp_normal=false;
+    bool hp_profile=false, hp_dirty=false, hp_normal=false, hp_defer_scope=false;
     std::uintptr_t hp_enemy_class=0;
     std::array<std::uint8_t,max_fields> hp_field_kind{};
     std::unique_ptr<CompiledPlan> cold;
@@ -199,6 +199,9 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
             throw std::runtime_error("unsupported HP early filter layout");
         if (!filter.at("enemy_class").is_null()) result.hp_enemy_class=plan_address(filter.at("enemy_class"));
         result.hp_normal=filter.at("normal_setter").get<bool>();
+        result.hp_defer_scope=filter.value("defer_entry_scope",nlohmann::json(false)).get<bool>();
+        if (result.hp_defer_scope && (!result.hp_normal || result.hp_dirty))
+            throw std::runtime_error("deferred HP scope is not a normal coalesced setter");
         for (unsigned i=0;i<source.at("fields").size();++i) {
             const auto& field=source.at("fields")[i];
             const auto name=field.value("name",std::string());

@@ -101,7 +101,7 @@ int main(){
  auto hpfield=[&](unsigned id,const char* name,const char* phase,unsigned offset,unsigned size) {
    auto f=field(id,"body",phase,"none",0);f["name"]=name;f["absolute_address"]=std::to_string(reinterpret_cast<std::uintptr_t>(enemy.data()+offset));f["bytes"]=size;return f;
  };
- plan["hp_filter"]["attribute_index_arg"]=nullptr;plan["hp_filter"]["normal_setter"]=true;
+ plan["hp_filter"]["attribute_index_arg"]=nullptr;plan["hp_filter"]["normal_setter"]=true;plan["hp_filter"]["defer_entry_scope"]=true;
  plan["fields"]=J::array({field(1,"clock_open","entry","before",1),field(2,"clock_close","entry","after",1),
  hpfield(3,"hp.identity","entry",0,0x1c),hpfield(4,"hp.born","entry",0x25,1),hpfield(5,"hp.before","entry",0x40,8),
  hpfield(6,"hp.id","entry",0x60,8),field(7,"clock_open","leave","before",1),field(8,"clock_close","leave","after",1),
@@ -121,6 +121,13 @@ int main(){
  lane->calls[0].hp_nested_dirty=false;native_reads=0;header={};header.publication_request=1;
  capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
  assert(native_reads==8 && header.publication_captured && !header.scope_unavailable);
+ nochange_plan->hp_defer_scope=false;native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::entry,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==8 && !header.scope_unavailable);
+ native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==5 && !header.scope_unavailable);
+ nochange_plan->hp_defer_scope=true;
  native_reads=0;header={};hpbits++;std::memcpy(enemy.data()+0x40,&hpbits,8);
  capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
  assert(native_reads==6);
