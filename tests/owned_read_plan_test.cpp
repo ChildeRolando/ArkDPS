@@ -62,15 +62,61 @@ static void graph_contract(JSContext* c){
  // Eager batch cannot hide a later genuine structural missing range behind a planned guard failure.
  ss[1].address+=1024;start();value=run(0);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);ss[1].address-=1024;fs[0].error=Error::ok;
  owned::end();value=run(0);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);
+ // Static predicates share the same graph and reader; only field zero is dynamic.
+ auto checked=graph;checked["revision"]=2;
+ for(unsigned i=0;i<33;++i){checked["fields"][i]["projection"]=i==0;if(i)checked["fields"][i]["comparison"]={{"version",1},{"words",Json::array({{{"offset",0},{"kind",i==1?"u8":"u32"},{"value",100+i}}})}};}
+ configurations.publish(checked,false);const auto* check_config=configurations.pin(1);assert(check_config->scope->check_ready);
+ const auto check_run=[&](){start();owned::bind_graphs(check_config,2,0,1);JSValue args[]{JS_NewString(c,"scope"),JS_NewUint32(c,2),JS_NewUint32(c,1)};auto result=owned::graph_check(c,JS_UNDEFINED,3,args);for(auto arg:args)JS_FreeValue(c,arg);return result;};
+ value=check_run();bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&number<std::uint32_t>(bytes,4)==1&&number<std::uint32_t>(bytes,number<std::uint32_t>(bytes,20))==100);JS_FreeValue(c,value);
+ data[4]=std::byte{1};value=check_run();assert(JS_IsUndefined(value)&&owned::binding().error==Error::changed_guard&&owned::binding().graph_failure==1&&!poisoned);JS_FreeValue(c,value);data[4]=std::byte{101};
+ fs[1].error=Error::field_unreadable;value=check_run();assert(JS_IsUndefined(value)&&owned::binding().error==Error::field_unreadable&&!poisoned);JS_FreeValue(c,value);fs[1].error=Error::ok;
+ // Later structural failures override earlier planned comparison uncertainty.
+ data[4]=std::byte{1};ss[2].address+=1000;value=check_run();assert(JS_IsUndefined(value)&&poisoned&&owned::binding().graph_failure==2);JS_FreeValue(c,value);ss[2].address-=1000;data[4]=std::byte{101};
+ owned::end();
  // Batch geometry cannot narrow the capture contract: a legal 129-byte field
  // still publishes, but its optimization program is unavailable.
- auto large=graph;large["revision"]=2;large["fields"][0]["bytes"]=129;
+ auto unsupported=checked;unsupported["revision"]=3;unsupported["fields"][0]["comparison"]=nullptr;unsupported["fields"][32]["comparison"]="unreached unsupported metadata";
+ configurations.publish(unsupported,false);assert(!configurations.pin(1)->scope->check_ready);
+ auto large=graph;large["revision"]=4;large["fields"][0]["bytes"]=129;
  configurations.publish(large,false);const auto* large_config=configurations.pin(1);
  assert(large_config&&large_config->scope->code&&large_config->scope->read_chunks.empty());
  assert(configurations.find(config->id)==config);
  const auto old_id=config->id;configurations.collect_quiescent(1);assert(configurations.find(old_id)==nullptr);
  assert(configurations.find(large_config->id)==large_config);
 
+}
+static void string_number_graph(JSContext* c){
+ CaptureConfigurations configs;
+ const Json word={{"offset",0},{"kind","u64_number"},{"value",0}};
+ Json field{{"field_id",1},{"phase","checkpoint"},{"role","body"},{"root","absolute"},{"absolute_address","0x2000"},{"pointer_offsets",Json::array()},
+  {"offset",0},{"bytes",0},{"kind","utf16"},{"max_units",200},{"expected_class","0x5000"},{"required",true},{"guard_id",0},{"guard_side","none"},
+  {"projection",false},{"comparison",{{"version",1},{"words",Json::array()},{"utf16",Json::array({65,0,0x4e2d,0xd800,0xd83d,0xde00})}}}};
+ Json graph{{"version",1},{"revision",1},{"mode_epoch",1},{"available",true},{"raw_collection","all"},{"body_insertion_index",1},{"fields",Json::array({field})}};
+ configs.publish(graph,false);
+ const auto run=[&](const CaptureConfiguration* config,bool alter=false,std::uint64_t integer=0,int length=-1){
+  fixture();if(alter)payload[150]=std::byte{7};else if(config->scope->revision>1)std::memcpy(payload.data(),&integer,8);
+  if(length>=0)std::memcpy(payload.data()+144,&length,4);
+  const auto& op=config->scope->code->plan->fields[0];
+  for(unsigned i=0;i<4;++i){segments[i].field_id=op.id;segments[i].role=op.role;}
+  fields[0].id=op.id;fields[0].role=op.role;
+  assert(owned::begin(segments.data(),4,fields.data(),1,payload.data(),172,configs.roles,17,Error::ok)==Error::ok);
+  owned::bind_graphs(config,config->scope->revision,0,1,3);
+  JSValue args[]{JS_NewString(c,"scope"),JS_NewFloat64(c,config->scope->revision),JS_NewUint32(c,1)};
+  auto value=owned::graph_check(c,JS_UNDEFINED,3,args);for(auto arg:args)JS_FreeValue(c,arg);return value;
+ };
+ auto value=run(configs.pin(1));std::size_t size=0;assert(JS_GetArrayBuffer(c,&size,value)&&size==16);JS_FreeValue(c,value);
+ value=run(configs.pin(1),true);assert(JS_IsUndefined(value)&&owned::binding().error==Error::changed_guard&&!poisoned);JS_FreeValue(c,value);
+ graph["revision"]=2;graph["fields"][0]["comparison"]["utf16"]=Json::array();configs.publish(graph,false);
+ value=run(configs.pin(1),false,0,0);assert(!JS_IsUndefined(value));JS_FreeValue(c,value);
+ const std::uint64_t integers[]{0,std::uint64_t{1}<<53,(std::uint64_t{1}<<53)+1,(std::uint64_t{1}<<53)+3,(std::uint64_t{1}<<63)+1,UINT64_MAX};
+ const double expected[]{0,9007199254740992.0,9007199254740992.0,9007199254740996.0,9223372036854775808.0,18446744073709551616.0};
+ graph["fields"][0]["kind"]="bytes";graph["fields"][0]["bytes"]=8;graph["fields"][0]["absolute_address"]="0x1000";graph["fields"][0].erase("max_units");graph["fields"][0].erase("expected_class");
+ for(unsigned i=0;i<6;++i){
+  const auto expression="Number("+std::to_string(integers[i])+"n)";auto result=JS_Eval(c,expression.data(),expression.size(),"number-parity.js",JS_EVAL_TYPE_GLOBAL);double js=0;assert(!JS_IsException(result)&&JS_ToFloat64(c,&js,result)==0&&js==expected[i]);JS_FreeValue(c,result);
+  graph["revision"]=i+3;auto predicate=word;predicate["value"]=js;graph["fields"][0]["comparison"]={{"version",1},{"words",Json::array({predicate})}};configs.publish(graph,false);
+  value=run(configs.pin(1),false,integers[i]);assert(!JS_IsUndefined(value)&&!poisoned);JS_FreeValue(c,value);
+ }
+ owned::end();
 }
 int main(){
  auto* rt=JS_NewRuntime();auto* c=JS_NewContext(rt);owned::install(c,[]() noexcept{poisoned=true;});
@@ -106,6 +152,16 @@ int main(){
  fixture(Error::ok,Error::ok,true);value=batch(c,id,1,1,0x7000);assert(JS_IsUndefined(value)&&owned::binding().error==Error::missing_plan_field&&poisoned);JS_FreeValue(c,value);
  fixture(Error::field_unreadable);value=batch(c,id,1);bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&number<std::uint16_t>(bytes,16)==5&&!poisoned);JS_FreeValue(c,value);
  fixture();owned::end();value=batch(c,id,1);assert(JS_IsUndefined(value)&&poisoned);JS_FreeValue(c,value);
- graph_contract(c);
+ fixture();
+ owned::ReadPlan predicate;predicate.tiers=1;
+ owned::ReadPlanField units;units.role_id=1;units.selector=-2;units.expected_field_id=7;units.tier=1;units.current_checkpoint=true;units.absolute_root=true;units.absolute=0x2000;units.kind=1;units.max_units=200;units.compare_utf16=true;units.utf16={65,0,0x4e2d,0xd800,0xd83d,0xde00};predicate.fields.push_back(units);
+ value=owned::execute_read_batch(c,predicate,1,0,3,true);bytes=JS_GetArrayBuffer(c,&size,value);assert(bytes&&size==16&&number<std::uint32_t>(bytes,4)==0&&!poisoned);JS_FreeValue(c,value);
+ payload[150]=std::byte{7};value=owned::execute_read_batch(c,predicate,1,0,3,true);assert(JS_IsUndefined(value)&&owned::binding().error==Error::changed_guard&&!poisoned);JS_FreeValue(c,value);
+ fixture();predicate.fields.clear();units={};units.role_id=1;units.selector=-2;units.tier=1;units.current_checkpoint=true;units.absolute_root=true;units.absolute=0x1000;units.bytes=8;owned::ReadPlanField numeric=units;arkdps::capture::OwnedReadWord word;word.kind=2;numeric.words.push_back(word);predicate.fields.push_back(numeric);
+ for(const auto integer:{std::uint64_t{0},std::uint64_t{1}<<53,(std::uint64_t{1}<<53)+1,(std::uint64_t{1}<<53)+3,UINT64_MAX}){
+  std::memcpy(payload.data(),&integer,8);predicate.fields[0].words[0].number=static_cast<double>(integer);
+  value=owned::execute_read_batch(c,predicate,1,0,3,true);assert(!JS_IsUndefined(value)&&!poisoned);JS_FreeValue(c,value);
+ }
+ graph_contract(c);string_number_graph(c);
  JS_FreeContext(c);JS_FreeRuntime(rt);std::cout<<"PASS owned read plans: raw tiers/UTF16/immutable ABI/metadata/seal/guard priority/concurrent/range/lease\n";
 }

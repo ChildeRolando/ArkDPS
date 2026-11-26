@@ -96,4 +96,29 @@ const before=graphCalls;globalThis.graphUnsupported=__arkdpsOwnedGraphReadBatch(
 `,c);
 assert.equal(c.oldGraph,null);assert.equal(c.graphValue,'111');assert.equal(c.graphPinned,'111');assert.equal(c.graphText,0x4e2d);assert(c.graphEnd.complete);
 assert(c.graphReplace&&!c.graphReplaceEnd.complete);assert(c.graphPlanned&&c.graphPlannedEnd.complete);assert.equal(c.graphUnsupported,null);assert(c.unsupportedNoCall&&c.unsupportedEnd.complete);
+vm.runInContext(`
+mode='ok';
+const checkGraph=Object.freeze({revision:9,mode_epoch:2,fields:Object.freeze([
+ Object.freeze({role:'scope.static',root:'absolute',kind:'bytes',bytes:4,projection:false,comparison:{version:1,words:[{offset:0,kind:'u32',value:73}]}}),
+ Object.freeze({role:'scope.dynamic',root:'absolute',kind:'bytes',bytes:8,projection:true})])});
+__arkdpsReplayBegin(nativeRecord());globalThis.noCheck=__arkdpsOwnedGraphCheck('scope',checkGraph);__arkdpsReplayEnd();
+const checkPlan=plans.push({metadata:45,spec:{fields:[{tier:1,bytes:8}]}});
+function checkExecute(kind,revision,epoch){
+ if(arguments.length!==3||kind!=='scope'||revision!==9||epoch!==2)throw Error('check ABI');
+ if(mode==='check-failure'){status=8;return;}
+ return execute(checkPlan,45,4096n,1,3);
+}
+globalThis.__nativeOwnedGraphCheck=checkExecute;globalThis.__nativeOwnedGraphFailure=()=>0;
+__arkdpsReplayBegin(nativeRecord());const proof=__arkdpsOwnedGraphCheck('scope',checkGraph);
+globalThis.proofGood=__arkdpsVerifiedGraphProof(proof,'scope',checkGraph)&&Object.isFrozen(proof);
+globalThis.proofForged=__arkdpsVerifiedGraphProof({},'scope',checkGraph)||__arkdpsVerifiedGraphProof(true,'scope',checkGraph)||__arkdpsVerifiedGraphProof(proof,'publication',checkGraph);
+globalThis.proofValue=proof.slot(1).getBigUint64(0,true).toString();globalThis.proofEnd=__arkdpsReplayEnd();
+__arkdpsReplayBegin(nativeRecord());globalThis.proofExpired=__arkdpsVerifiedGraphProof(proof,'scope',checkGraph);globalThis.proofExpiredSlot=rejects(()=>proof.slot(1));globalThis.proofExpiredEnd=__arkdpsReplayEnd();
+__arkdpsReplayBegin(nativeRecord());const another=__arkdpsOwnedGraphCheck('scope',checkGraph);globalThis.proofStatic=rejects(()=>another.slot(0));globalThis.proofStaticEnd=__arkdpsReplayEnd();
+mode='check-failure';__arkdpsReplayBegin(nativeRecord());globalThis.checkFailure=rejects(()=>__arkdpsOwnedGraphCheck('scope',checkGraph));globalThis.checkFailureEnd=__arkdpsReplayEnd();
+mode='ok';__arkdpsReplayBegin(nativeRecord());const unsupported={...checkGraph,fields:[{...checkGraph.fields[0],comparison:null,projection:true}]};globalThis.checkUnsupported=__arkdpsOwnedGraphCheck('scope',unsupported);globalThis.checkUnsupportedEnd=__arkdpsReplayEnd();
+`,c);
+assert.equal(c.noCheck,null);assert(c.proofGood&&!c.proofForged);assert.equal(c.proofValue,'111');assert(c.proofEnd.complete);
+assert(!c.proofExpired&&c.proofExpiredSlot&&!c.proofExpiredEnd.complete);assert(c.proofStatic&&!c.proofStaticEnd.complete);
+assert(c.checkFailure&&c.checkFailureEnd.complete);assert.equal(c.checkFailureEnd.unreadable_reads,1);assert.equal(c.checkUnsupported,null);assert(c.checkUnsupportedEnd.complete);
 assert.equal(c.liveCount,0);console.log('PASS owned read batch facade: slots/UTF16/planned/tiers/providerpin/metadatahandle/malformed/registration/no fallback');

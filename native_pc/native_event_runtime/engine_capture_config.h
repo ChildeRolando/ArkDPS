@@ -1,6 +1,7 @@
 #pragma once
 #include "engine_capture_plan.h"
 #include <atomic>
+#include <cmath>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -16,6 +17,7 @@ struct CaptureGraph {
     std::uint16_t body_insertion=0;
     std::unique_ptr<CompiledPlan> code;
     std::vector<OwnedReadProgram> read_chunks;
+    OwnedReadProgram check_program;bool check_ready=false;
 };
 struct CaptureConfiguration {
     std::uint64_t id=0, mode_epoch=0;
@@ -71,6 +73,44 @@ public:
                 op.current_checkpoint=true;
                 auto& chunk=next->read_chunks.back();chunk.tiers=1;chunk.fields.push_back(std::move(op));
             }
+        }
+        if(next->available&&!next->read_chunks.empty()) {
+            nlohmann::json original=nlohmann::json::array();
+            if(publication){for(const auto& chunk:graph.at("chunks"))for(const auto& field:chunk.at("fields"))original.push_back(field);}
+            else original=graph.at("fields");
+            bool supported=true;unsigned projected=0,index=0;
+            for(const auto& chunk:next->read_chunks) {
+              if(!supported)break;
+              for(auto op:chunk.fields) {
+                const auto& field=original.at(index++);
+                if(!field.contains("projection")||(field.contains("comparison")&&field.at("comparison").is_null())){supported=false;break;}
+                op.project=field.at("projection").get<bool>();projected+=op.project;
+                if(!field.contains("comparison")&&!op.project){supported=false;break;}
+                const auto comparison=field.value("comparison",nlohmann::json{{"version",1},{"words",nlohmann::json::array()}});
+                if(!comparison.is_object()||comparison.size()<2||comparison.size()>3||plan_uint(comparison.at("version"),1)!=1
+                    ||!comparison.at("words").is_array()||comparison.at("words").size()>64)
+                    throw std::runtime_error("invalid graph comparison");
+                for(auto it=comparison.begin();it!=comparison.end();++it)if(it.key()!="version"&&it.key()!="words"&&it.key()!="utf16")throw std::runtime_error("unknown graph comparison");
+                for(const auto& word:comparison.at("words")) {
+                    if(!word.is_object()||word.size()!=3)throw std::runtime_error("invalid graph word");
+                    OwnedReadWord value;value.offset=plan_uint(word.at("offset"),128);const auto kind=word.at("kind").get<std::string>();
+                    value.kind=kind=="u8"?0:kind=="u32"?1:kind=="u64_number"?2:255;
+                    const unsigned bytes=value.kind==0?1:value.kind==1?4:8;
+                    if(value.kind==255||op.kind||value.offset>op.bytes||bytes>op.bytes-value.offset)throw std::runtime_error("graph word range");
+                    if(value.kind<2)value.bits=plan_uint(word.at("value"),value.kind==0?255:UINT32_MAX);
+                    else {value.number=word.at("value").get<double>();if(!std::isfinite(value.number)||value.number<0||value.number>18446744073709551616.0)throw std::runtime_error("graph number comparison");}
+                    op.words.push_back(value);
+                }
+                if(comparison.contains("utf16")) {
+                    if(!op.kind||!comparison.at("utf16").is_array()||comparison.at("utf16").size()>op.max_units)throw std::runtime_error("graph string comparison");
+                    op.compare_utf16=true;for(const auto& unit:comparison.at("utf16"))op.utf16.push_back(plan_uint(unit,65535));
+                }
+                if(!op.project&&op.words.empty()&&!op.compare_utf16)throw std::runtime_error("empty static graph comparison");
+                next->check_program.fields.push_back(std::move(op));
+              }
+            }
+            next->check_ready=supported&&projected<=32&&index==original.size();
+            if(!next->check_ready)next->check_program.fields.clear();else next->check_program.tiers=1;
         }
         if (!publication && next->available) {
             next->body_insertion=plan_uint(graph.at("body_insertion_index"),next->code->plan->field_count);

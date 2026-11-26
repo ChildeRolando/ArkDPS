@@ -15,6 +15,7 @@ namespace arkdps::owned_js {
 // consumer buffer only for the current replay lease, never game memory.
 constexpr unsigned read_plan_slots=32, read_plan_limit=32, read_batch_bytes=16384;
 static_assert(16+read_plan_slots*16+read_plan_slots*(12+capture::max_string_units*2)<=read_batch_bytes,"owned read batch output bound");
+static_assert(16+read_plan_slots*16+(read_plan_slots+1)*(12+capture::max_string_units*2)<=read_batch_bytes,"graph projected output plus one static scratch bound");
 using ReadPlanField=capture::OwnedReadField;
 using ReadPlan=capture::OwnedReadProgram;
 struct Binding {
@@ -30,6 +31,7 @@ struct Binding {
     const capture::CaptureConfiguration* configuration=nullptr;
     std::uint64_t scope_revision=0,publication_revision=0,graph_mode=0;
     std::uint32_t graph_checkpoint=0;
+    std::uint32_t graph_failure=UINT32_MAX;
     bool read_plans_open=true;
     std::vector<ReadPlan> read_plans;
 };
@@ -220,14 +222,17 @@ inline JSValue register_read_plan(JSContext* c,JSValueConst,int count,JSValueCon
         return JS_ThrowInternalError(c,"invalid owned read plan");
     }
 }
-inline JSValue execute_read_batch(JSContext* c,const ReadPlan& plan,unsigned mask,std::uintptr_t base,std::uint32_t checkpoint) {
-    auto& owner=binding();
-    std::array<std::byte,read_batch_bytes> output;const auto head=16+16*plan.fields.size();std::size_t cursor=head;
+inline JSValue execute_read_batch(JSContext* c,const ReadPlan& plan,unsigned mask,std::uintptr_t base,std::uint32_t checkpoint,bool check=false) {
+    auto& owner=binding();unsigned slots=plan.fields.size();
+    if(check){slots=0;for(const auto& field:plan.fields)slots+=field.project;}
+    if(slots>32){error(capture::Error::invalid_plan);return JS_UNDEFINED;}
+    std::array<std::byte,read_batch_bytes> output;const auto head=16+16*slots;std::size_t cursor=head;
+    auto first_error=capture::Error::ok;std::uint32_t first_index=UINT32_MAX;unsigned projected=0;
     const auto put=[&](std::size_t at,auto value){std::memcpy(output.data()+at,&value,sizeof value);};
-    put(0,std::uint32_t{1});put(4,static_cast<std::uint32_t>(plan.fields.size()));put(8,static_cast<std::uint32_t>(mask));
+    put(0,std::uint32_t{1});put(4,static_cast<std::uint32_t>(slots));put(8,static_cast<std::uint32_t>(mask));
     for(std::size_t i=0;i<plan.fields.size();++i) {
-        const auto& field=plan.fields[i];const auto entry=16+i*16;const auto start=cursor;
-        put(entry,std::uint16_t{0xffff});put(entry+2,static_cast<std::uint16_t>(field.kind));put(entry+4,std::uint32_t{0});put(entry+8,std::uint32_t{0});put(entry+12,std::uint32_t{0});
+        const auto& field=plan.fields[i];const bool emit=!check||field.project;const auto entry=16+(check?projected:i)*16;const auto start=cursor;
+        if(emit){++projected;put(entry,std::uint16_t{0xffff});put(entry+2,static_cast<std::uint16_t>(field.kind));put(entry+4,std::uint32_t{0});put(entry+8,std::uint32_t{0});put(entry+12,std::uint32_t{0});}
         if(!(mask&field.tier))continue;
         auto status=capture::Error::ok;const auto role_id=field.role_id?field.role_id:owner.role_index.find(*owner.roles,field.role);
         const auto cp=field.current_checkpoint?checkpoint:field.checkpoint;
@@ -262,11 +267,27 @@ inline JSValue execute_read_batch(JSContext* c,const ReadPlan& plan,unsigned mas
             if(status==capture::Error::ok&&(units<0||static_cast<unsigned>(units)>field.max_units))status=capture::Error::invalid_length;
             if(status==capture::Error::ok){put(cursor+8,units);read(add(address,20),units*2,output.data()+cursor+12);if(status==capture::Error::ok)cursor+=12+units*2;}
         }
-        if(capture::OwnedReplayView::structural(status)){error(status);return JS_UNDEFINED;}
+        if(check&&status==capture::Error::ok) {
+            for(const auto& word:field.words){
+                const auto* data=output.data()+start+word.offset;bool equal=false;
+                if(word.kind==0){std::uint8_t value;std::memcpy(&value,data,1);equal=value==word.bits;}
+                else if(word.kind==1){std::uint32_t value;std::memcpy(&value,data,4);equal=value==word.bits;}
+                else {std::uint64_t value;std::memcpy(&value,data,8);equal=static_cast<double>(value)==word.number;}
+                if(!equal){status=capture::Error::changed_guard;break;}
+            }
+            if(status==capture::Error::ok&&field.compare_utf16){
+                std::int32_t length;std::memcpy(&length,output.data()+start+8,4);
+                if(length!=static_cast<std::int32_t>(field.utf16.size())||(!field.utf16.empty()&&std::memcmp(output.data()+start+12,field.utf16.data(),field.utf16.size()*2)!=0))status=capture::Error::changed_guard;
+            }
+        }
+        if(capture::OwnedReplayView::structural(status)){owner.graph_failure=i;error(status);return JS_UNDEFINED;}
+        if(check&&status!=capture::Error::ok&&first_error==capture::Error::ok){first_error=status;first_index=i;}
+        if(!emit){cursor=start;continue;}
         put(entry,static_cast<std::uint16_t>(status));
         if(status==capture::Error::ok){put(entry+4,static_cast<std::uint32_t>(start));put(entry+8,static_cast<std::uint32_t>(cursor-start));}
         else cursor=start;
     }
+    if(first_error!=capture::Error::ok){owner.graph_failure=first_index;error(first_error);return JS_UNDEFINED;}
     put(12,static_cast<std::uint32_t>(cursor-head));error(capture::Error::ok);
     return allocated(JS_NewArrayBufferCopy(c,reinterpret_cast<const std::uint8_t*>(output.data()),cursor));
 }
@@ -290,11 +311,11 @@ inline void bind_graphs(const capture::CaptureConfiguration* config,std::uint64_
     auto& owner=binding();owner.configuration=config;owner.scope_revision=scope;
     owner.publication_revision=publication;owner.graph_mode=mode;owner.graph_checkpoint=checkpoint;
 }
-inline JSValue graph_read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args) {
-    auto& owner=binding();owner.js_exception=false;double revision=0,mode=0,chunk=0;
-    if(count!=4||!owner.active||!owner.configuration||!JS_IsString(args[0])
+inline JSValue graph_batch(JSContext* c,int count,JSValueConst* args,bool check) {
+    auto& owner=binding();owner.js_exception=false;owner.graph_failure=UINT32_MAX;double revision=0,mode=0,chunk=0;
+    if(count!=(check?3:4)||!owner.active||!owner.configuration||!JS_IsString(args[0])
         ||!number(c,args[1],revision,1,9007199254740991.0)
-        ||!number(c,args[2],mode,0,9007199254740991.0)||!number(c,args[3],chunk,0,65535)) {
+        ||!number(c,args[2],mode,0,9007199254740991.0)||(!check&&!number(c,args[3],chunk,0,65535))) {
         if(!owner.js_exception)error(capture::Error::invalid_plan);
         return unavailable();
     }
@@ -304,10 +325,16 @@ inline JSValue graph_read_batch(JSContext* c,JSValueConst,int count,JSValueConst
     const auto* graph=scope?owner.configuration->scope.get():publication?owner.configuration->publication.get():nullptr;
     const auto recorded=scope?owner.scope_revision:owner.publication_revision;
     if(!graph||!graph->available||revision!=recorded||revision!=graph->revision||mode!=graph->mode_epoch
-        ||mode!=owner.graph_mode||owner.configuration->mode_epoch!=owner.graph_mode||chunk>=graph->read_chunks.size()) {
+        ||mode!=owner.graph_mode||owner.configuration->mode_epoch!=owner.graph_mode||(check?!graph->check_ready:chunk>=graph->read_chunks.size())) {
         error(capture::Error::missing_plan_field);return JS_UNDEFINED;
     }
-    return execute_read_batch(c,graph->read_chunks[static_cast<std::size_t>(chunk)],1,0,owner.graph_checkpoint);
+    return execute_read_batch(c,check?graph->check_program:graph->read_chunks[static_cast<std::size_t>(chunk)],1,0,owner.graph_checkpoint,check);
+}
+inline JSValue graph_read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args){return graph_batch(c,count,args,false);}
+inline JSValue graph_check(JSContext* c,JSValueConst,int count,JSValueConst* args){return graph_batch(c,count,args,true);}
+inline JSValue graph_failure(JSContext* c,JSValueConst,int count,JSValueConst*) {
+    if(count||!binding().active){error(capture::Error::invalid_plan);return JS_UNDEFINED;}
+    return JS_NewUint32(c,binding().graph_failure);
 }
 inline JSValue status(JSContext* c,JSValueConst,int,JSValueConst*) {return JS_NewInt32(c,static_cast<int>(binding().error));}
 inline JSValue point(JSContext* c,JSValueConst,int count,JSValueConst* args) {
@@ -341,7 +368,7 @@ inline void install(JSContext* c,void(*poison)() noexcept) {
     const Entry entries[]{
         {"__nativeOwnedRead",bytes,5},{"__nativeOwnedScalar",scalar,5},{"__nativeOwnedStatus",status,0},
         {"__nativeOwnedPoint",point,2},{"__nativeOwnedLease",lease,1},
-        {"__nativeOwnedGraphReadBatch",graph_read_batch,4},
+        {"__nativeOwnedGraphReadBatch",graph_read_batch,4},{"__nativeOwnedGraphCheck",graph_check,3},{"__nativeOwnedGraphFailure",graph_failure,0},
         {"__nativeOwnedReadPlanRegister",register_read_plan,2},{"__nativeOwnedReadBatch",read_batch,5}};
     for(const auto& entry:entries)JS_SetPropertyStr(c,global,entry.name,JS_NewCFunction(c,entry.function,entry.name,entry.arguments));
     JS_FreeValue(c,global);

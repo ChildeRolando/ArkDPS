@@ -107,13 +107,13 @@ function __arkdpsReplayBegin(record){
  if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('invalid record checkpoint');
  if(record.native_view===true){
   const lease=globalThis.__nativeOwnedLease,read=globalThis.__nativeOwnedRead,scalar=globalThis.__nativeOwnedScalar,
-   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,graphBatch=globalThis.__nativeOwnedGraphReadBatch,batch=globalThis.__nativeOwnedReadBatch,register=globalThis.__nativeOwnedReadPlanRegister;
+   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,graphCheck=globalThis.__nativeOwnedGraphCheck,graphFailure=globalThis.__nativeOwnedGraphFailure,graphBatch=globalThis.__nativeOwnedGraphReadBatch,batch=globalThis.__nativeOwnedReadBatch,register=globalThis.__nativeOwnedReadPlanRegister;
   if(typeof lease!=='function'||typeof read!=='function'||typeof scalar!=='function'||typeof status!=='function'||typeof point!=='function')
    throw new Error('native owned provider unavailable');
   if((batch!==undefined||register!==undefined)&&(typeof batch!=='function'||typeof register!=='function'))throw new Error('native owned batch provider unavailable');
   let native=__arkdpsNativeProvider;
-  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedGraphReadBatch!==graphBatch||native.__nativeOwnedReadBatch!==batch||native.__nativeOwnedReadPlanRegister!==register)
-   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedGraphReadBatch:graphBatch,__nativeOwnedReadBatch:batch,__nativeOwnedReadPlanRegister:register});
+  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedGraphCheck!==graphCheck||native.__nativeOwnedGraphFailure!==graphFailure||native.__nativeOwnedGraphReadBatch!==graphBatch||native.__nativeOwnedReadBatch!==batch||native.__nativeOwnedReadPlanRegister!==register)
+   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedGraphCheck:graphCheck,__nativeOwnedGraphFailure:graphFailure,__nativeOwnedGraphReadBatch:graphBatch,__nativeOwnedReadBatch:batch,__nativeOwnedReadPlanRegister:register});
   if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||native.__nativeOwnedLease(record.ticket)!==true)throw new Error('native owned lease unavailable');
   __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};return;
  }
@@ -269,6 +269,8 @@ function __arkdpsNativeCall(name,a,b,c,d,e){
   const native=__arkdpsReplay.native;
   switch(name){
    case '__nativeOwnedStatus':return native.__nativeOwnedStatus();
+   case '__nativeOwnedGraphFailure':return native.__nativeOwnedGraphFailure();
+   case '__nativeOwnedGraphCheck':return native.__nativeOwnedGraphCheck(a,b,c);
    case '__nativeOwnedPoint':return native.__nativeOwnedPoint(a,b);
    case '__nativeOwnedRead':return native.__nativeOwnedRead(a,b,c,d,e);
    case '__nativeOwnedScalar':return native.__nativeOwnedScalar(a,b,c,d,e);
@@ -374,6 +376,52 @@ function __arkdpsOwnedGraphReadBatch(kind,graph,chunk){
  const bytes=__arkdpsNativeCall('__nativeOwnedGraphReadBatch',kind,geometry.revision,geometry.mode,chunk);
  if(bytes===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
  return new __ArkDpsOwnedBatch(bytes,geometry.chunks[chunk],1);
+}
+const __arkdpsGraphChecks=new WeakMap(),__arkdpsGraphProofs=new WeakMap();
+function __arkdpsVerifiedGraphProof(proof,kind,graph){
+ const state=__arkdpsGraphProofs.get(proof);
+ return state!==undefined&&state.replay===__arkdpsReplay&&state.kind===kind&&state.graph===graph;
+}
+class __ArkDpsVerifiedGraph {
+ constructor(state){__arkdpsGraphProofs.set(this,state);Object.freeze(this);}
+ slot(index){
+  const state=__arkdpsGraphProofs.get(this);
+  if(!state||state.replay!==__arkdpsReplay)__arkdpsReplayGap('owned graph proof lease ended');
+  const projected=state.geometry.indices[index];
+  if(!Number.isInteger(index)||index<0||projected===undefined||projected<0)__arkdpsReplayGap('unprojected owned graph field');
+  return state.batch.slot(projected);
+ }
+}
+function __arkdpsOwnedGraphCheck(kind,graph){
+ const replay=__arkdpsReplay;
+ if(!replay?.native)__arkdpsReplayGap('owned graph check requires native replay');
+ const native=replay.native;
+ if(native.__nativeOwnedGraphCheck===undefined&&native.__nativeOwnedGraphFailure===undefined)return null;
+ if(typeof native.__nativeOwnedGraphCheck!=='function'||typeof native.__nativeOwnedGraphFailure!=='function'||
+    (kind!=='scope'&&kind!=='publication')||!graph||typeof graph!=='object'||
+    !Number.isSafeInteger(graph.revision)||graph.revision<=0||!Number.isSafeInteger(graph.mode_epoch)||graph.mode_epoch<0)__arkdpsReplayGap('invalid owned graph check');
+ let geometry=__arkdpsGraphChecks.get(graph);
+ if(!geometry){
+  const fields=kind==='scope'?graph.fields:graph.chunks?.flatMap(part=>part.fields);
+  if(!Array.isArray(fields)||!fields.length)__arkdpsReplayGap('invalid owned graph comparison fields');
+  if(fields.some(f=>!f||typeof f.projection!=='boolean'||f.comparison===null||(!f.projection&&f.comparison===undefined)||
+    f.root!=='absolute'||!['bytes','utf16'].includes(f.kind)||(f.kind==='bytes'?f.bytes<1||f.bytes>128:f.max_units<1||f.max_units>200)))return null;
+  const projected=[],indices=[];
+  for(const field of fields){indices.push(field.projection?projected.length:-1);if(field.projection)projected.push(field);}
+  if(projected.length>32)return null;
+  geometry=Object.freeze({kind,fields:Object.freeze([...fields]),indices:Object.freeze(indices),revision:graph.revision,mode:graph.mode_epoch,
+   tiers:Object.freeze(projected.map(()=>1)),kinds:Object.freeze(projected.map(f=>f.kind==='utf16'?1:0)),sizes:Object.freeze(projected.map(f=>f.kind==='utf16'?f.max_units:f.bytes))});
+  __arkdpsGraphChecks.set(graph,geometry);
+ }
+ if(geometry.kind!==kind||geometry.revision!==graph.revision||geometry.mode!==graph.mode_epoch)__arkdpsReplayGap('owned graph comparison geometry changed');
+ const bytes=__arkdpsNativeCall('__nativeOwnedGraphCheck',kind,geometry.revision,geometry.mode);
+ if(bytes===undefined){
+  const status=__arkdpsNativeCall('__nativeOwnedStatus'),index=__arkdpsNativeCall('__nativeOwnedGraphFailure');
+  if(Number.isInteger(index)&&index>=0&&index<geometry.fields.length)return __arkdpsReplayCheckpoint(geometry.fields[index].role,replay.record.checkpoint??0,()=>__arkdpsNativeReadFailure(status));
+  __arkdpsNativeReadFailure(status);
+ }
+ const batch=new __ArkDpsOwnedBatch(bytes,geometry,1);
+ return new __ArkDpsVerifiedGraph({replay,kind,graph,geometry,batch});
 }
 function __arkdpsOwnedScalar(address,kind){
  const replay=__arkdpsReplay;

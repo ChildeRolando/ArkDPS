@@ -297,3 +297,34 @@ Other legal geometry keeps the original capture contract and is statically
 selected for strict scalar reading; missing old-provider API does the same.
 Present-helper execution errors never fall back. Offline semantic PASS does
 not establish sustained production throughput or game FPS improvement.
+
+
+### Fixed graph comparisons and dynamic projections
+
+Graph fields can declare `projection: true` for values that remain interpreted
+by the shared JS owner, or `projection: false` with a fixed comparison:
+`{version:1, words:[{offset,kind,value}], utf16?:[uint16,...]}`. Word kinds are
+u8, u32 raw bits, or u64_number (the existing Number(U64) interpretation).
+Pointers use two u32 words; UTF16 compares exact length/code units, including
+NUL and unpaired surrogates. A dynamic field may omit comparison. Explicit
+comparison:null or unsupported geometry selects the original strict reader
+before execution; malformed supported comparison declarations are rejected.
+
+The same compiled CaptureGraph owns the derived comparison program. The same
+raw executor checks each unique role/checkpoint, expected field ID, pointer
+link and final range. Native code evaluates only these fixed raw predicates;
+it does not calculate HP, healing, ownership, collection mode or scope state.
+Static mismatch is changed_guard, not a fabricated value. Structural defects
+still independently poison replay, including a later defect following an
+earlier planned mismatch.
+
+`__arkdpsOwnedGraphCheck(kind, graph)` returns a frozen branded proof only after
+one native call verifies the entire graph. The AB contains only up to 32 dynamic
+slots; an all-static publication has zero slots. The proof is tied to the same
+replay lease, kind and graph object, and source checks it using
+`__arkdpsVerifiedGraphProof(proof,kind,graph)` before skipping static comparison.
+`proof.slot(originalIndex)` rejects static fields and later records. Dynamic
+fields retain the shared JS canonical clock/state/phase/class interpretation.
+Failure-only native field index maps back to the fixed role/current checkpoint;
+no addresses or mutable facts are added to diagnostics. Existing setup plans
+and graph raw-batch paths keep their prior contracts.
