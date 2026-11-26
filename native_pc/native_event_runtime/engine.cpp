@@ -814,16 +814,13 @@ bool drain_captures() noexcept {
         // Bounded poll work keeps host jobs responsive under sustained producers.
         const auto poll_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(2);
         for (unsigned budget=0;budget<512;++budget) {
+            const auto ready=runtime.lanes->next_ready(runtime.processed_ticket+1);
+            if (!ready) break; // A reserved but unpublished ticket is not skippable.
             Lane* found=nullptr;
-            for (auto& lane : runtime.lanes->lanes) {
-                auto ticket=lane->queue.head_ticket();
-                observe_pending_head(*lane,ticket,ticket ? ticks_now() : 0);
-                if (ticket && *ticket==runtime.processed_ticket+1) { found=lane.get(); break; }
-            }
-            if (!found) break; // A reserved but unpublished ticket is not skippable.
             std::uint64_t ticket=0; std::size_t size=0;
-            if (found->queue.try_pop(ticket,runtime.consume_buffer.data(),runtime.consume_buffer.size(),size)!=CaptureQueue::PopResult::popped)
-                throw std::runtime_error("native capture record exceeds worker buffer");
+            if (runtime.lanes->try_pop(*ready,ticket,runtime.consume_buffer.data(),runtime.consume_buffer.size(),size,found)!=CaptureQueue::PopResult::popped
+                || !found || runtime.lanes->failure.load(std::memory_order_acquire))
+                throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load(std::memory_order_acquire)));
             observe_pending_head(*found,std::nullopt,0);
             found->consumed.records.store(found->consumed.records.load(std::memory_order_relaxed)+1,std::memory_order_release);
             found->consumed.bytes.store(found->consumed.bytes.load(std::memory_order_relaxed)+size,std::memory_order_release);
@@ -841,10 +838,9 @@ bool drain_captures() noexcept {
                 throw std::runtime_error("native capture failed during replay");
             if (std::chrono::steady_clock::now()>=poll_deadline) break;
         }
-        for (auto& lane : runtime.lanes->lanes) {
-            auto ticket=lane->queue.head_ticket();
-            if (ticket && *ticket==runtime.processed_ticket+1) return true;
-        }
+        for (unsigned index=0;index<lane_count;++index)
+            runtime.lanes->reclaim_terminated(index,runtime.replay_depth[index]==0);
+        if (runtime.lanes->next_ready(runtime.processed_ticket+1)) return true;
         std::atomic_thread_fence(std::memory_order_seq_cst);
         if (!runtime.replay_active && runtime.active.load(std::memory_order_acquire)==0
             && runtime.processed_ticket==runtime.lanes->reserved.load(std::memory_order_acquire)) {
@@ -1136,7 +1132,8 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
                 {"counter_snapshot_consistent",snapshot.consistent},
                 {"resident_records_approx",optional(snapshot.resident_records)},
                 {"resident_bytes_approx",optional(snapshot.resident_bytes)},
-                {"peak_resident_records",snapshot.peak_records},{"peak_resident_bytes",snapshot.peak_bytes},
+                {"thread_id",snapshot.thread_id},{"thread_birth",std::to_string(snapshot.thread_birth)},
+                {"lane_generation",snapshot.generation},{"peak_resident_records",snapshot.peak_records},{"peak_resident_bytes",snapshot.peak_bytes},
                 {"queue_age_available",snapshot.age_available},{"age_sample_count",snapshot.age_samples},
                 {"last_capture_to_replay_qpc",optional(snapshot.last_age)},
                 {"maximum_capture_to_replay_qpc",optional(snapshot.maximum_age)},
@@ -1227,7 +1224,9 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
 void initialize(const std::string& source) {
     auto& runtime=state();
     runtime.worker.start([source] {
-        state().lanes=std::make_unique<capture::CaptureLanes>();
+        capture::CaptureLanes::Config lane_config;
+        lane_config.lane_queue={2048,2*1024*1024};
+        state().lanes=std::make_unique<capture::CaptureLanes>(lane_config);
         state().ingress.store(state().lanes.get(),std::memory_order_release);
         initialize_on_worker(source);
     },drain_captures);
