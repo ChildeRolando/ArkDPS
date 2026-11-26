@@ -1,4 +1,5 @@
 #include "owned_replay_js.h"
+#include "engine_capture_pipeline.h"
 #include <cassert>
 #include <iostream>
 #include <sstream>
@@ -70,6 +71,15 @@ static void witness(Snapshot& snapshot,unsigned role,unsigned id,std::uintptr_t 
 }
 int main(){
  auto* runtime=JS_NewRuntime();auto* c=JS_NewContext(runtime);owned::install(c,[]()noexcept{poisoned=true;});Memory memory;memory.initialize();auto code=plan(memory);CaptureConfigurations config;config.intern(code);assert(code.hp_observations_ready);
+ // Engine and harness select exactly the same finite fallback reason.
+ code.hp_normal=true;code.plan->arg_count=1;code.plan->arg_mask=1;
+ RecordHeader selected{};selected.args[0]=memory.root();selected.arg_mask=1;selected.depth=1;
+ assert(direct_hp_reason(code,selected,true)==DirectHpReason::eligible);
+ for(unsigned mask:{0u,3u}){selected.arg_mask=mask;assert(direct_hp_reason(code,selected,true)==DirectHpReason::argument_contract);}selected.arg_mask=1;
+ assert(direct_hp_reason(code,selected,false)==DirectHpReason::methods_unavailable);
+ selected.parent=1;assert(direct_hp_reason(code,selected,true)==DirectHpReason::parent_or_nested);selected.parent=0;
+ selected.capture_concurrent=true;assert(direct_hp_reason(code,selected,true)==DirectHpReason::concurrent);selected.capture_concurrent=false;
+ selected.publication_request=1;assert(direct_hp_reason(code,selected,true)==DirectHpReason::cold_or_publication);
  auto snapshot=std::make_unique<Snapshot>();capture_point(code,memory,*snapshot);begin(code,config,memory,*snapshot);
  auto packet=observe(c,memory.root());assert(!JS_IsException(packet)&&!JS_IsUndefined(packet)&&integer(c,packet,4)==5&&!poisoned);
  auto global=JS_GetGlobalObject(c);JS_SetPropertyStr(c,global,"packet",JS_DupValue(c,packet));JS_FreeValue(c,global);

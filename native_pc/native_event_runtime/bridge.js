@@ -83,6 +83,7 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
   if(typeof __nativeReplayHealthy!=='function')__arkdpsReplayGap('native replay health helper unavailable');
   if(prepared!==undefined){
    if(typeof callback!=='function'||typeof payload!=='bigint')__arkdpsReplayGap('invalid prepared HP callback');
+   if(record.edge==='entry'&&argumentMask!==1)__arkdpsReplayGap('uncaptured native argument');
    const previousRole=replay.role,previousField=replay.fieldId,previousCheckpoint=replay.checkpoint;
    replay.role='body';replay.fieldId=null;replay.checkpoint=record.checkpoint??0;
    try{

@@ -3,6 +3,21 @@
 #include "engine_capture_lane.h"
 
 namespace arkdps::capture {
+// Pure worker dispatch selection, shared by the engine and owned harness.
+enum class DirectHpReason : unsigned {
+    eligible, unsupported_plan, methods_unavailable, argument_contract,
+    missing_root, parent_or_nested, concurrent, cold_or_publication
+};
+inline DirectHpReason direct_hp_reason(const CompiledPlan& plan,const RecordHeader& h,bool has_methods) noexcept {
+    if(!plan.hp_normal || !plan.hp_observations_ready)return DirectHpReason::unsupported_plan;
+    if(!has_methods)return DirectHpReason::methods_unavailable;
+    if(!plan.plan || plan.plan->arg_count!=1 || plan.plan->arg_mask!=1 || h.arg_mask!=1)return DirectHpReason::argument_contract;
+    if(!h.args[0])return DirectHpReason::missing_root;
+    if(h.depth!=1 || h.parent || h.parent_checkpoint_count)return DirectHpReason::parent_or_nested;
+    if(h.capture_concurrent)return DirectHpReason::concurrent;
+    if(h.cold_revision || h.publication_captured || h.publication_request || h.projection_candidate)return DirectHpReason::cold_or_publication;
+    return DirectHpReason::eligible;
+}
 inline bool publication_claimable(std::uint64_t request,unsigned attempts,unsigned active) noexcept {
     return request && attempts<2 && active==1;
 }

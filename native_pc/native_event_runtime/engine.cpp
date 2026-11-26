@@ -707,11 +707,8 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     runtime.replay_header=header; runtime.replay_active=true;
     // Only the ordinary, non-nested HP path can bypass generic arguments.
     // Publication/cold/parent/concurrent edges retain the complete old wrapper.
-    const bool direct=hook->capture_plan.hp_normal && hook->capture_plan.hp_observations_ready
-        && JS_IsFunction(c,hook->direct_entry) && JS_IsFunction(c,hook->direct_leave)
-        && header.args[0] && header.depth==1 && !header.parent && !header.parent_checkpoint_count
-        && !header.capture_concurrent && !header.cold_revision && !header.publication_captured
-        && !header.publication_request && !header.projection_candidate;
+    const bool direct=direct_hp_reason(hook->capture_plan,header,
+        JS_IsFunction(c,hook->direct_entry) && JS_IsFunction(c,hook->direct_leave))==DirectHpReason::eligible;
     auto prepared=direct ? arkdps::owned_js::prepare_hp_observation(c) : JS_UNDEFINED;
     auto method=direct ? JS_DupValue(c,header.phase==Phase::entry ? hook->direct_entry : hook->direct_leave)
         : JS_GetPropertyStr(c,hook->callbacks,header.phase==Phase::entry ? "onEnter" : "onLeave");
