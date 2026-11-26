@@ -751,7 +751,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     if (runtime.lanes->failure.load(std::memory_order_acquire))
         callback_failure=std::make_exception_ptr(std::runtime_error("native replay violated the capture boundary"));
     JSValue projection=JS_UNDEFINED;
-    if (!callback_failure && header.closed_after && JS_IsFunction(c,runtime.prefix_projection)) {
+    if (!callback_failure && header.publication_request && header.closed_after && JS_IsFunction(c,runtime.prefix_projection)) {
         auto frozen=JS_Call(c,runtime.prefix_projection,JS_UNDEFINED,1,&record);
         if (JS_IsException(frozen)) callback_failure=std::make_exception_ptr(std::runtime_error(exception(c)));
         else projection=JS_DupValue(c,frozen);
@@ -822,6 +822,10 @@ void replay_record(const std::byte* bytes, std::size_t length) {
                     runtime.lanes->pending_publication.compare_exchange_strong(pending,0,std::memory_order_acq_rel);
             }
         }
+    }
+    if (header.publication_request) {
+        auto claimed=header.publication_request;
+        runtime.lanes->publication_claim.compare_exchange_strong(claimed,0,std::memory_order_acq_rel);
     }
     JS_FreeValue(c,record); JS_FreeValue(c,projection);
 }
@@ -957,7 +961,14 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     header.args=call.context.args; header.arg_mask=call.context.args_valid;
     header.return_value=frame->rax; header.return_address=call.return_address;
     header.scope_mode_epoch=runtime.capture_mode_epoch.load(std::memory_order_acquire);
-    header.publication_request=lanes.pending_publication.load(std::memory_order_acquire);
+    const auto requested=lanes.pending_publication.load(std::memory_order_acquire);
+    std::uint64_t unclaimed=0;
+    if (requested && lanes.publication_attempts.load(std::memory_order_acquire)<2
+        && runtime.active.load(std::memory_order_acquire)==1
+        && lanes.publication_claim.compare_exchange_strong(unclaimed,requested,std::memory_order_acq_rel)) {
+        lanes.publication_attempts.fetch_add(1,std::memory_order_relaxed);
+        header.publication_request=requested;
+    }
     header.captured_qpc=timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
     header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
     header.active=runtime.active.load(std::memory_order_acquire);
@@ -1223,6 +1234,7 @@ std::string request(const std::string& json) {
         minimum=reserved+1;
         lanes->minimum_publication_ticket.store(minimum,std::memory_order_release);
         const auto revision=lanes->request_serial.fetch_add(1,std::memory_order_acq_rel)+1;
+        lanes->publication_attempts.store(0,std::memory_order_release);
         lanes->pending_publication.store(revision,std::memory_order_release);
     }
     return state().worker.submit([json,minimum] { return request_on_worker(json,minimum); });

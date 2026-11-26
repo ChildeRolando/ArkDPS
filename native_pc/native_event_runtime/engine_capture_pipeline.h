@@ -30,6 +30,14 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
                        snapshot,0,scope->body_insertion);
     }
     base_stage(0);
+    const CaptureGraph* publication=header.publication_request && config
+        && config->publication && config->publication->available ? config->publication.get() : nullptr;
+    if (publication) {
+        header.publication_revision=publication->revision;
+        header.publication_captured=true;
+        capture_append(*publication->code->plan,Phase::checkpoint,graph_context,
+                       reader,user,snapshot);
+    }
     if (scope)
         capture_append(*scope->code->plan,Phase::checkpoint,graph_context,reader,user,
                        snapshot,scope->body_insertion,scope->code->plan->field_count);

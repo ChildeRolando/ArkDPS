@@ -180,6 +180,8 @@ public:
     // Host writes minimum then pending revision; worker clears only by CAS of
     // the exact served revision, so a concurrent fresh mark cannot be lost.
     std::atomic<std::uint64_t> request_serial{0}, pending_publication{0}, minimum_publication_ticket{0};
+    std::atomic<std::uint64_t> publication_claim{0};
+    std::atomic<unsigned> publication_attempts{0};
 };
 inline bool capture_read(void*, std::uintptr_t address, void* target, std::size_t bytes) noexcept {
     if (!bytes) return true;

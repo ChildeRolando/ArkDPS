@@ -33,5 +33,14 @@ int main(){
  graph["revision"]=2; configs->publish(graph,false);
  assert(configs->pin(0)!=pinned && pinned->scope->revision==1);
  assert(configs->pin(0)->scope->revision==2);
+ J publication{{"version",1},{"revision",1},{"mode_epoch",0},{"raw_collection","all"},{"available",true},
+ {"chunks",J::array({{{"fields",J::array({field(1,"publication.open.0","checkpoint","before",1),field(2,"publication.close.0","checkpoint","after",1)})}}})}};
+ configs->publish(publication,true);reads.mutate=false;reads.count=0;header={};header.publication_request=1;
+ capture_scope_point(*base,Phase::entry,context,configs->pin(0),reader,&reads,*snapshot,header);
+ assert(snapshot->error==Error::ok && snapshot->field_count==7 && reads.count==7);
+ assert(header.publication_captured && header.publication_revision==1);
+ reads.count=0;header={};
+ capture_scope_point(*base,Phase::entry,context,configs->pin(0),reader,&reads,*snapshot,header);
+ assert(snapshot->field_count==5 && !header.publication_captured);
  std::cout<<"scope bracket, clock spanning graph, pinned immutable revision passed\n";
 }
