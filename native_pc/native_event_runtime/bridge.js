@@ -7,6 +7,14 @@ function __integer(value) {
  if(typeof value==='number'&&!Number.isSafeInteger(value))throw new TypeError('unsafe integer');
  return BigInt(value);
 }
+// QuickJS builds may represent asUintN(64, high-bit BigInt) as signed.
+// Preserve already canonical unsigned values and normalize only out-of-range
+// integers with arithmetic; never truncate addresses through a JS Number.
+function __arkdpsUnsigned64(value){
+ const integer=__integer(value),modulus=0x10000000000000000n;
+ if(integer>=0n&&integer<modulus)return integer;
+ const remainder=integer%modulus;return remainder<0n?remainder+modulus:remainder;
+}
 // Replay never dereferences a game address. A role is an independently captured
 // observation point, not a last-value cache keyed by pointer.
 let __arkdpsReplay=null;
@@ -238,7 +246,7 @@ class NativeInteger {
  toString(radix=10){return this.value.toString(radix);}
 }
 class NativePointer {
- constructor(value){this.value=BigInt.asUintN(64,__integer(value));}
+ constructor(value){this.value=__arkdpsUnsigned64(value);}
  add(value){return new NativePointer(this.value+__integer(value));}
  sub(value){return new NativePointer(this.value-__integer(value));}
  equals(value){return this.value===ptr(value).value;}
@@ -257,7 +265,7 @@ class NativePointer {
  readFloat(){return (__arkdpsReplay?.native?__arkdpsOwnedScalar(this.value,6):this.__view(4).getFloat32(0,true));}
  readCString(){return __arkdpsOwnedString(this.value,0,false);}
  readUtf16String(length){return __arkdpsOwnedString(this.value,length,true);}
- writeU64(value){if(__arkdpsReplay!==null)__arkdpsReplayGap('native write during replay');const b=new ArrayBuffer(8);new DataView(b).setBigUint64(0,BigInt.asUintN(64,__integer(value)),true);__write(this.value,b);return this;}
+ writeU64(value){if(__arkdpsReplay!==null)__arkdpsReplayGap('native write during replay');const b=new ArrayBuffer(8);new DataView(b).setBigUint64(0,__arkdpsUnsigned64(value),true);__write(this.value,b);return this;}
  writePointer(value){return this.writeU64(value);}
 }
 function ptr(value){return value instanceof NativePointer?value:new NativePointer(value);}
