@@ -1,0 +1,19 @@
+{
+  "equal": true,
+  "first_difference": null,
+  "cases": 40,
+  "source_sha256": {
+    "baseline": {
+      "event_probe_native_pc.js": "a8e3867e05414cb7b6c5bc11f999d12f6321084fb29492725411bfd548760466",
+      "event_probe_android2791.js": "b98fe75bde52e1c06474e77fb57eee4e1385ad1062d51abd6c589645e3d314d7",
+      "event_probe_runtime.js": "b30931f8633ffc01d3d9170e28638b85f5129825b9ee6ff0ff604fe88a249810",
+      "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+    },
+    "candidate": {
+      "event_probe_native_pc.js": "a8e3867e05414cb7b6c5bc11f999d12f6321084fb29492725411bfd548760466",
+      "event_probe_android2791.js": "b98fe75bde52e1c06474e77fb57eee4e1385ad1062d51abd6c589645e3d314d7",
+      "event_probe_runtime.js": "ca76722d4dfaab005795d45ad6bef6b3f6a54f368b68c17924b2c4790945524b",
+      "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+    }
+  }
+}
