@@ -147,5 +147,16 @@ assert(actorEvents.some(e=>e.proof?.native_autochess_character_form),JSON.string
 assert(actorEvents.some(e=>e.proof?.native_autochess_token_host),JSON.stringify(actorEvents));
 const badForm=actorHit('char_002_amiya','char_1037_amiya3',102,false,'data_uid');assert(badForm.every(e=>!e.proof?.native_autochess_character_form));
 const badToken=actorHit('token_owned','token_owned',998,true,'side');assert(badToken.every(e=>!e.proof?.native_autochess_token_host));
+// Destroy entry owns the full old binding; leave owns the released singleton
+// and independently copied old views. No normal live binding is available.
+f.write(f.controller.add(0x228),3);
+const destroyPlan=vm.runInContext('nativeCapturePlan("BattleController.Destroy",ptr(1),planMetadata)',c),destroyHook=f.callback('OnDestroy',f.controllerClass),destroyCall={threadId:1};
+const oldLogger=original.readPointer.call(f.controller.add(0xe0)),oldNative=original.readPointer.call(f.controller.add(0x10)),oldStats=original.readPointer.call(oldLogger.add(0x30));
+dispatch(captureState('entry',true,destroyPlan),()=>destroyHook.onEnter.call(destroyCall,[f.controller]));
+const singleton=original.readPointer.call(original.readPointer.call(f.controllerClass.add(0x58)).add(0xb8));f.write(singleton,f.ptr(0));f.write(f.controller.add(0x10),f.ptr(0));
+const refs=[f.controller];refs[8]=oldLogger;refs[9]=f.level;refs[10]=oldNative;refs[11]=oldStats;
+const finalRecord=captureState('leave',false,destroyPlan,refs);finalRecord.closed_after=true;finalRecord.active_after=0;finalRecord.ticket='100';finalRecord.activity_begin='200';finalRecord.activity_end='201';
+dispatch(finalRecord,()=>{destroyHook.onLeave.call(destroyCall);c.finalProjection=c.__arkdpsOnClosedRecord(finalRecord);});
+assert(c.finalProjection,vm.runInContext('JSON.stringify(terminalDiagnostics)',c));assert.equal(c.finalProjection.terminal_read.terminal_only,true);assert.equal(c.finalProjection.terminal_read.events.length,actorEvents.length+badForm.length+badToken.length);assert.equal(vm.runInContext('readThroughSequence',c),0);
 assert.equal(late,0);
 console.log(JSON.stringify({status:'PASS_COLD_SOURCE_REPLAY',fields:record.fields.length,segments:record.segments.length,late_reads:late,scope:binding.native_autochess_context.scope_key}));
