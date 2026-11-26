@@ -753,23 +753,12 @@ function time(allowRetry = false, withEventScope = true) {
  if(bytes===null||bytes.byteLength!==12)throw new Error('callback clock unavailable');
  return validatedClockStamp(new DataView(bytes),captureClockFrame(),allowRetry,withEventScope);
 }
-function hpReadBatch(edge,enemy,tiers){
- return typeof probeAdapter.captureHpRead==='function'?probeAdapter.captureHpRead(edge,enemy,tiers):null;
-}
-function hpBatchClock(batch,opening,closing,withEventScope){
- const view=batch.slot(opening),close=batch.slot(closing);
- if(view.byteLength!==12||close.byteLength!==4)throw new Error('callback clock unavailable');
- return validatedClockStamp(view,close.getUint32(0,true),false,withEventScope);
-}
 function capturedUtf16(view){
  if(view.byteLength<12)throw new Error('bad string');
  const n=view.getInt32(8,true);
  if(n<0||n>200||view.byteLength!==12+2*n)throw new Error('bad string');
  let text='';for(let i=0;i<n;i++)text+=String.fromCharCode(view.getUint16(12+2*i,true));
  return text;
-}
-function hpBatchId(batch){
- const id=capturedUtf16(batch.slot(5));if(!id)throw new Error('missing source identity');return id;
 }
 
 function buff(p){return {key:str(p.add(0x208).readPointer()),source:p.add(0x18).readPointer(),hasShield:p.add(0x27c).readU8()};}
@@ -2556,14 +2545,9 @@ function decodeEnemyMaxHp(view){
  const value=Number(BigInt.asIntN(64,view.getBigUint64(0,true)^view.getBigUint64(8,true)))/4294967296;
  return value>0&&value<1e10?value:null;
 }
-function enemyMaxHp(enemy,batchRead=false) {
+function enemyMaxHp(enemy) {
  if(!enemyAttributesReady)return null;
  try{
-  if(batchRead){
-   const countBatch=hpReadBatch('leave',enemy,2),count=countBatch.slot(3).getUint32(0,true);
-   if(!count||count>64)return null;
-   return decodeEnemyMaxHp(hpReadBatch('leave',enemy,4).slot(4));
-  }
   const attributes=enemy.add(0xb0).readPointer();
   if(attributes.isNull())return null;
   const cached=attributes.add(0x68).readPointer();
@@ -2805,31 +2789,28 @@ function installEnemyStateHooks() {
        }
        return;
       }
-      const initial=hpReadBatch('entry',enemy,1);
-      const identity=initial?initial.slot(0):checkedNativeView(enemy,0x1c);
+      const identity=checkedNativeView(enemy,0x1c);
       const klass=ptr(identity.getBigUint64(0,true)),uid=identity.getUint32(0x18,true);
       enemyTarget=isEnemy(enemy,klass);
       // Before Born, enemy HP initialization is covered by enemy_enter.
       // Stage traps never create an entry; the host admits them via snapshot.
-      if(enemyTarget&&!(initial?hpReadBatch('entry',enemy,2).slot(1).getUint8(0):enemy.add(0x25).readU8()))return;
+      if(enemyTarget&&!(enemy.add(0x25).readU8()))return;
       let capturedId;
       if(!enemyTarget){
        if(attributeChange)return;
-       try{capturedId=initial?hpBatchId(hpReadBatch('entry',enemy,8)):targetKey(enemy);}catch(error){return;}
+       try{capturedId=targetKey(enemy);}catch(error){return;}
        if(!stageTrapId(enemy,capturedId))return;
       }
       // This setter publishes only the closing scope. The opening clock still
       // detects a new round and brackets the write with the closing clock.
       const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
-      const clockBatch=initial?hpReadBatch('entry',enemy,4):null;
-      const when=clockBatch?hpBatchClock(clockBatch,2,3,!deferScope):time(false,!deferScope);
+      const when=time(false,!deferScope);
       refreshEnemyEntryFrame(when.frame);
       if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
       if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
       if(!uid)throw new Error('missing enemy instance UID');
-      const eligible=initial?hpReadBatch('entry',enemy,capturedId===undefined?24:16):null;
-      const evidence=eligible?{target:capturedId??hpBatchId(eligible),target_instance:String(uid)}:enemyIdentity(enemy,uid);
-      const rawHp=eligible?Number(eligible.slot(4).getBigInt64(0,true))/4294967296:targetHp(enemy);
+      const evidence=enemyIdentity(enemy,uid);
+      const rawHp=targetHp(enemy);
       const hpBefore=Number.isFinite(rawHp)&&rawHp>=0&&rawHp<1e9?rawHp:null;
       if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
       const maxHpBefore=attributeChange?fixedArg(args[2]):null;
@@ -2850,16 +2831,15 @@ function installEnemyStateHooks() {
       if(enemyHpWrites.get(key)!==write)return;
       enemyHpWrites.delete(key);
       if(stopped||fatal||superseded)return;
-      const batch=hpReadBatch('leave',enemy,1);
-      const end=batch?hpBatchClock(batch,1,2,!deferScope):time(false,!deferScope);
-      const closing=batch?batch.slot(0):checkedNativeView(enemy.add(0x18),0x30);
+      const end=time(false,!deferScope);
+      const closing=checkedNativeView(enemy.add(0x18),0x30);
       if(end.frame!==when.frame||end.game_time!==when.game_time||closing.getUint32(0,true)!==uid)
        throw new Error('enemy HP callback changed identity or crossed a frame');
       const hp=Number(closing.getBigInt64(0x28,true))/4294967296;
       if(!Number.isFinite(hp)||hp<0||hp>=1e9)throw new Error('enemy HP unreadable after callback');
       finishModifierHpWriter(write,end,hp);
       if(hp===hpBefore&&maxHpBefore===null)return;
-      const maxHp=write.enemyTarget?enemyMaxHp(enemy,batch!==null):null;
+      const maxHp=write.enemyTarget?enemyMaxHp(enemy):null;
       if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
       if(deferScope)stampEventScope(end);
       recordEnemyHp(write,end,label,hp,maxHp);
