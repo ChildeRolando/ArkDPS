@@ -226,3 +226,28 @@ scope/mode与当前配置一致且请求号不早于未修复世代。失败、�
 `native_async_cold_deadline_owned.py`用真实DLL自有child，故意让首个warm候选越过截止时间，
 再拒绝一次实际cold候选，要求两个后续请求都捕获cold proof，成功修复后下一次恢复warm。
 它是请求世代/owned读取的验收，不是完整游戏关卡或吞吐替代。
+
+### 缺少通知回调时的结算证据
+
+伤害仍只有 shared runtime 的 `verifiedTargetSettlement → settleDamage` 一个验证与归约入口。
+同一次 ApplyModifier 内若没有 Unit/Output 通知，但实际捕获到唯一一次 HP setter 的完整进入/退出，
+可将这对独立证据交给原验证器。来源/目标 UID 与 class、作用域、时钟、开闭 HP、实际 signed delta、
+数值盾和 overkill 一致性仍由原验证器核对；nominal amount 不能替代缺失的 HP。
+
+原始 Apply 调用栈和 HP 写入尝试独立记账。HP setter 的嵌套早返也必须先增加尝试数，
+否则同指针重入、临时 UID 变化后恢复会错误地看起来只有一个 writer。外来/未知来源的嵌套调用、
+跨线程干扰、MaxHP 变更、取消或失败 guard 仍不能获得这份证书。
+证书不制造 Unit.OnTakeDamage checkpoint，也不注册普通伤害的嵌套通知补链。
+`test_event_probe_hp_settlement.py` 以实际捕获 recipe 检验 Solo/多人消费及重复回放只入账一次；
+HP record 不含生产计划中不存在的父 checkpoint，缺证负例必须保持 partial。
+
+### 队列状态与验证边界
+
+原始 ticket、业务事件 sequence、published prefix、served prefix 和 ACK 仍是不同水位。
+队列满或结构缺口仍显式失败，不能覆盖未消费记录、提前 ACK 或把旧 scope 标成当前。
+普通日志复用 mark 已附带的计数，健康状态最多每五秒一条，持续 pending 两秒后最多每秒一条，
+恢复记录只发一次；它不启用 callback timing、不额外请求、不进入统计事件流。
+
+持续消费能力必须用实际共享 HP 回调和捕获形状验证。128-byte ABI 夹具、索引/标量微测和
+字节容量证明各自只能验证其边界，不能代替完整 scope/publication、真实 FIFO 和暂停后追赶验收，
+也不能代替实机 FPS。实验性的指针表示或字符串 codec 未通过收益门槛时不并入生产候选。
