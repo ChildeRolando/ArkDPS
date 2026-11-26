@@ -13,6 +13,7 @@ from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverStatus
 from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from event_probe import EventProbe
+from metrics import TimingWindow, timing_batch
 
 
 DEFAULT_FRIDA_REMOTE = '127.0.0.1:27043'
@@ -45,7 +46,7 @@ class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
                  collector=None, observer_factory=None, prepare_observer=None,
                  history=None, on_history=None, on_history_result=None, state_dir=None,
-                 autochess_enabled=None, debug_mode=None):
+                 autochess_enabled=None, debug_mode=None, performance_diagnostics=None):
         self.collector = (collector if collector is not None else
                           Collector(adb, serial, log=log, state_dir=state_dir))
         self.frida_remote = frida_remote
@@ -57,6 +58,8 @@ class CollectionSession:
         self._pending_observers = []
         self.capture = None
         self.audit = audit or (lambda *_args: None)
+        self.performance_diagnostics = performance_diagnostics or (lambda: False)
+        self._performance_timings = TimingWindow(self.performance_diagnostics, self.audit, source='collector')
         self.event_status = 'unavailable'
         self.event_error = None
         self._next_boot_check = float('-inf')
@@ -256,6 +259,9 @@ class CollectionSession:
                     timing(self.audit)
                 else:
                     timing(self.audit, enabled=self.debug_mode)
+            configure_performance = getattr(self.observer, 'set_performance_diagnostics', None)
+            if callable(configure_performance):
+                configure_performance(self.audit, enabled=self.performance_diagnostics)
             self.observer.start()
             self.event_status = 'ready'
             self.audit('observer_ready', {
@@ -328,6 +334,7 @@ class CollectionSession:
         """
         self.wait_for_game_init(wait_seconds=wait_seconds, cancelled=cancelled)
 
+    @timing_batch
     def read(self):
         try:
             if not self._finish_when_game_ready() and self.capture is None:

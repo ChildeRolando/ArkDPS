@@ -7,6 +7,7 @@ Overkill is a subset of the already inclusive
 native damage total and is never subtracted from it. Source keys identify
 distinct client statistic entries, not transient entities.
 """
+from metrics import timed
 from collections import deque
 from math import isclose, isfinite
 
@@ -1799,6 +1800,7 @@ class Statistics:
                 partial['engagement_' + kind + '_unverified_share'] = _unverified_share(evidence['total'], denominator)
         return partial
 
+    @timed('statistics_materialize')
     def result(self):
         """Return per-owner values and explicit coverage; unknown is None."""
         late_events = self.event_coverage_start > self.start_time

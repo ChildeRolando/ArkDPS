@@ -13,6 +13,55 @@ from log_context import LogContext
 
 
 ENEMY_STATE_DELTA = 'desktop_enemy_state_delta_v1'
+
+
+def _performance_fields(kind, data):
+    """Normal-mode profiling accepts only bounded numeric summaries, never events."""
+    if type(data) is not dict or data.get('schema') != 1:
+        return None
+    def numeric(source, names):
+        return {key: source[key] for key in names if type(source.get(key)) is int
+                and 0 <= source[key] <= 2**64-1}
+    source = data.get('source')
+    if source not in ('collector', 'native_runtime', 'presentation', 'worker_stdio'):
+        return None
+    result = dict(schema=1, source=source)
+    result.update(numeric(data, ('pid', 'monotonic_ns', 'window_ns', 'emission_failures', 'queue_dropped')))
+    if type(data.get('utc')) is str:
+        result['utc'] = data['utc'][:64]
+    if kind == 'performance_timing':
+        phases = data.get('phases')
+        if type(phases) is not dict:
+            return None
+        result.update(clock='perf_counter_ns', sampling='all_batches', phases={})
+        for name, row in list(phases.items())[:33]:
+            if type(name) is str and re.fullmatch(r'[A-Za-z_.]{1,64}', name) and type(row) is dict:
+                result['phases'][name] = numeric(row, ('calls', 'inclusive_ns', 'exclusive_ns', 'max_ns'))
+        return result
+    native = data.get('native')
+    result['available'] = data.get('available') is True and type(native) is dict
+    if not result['available']:
+        return result
+    values = numeric(native, ('schema', 'pid', 'qpc', 'qpc_frequency', 'thread_capacity', 'process_created_filetime', 'summary_build_ticks',
+                              'skipped_busy_cells', 'omitted_cells'))
+    values.update(enabled=native.get('enabled') is True, cumulative=True,
+                  thread_overflow=native.get('thread_overflow') is True,
+                  sampling='hooks_random_1_in_128_nested_inherited_requests_all_reads_detail_1_in_128', rows=[])
+    rows = native.get('rows')
+    if type(rows) is not list:
+        return None
+    for row in rows[:128]:
+        if type(row) is not dict:
+            continue
+        clean = numeric(row, ('thread_id', 'cell', 'calls', 'samples', 'ticks', 'exclusive_ticks',
+                              'max_ticks', 'vm_wait_ticks', 'vm_wait_max_ticks', 'vm_hold_ticks',
+                              'vm_hold_max_ticks', 'js_ticks', 'read_calls', 'read_bytes', 'read_ticks', 'read_detail_spans', 'address'))
+        for key in ('kind', 'hook'):
+            if type(row.get(key)) is str:
+                clean[key] = row[key][:96]
+        values['rows'].append(clean)
+    result['native'] = values
+    return result
 ENEMY_STATE_RECORDS = frozenset(('published', 'lifecycle_summary', 'coverage_closed'))
 CAPTURE_SEGMENT_BYTES = 64 * 1024 ** 2
 CAPTURE_TOTAL_BYTES = 512 * 1024 ** 2
@@ -169,6 +218,8 @@ def sanitize_native_hook_startup(record, *, event=None):
 
 
 KEY_EVENTS = {
+    'performance_timing': None,
+    'native_performance_timing': None,
     'worker_started': ('platform', 'event_observation'),
     'worker_stopped': ('pending_history_count', 'cleanup_ok'),
     'connection_attempt': ('revision', 'platform', 'event_observation'),
@@ -365,6 +416,10 @@ class DesktopCaptureJournal:
             native_startup = kind in NATIVE_HOOK_STARTUP_EVENTS or kind == NATIVE_HOOK_STARTUP_OVERFLOW
             if native_startup:
                 data = sanitize_native_hook_startup(data, event=kind)
+                if data is None:
+                    return
+            elif kind in ('performance_timing', 'native_performance_timing'):
+                data = _performance_fields(kind, data)
                 if data is None:
                     return
             elif kind == 'capture_health':

@@ -326,7 +326,9 @@ DWORD WINAPI worker(void* argument) {
             Json id = nullptr;
             const char* phase = authenticated ? "request" : "authentication";
             try {
+                const auto parse_started = arkdps::timing_begin();
                 Json request = parse(line);
+                arkdps::timing_transport(0, parse_started, line.size());
                 if (!request.is_object() || !request.contains("id") || !request["id"].is_number_unsigned()
                         || request["id"].get<std::uint64_t>() != expected || expected > 9007199254740991ULL
                         || !request.contains("operation") || !request["operation"].is_string())
@@ -370,12 +372,20 @@ DWORD WINAPI worker(void* argument) {
                         + std::to_string(expected).size();
                     if (reply_bytes > wire_limit)
                         throw SafeError(response_limit_error(reply_bytes, operation, request));
+                    const auto decode_started = arkdps::timing_begin();
                     result = parse(response);
+                    arkdps::timing_transport(0, decode_started, response.size());
                 }
+                const auto encode_started = arkdps::timing_begin();
                 auto wire_response = Json{{"id", id}, {"result", std::move(result)}}.dump();
+                arkdps::timing_transport(1, encode_started, wire_response.size());
                 if (wire_response.size() > wire_limit)
                     throw SafeError(response_limit_error(wire_response.size(), operation, request));
-                if (!write_payload(pipe.value, std::move(wire_response))) break;
+                const auto write_started = arkdps::timing_begin();
+                const auto wire_bytes = wire_response.size();
+                const bool written = write_payload(pipe.value, std::move(wire_response));
+                arkdps::timing_transport(2, write_started, wire_bytes);
+                if (!written) break;
                 ++expected;
                 if (operation == "stop") break;
             } catch (const SafeError& error) {

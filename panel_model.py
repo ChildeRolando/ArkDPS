@@ -12,6 +12,7 @@ numbers from the previous battle.
 """
 from __future__ import annotations
 
+from metrics import timed
 import math
 from dataclasses import InitVar, dataclass, field
 from enum import Enum
@@ -663,6 +664,7 @@ def _lifecycle_presence(row: Mapping, result: Mapping):
     return seconds, tuple(window)
 
 
+@timed('panel_rows')
 def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
     """Convert an adapter/Statistics result into panel rows without inventing data."""
     rows: list[PanelSourceRow] = []
@@ -1532,6 +1534,7 @@ def inspector_readings(row: Mapping, detail: Mapping, *, boss_scope=False, rate_
     return dict(overkill=overkill, skill_split=splits, mitigation=mitigation, legacy_overkill_note=legacy_reason)
 
 
+@timed('panel_render')
 def render_panel(config: PanelConfig,
                  rows: Iterable[PanelSourceRow], *,
                  team_complete: bool = True,

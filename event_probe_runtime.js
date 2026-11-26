@@ -2303,6 +2303,7 @@ function installMitigationHooks(){
  const attached=[];
  function observe(address,name,enter,leave,cleanup,barrier=false){
   attached.push(Interceptor.attach(address,{
+   arkdpsName:name,
    onEnter(args){
     this.tid=this.threadId;
     if(barrier){
@@ -2481,6 +2482,7 @@ function installEnemyEntryHooks() {
    const label='enemy entry '+method;
    const isBorn=method==='Born';
    installed.push(Interceptor.attach(address,{
+    arkdpsName:label,
     onEnter(args){
      if(stopped||fatal||!enemyEntryReady)return;
      try{
@@ -2725,6 +2727,7 @@ function installEnemyStateHooks() {
     }
    };
    try{
+    callbacks.arkdpsName='hp.'+label;
     installed.push(Interceptor.attach(address,callbacks));
     if(attributeChange)enemyMaxHpReady=enemyAttributesReady;
    }catch(e){
@@ -2904,6 +2907,7 @@ function installSkillCastStateHook(){
  const label='BasicSkill.OnCastFinish';
  try{
   const hook=Interceptor.attach(skillCastStateMethods.address,{
+   arkdpsName:label,
    onEnter(args){
     if(stopped||fatal)return;
     this.started=true;beginEnemyHook(label);
@@ -2950,6 +2954,7 @@ function shouldObserveCallback({owner,name}){
 }
 for(const m of cfg.methods.filter(shouldObserveCallback)){
  hooks.push(Interceptor.attach(ptr(m.address),{
+  arkdpsName:m.owner+'.'+m.name,
   onEnter(args){
    active++;epoch++;this.callbackEpoch=epoch;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
    activeHooks.set(this.name,(activeHooks.get(this.name)||0)+1);

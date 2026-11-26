@@ -28,6 +28,8 @@ namespace {
 constexpr std::size_t max_read = 1024 * 1024;
 constexpr std::size_t max_allocated = 64 * 1024 * 1024;
 struct Hook {
+    unsigned timing_id = 0;
+    std::string timing_name;
     void* address = nullptr;
     void* original = nullptr;
     void* thunk = nullptr;
@@ -67,6 +69,164 @@ struct ReturnFrame { std::uint64_t rax, rdx; std::array<std::uint8_t, 32> xmm; }
 struct Invocation { Hook* hook; std::uintptr_t return_address; JSValue receiver; };
 struct ThreadInvocations { unsigned depth = 0; std::array<Invocation, 256> calls; };
 thread_local ThreadInvocations invocations;
+
+// Diagnostics have no ownership of the VM lock. Every thread writes only its
+// own fixed cells; snapshots use bounded seqlock reads outside the VM mutex.
+// There is no hot-path allocation, log, global RMW, division, or clock when off.
+constexpr unsigned timing_threads = 16, timing_cells = 1032;
+constexpr unsigned timing_request = 1024, timing_transport_base = 1028;
+struct TimingCell {
+    std::atomic<std::uint64_t> revision{0}, calls{0}, samples{0}, ticks{0}, exclusive{0}, maximum{0};
+    std::atomic<std::uint64_t> wait{0}, wait_max{0}, hold{0}, hold_max{0}, js{0}, reads{0}, bytes{0}, read_ticks{0}, read_spans{0};
+};
+struct TimingThread {
+    std::atomic<DWORD> owner{0};
+    std::array<TimingCell, timing_cells> cells;
+};
+struct TimingState {
+    std::atomic<bool> enabled{false}, thread_overflow{false};
+    std::array<TimingThread, timing_threads> threads;
+};
+TimingState timing_state;
+std::uint64_t ticks_now() noexcept {
+    LARGE_INTEGER value; QueryPerformanceCounter(&value); return value.QuadPart;
+}
+thread_local TimingThread* timing_thread = nullptr;
+thread_local bool timing_untracked = false;
+thread_local std::uint32_t timing_random = 0;
+TimingThread* timing_slot() noexcept {
+    if (timing_thread || timing_untracked) return timing_thread;
+    const auto id = GetCurrentThreadId();
+    timing_random = id ^ 0x9e3779b9u;
+    for (auto& slot : timing_state.threads) {
+        DWORD empty = 0;
+        if (slot.owner.compare_exchange_strong(empty, id, std::memory_order_relaxed)) {
+            timing_thread = &slot; return &slot;
+        }
+    }
+    timing_untracked = true;
+    timing_state.thread_overflow.store(true, std::memory_order_relaxed);
+    return nullptr;
+}
+void timing_add(std::atomic<std::uint64_t>& value, std::uint64_t delta) noexcept {
+    value.store(value.load(std::memory_order_relaxed) + delta, std::memory_order_relaxed);
+}
+struct TimingSpan;
+thread_local TimingSpan* timing_active = nullptr;
+struct TimingSpan {
+    TimingCell* cell = nullptr;
+    TimingSpan* parent = nullptr;
+    std::uint64_t start = 0, child = 0, wait = 0, hold = 0, js = 0;
+    std::uint64_t reads = 0, bytes = 0, read_ticks = 0;
+    bool sampled = false, detail_sampled = false;
+    explicit TimingSpan(unsigned id, bool full = false) noexcept {
+        if (!timing_state.enabled.load(std::memory_order_relaxed)) return;
+        auto* slot = timing_slot();
+        if (!slot || id >= timing_cells) return;
+        cell = &slot->cells[id];
+        timing_add(cell->calls, 1);
+        timing_random ^= timing_random << 13;
+        timing_random ^= timing_random >> 17;
+        timing_random ^= timing_random << 5;
+        const bool selected = (timing_random & 127u) == 0;
+        sampled = full || timing_active || selected;
+        if (sampled) {
+            parent = timing_active;
+            detail_sampled = selected || (parent && parent->detail_sampled);
+            timing_active = this; start = ticks_now();
+        }
+    }
+    ~TimingSpan() noexcept {
+        if (!sampled) return;
+        const auto elapsed = ticks_now() - start;
+        timing_active = parent;
+        if (parent) parent->child += elapsed;
+        cell->revision.fetch_add(1, std::memory_order_acq_rel);
+        timing_add(cell->samples, 1); timing_add(cell->ticks, elapsed);
+        timing_add(cell->exclusive, elapsed > child ? elapsed-child : 0);
+        cell->maximum.store((std::max)(cell->maximum.load(std::memory_order_relaxed), elapsed), std::memory_order_relaxed);
+        timing_add(cell->wait, wait); timing_add(cell->hold, hold); timing_add(cell->js, js);
+        cell->wait_max.store((std::max)(cell->wait_max.load(std::memory_order_relaxed), wait), std::memory_order_relaxed);
+        cell->hold_max.store((std::max)(cell->hold_max.load(std::memory_order_relaxed), hold), std::memory_order_relaxed);
+        timing_add(cell->reads, reads); timing_add(cell->bytes, bytes); timing_add(cell->read_ticks, read_ticks);
+        timing_add(cell->read_spans, detail_sampled ? 1 : 0);
+        cell->revision.fetch_add(1, std::memory_order_acq_rel);
+    }
+};
+struct TimingLock {
+    TimingSpan& span;
+    std::unique_lock<std::recursive_mutex> lock;
+    std::uint64_t acquired = 0;
+    TimingLock(std::recursive_mutex& mutex, TimingSpan& measured) : span(measured), lock(mutex, std::defer_lock) {
+        const auto start = span.sampled ? ticks_now() : 0;
+        lock.lock();
+        if (span.sampled) { acquired = ticks_now(); span.wait += acquired-start; }
+    }
+    ~TimingLock() { if (acquired) span.hold += ticks_now()-acquired; }
+};
+struct ReadTiming {
+    TimingSpan* span = timing_active && timing_active->detail_sampled ? timing_active : nullptr;
+    std::uint64_t start = span ? ticks_now() : 0;
+    explicit ReadTiming(std::size_t bytes) noexcept { if (span) { ++span->reads; span->bytes += bytes; } }
+    ~ReadTiming() { if (span) span->read_ticks += ticks_now()-start; }
+};
+nlohmann::json timing_snapshot() {
+    const auto summary_started = ticks_now();
+    using Json = nlohmann::json;
+    LARGE_INTEGER frequency; QueryPerformanceFrequency(&frequency);
+    Json rows = Json::array();
+    unsigned skipped = 0, omitted = 0;
+    for (const auto& thread : timing_state.threads) {
+        const auto owner = thread.owner.load(std::memory_order_relaxed);
+        if (!owner) continue;
+        for (unsigned id=0; id<timing_cells; ++id) {
+            const auto& c = thread.cells[id];
+            if (!c.calls.load(std::memory_order_relaxed)) continue;
+            if (rows.size() >= 128) { ++omitted; continue; }
+            Json row;
+            bool consistent = false;
+            for (unsigned attempt=0; attempt<2 && !consistent; ++attempt) {
+                const auto revision = c.revision.load(std::memory_order_acquire);
+                if (revision & 1) continue;
+                row = {{"thread_id", owner}, {"cell", id}, {"calls", c.calls.load(std::memory_order_relaxed)},
+                    {"samples", c.samples.load(std::memory_order_relaxed)}, {"ticks", c.ticks.load(std::memory_order_relaxed)},
+                    {"exclusive_ticks", c.exclusive.load(std::memory_order_relaxed)}, {"max_ticks", c.maximum.load(std::memory_order_relaxed)},
+                    {"vm_wait_ticks", c.wait.load(std::memory_order_relaxed)}, {"vm_wait_max_ticks", c.wait_max.load(std::memory_order_relaxed)},
+                    {"vm_hold_max_ticks", c.hold_max.load(std::memory_order_relaxed)},
+                    {"vm_hold_ticks", c.hold.load(std::memory_order_relaxed)}, {"js_ticks", c.js.load(std::memory_order_relaxed)},
+                    {"read_calls", c.reads.load(std::memory_order_relaxed)}, {"read_bytes", c.bytes.load(std::memory_order_relaxed)},
+                    {"read_detail_spans", c.read_spans.load(std::memory_order_relaxed)},
+                    {"read_ticks", c.read_ticks.load(std::memory_order_relaxed)}};
+                std::atomic_thread_fence(std::memory_order_acquire);
+                consistent = c.revision.load(std::memory_order_relaxed) == revision;
+            }
+            if (!consistent) { ++skipped; continue; }
+            if (id < timing_request) {
+                const auto index = id/2;
+                row["kind"] = id%2 ? "hook_leave" : "hook_enter";
+                if (index < state().hooks.size()) {
+                    const auto& hook = state().hooks[index];
+                    row["hook"] = hook->timing_name;
+                    row["address"] = reinterpret_cast<std::uintptr_t>(hook->address);
+                }
+            } else {
+                static const char* names[] = {"request_mark", "request_read", "request_ack", "request_other",
+                    "transport_parse", "transport_encode", "transport_write", "transport_other"};
+                row["kind"] = names[id-timing_request];
+            }
+            rows.push_back(std::move(row));
+        }
+    }
+    FILETIME created{}, exited{}, kernel{}, user{};
+    GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+    return {{"schema", 1}, {"enabled", timing_state.enabled.load(std::memory_order_relaxed)},
+        {"pid", GetCurrentProcessId()}, {"qpc", ticks_now()}, {"qpc_frequency", frequency.QuadPart},
+        {"process_created_filetime", (static_cast<std::uint64_t>(created.dwHighDateTime)<<32)|created.dwLowDateTime},
+        {"summary_build_ticks", ticks_now()-summary_started},
+        {"sampling", "hooks_random_1_in_128_nested_inherited_requests_all_reads_detail_1_in_128"}, {"cumulative", true},
+        {"thread_capacity", timing_threads}, {"thread_overflow", timing_state.thread_overflow.load(std::memory_order_relaxed)},
+        {"skipped_busy_cells", skipped}, {"omitted_cells", omitted}, {"rows", std::move(rows)}};
+}
 
 std::string string(JSContext* context, JSValueConst value) {
     const char* text = JS_ToCString(context, value);
@@ -113,6 +273,7 @@ std::size_t size(JSContext* context, JSValueConst value, std::size_t limit = max
     return static_cast<std::size_t>(result);
 }
 void read(std::uintptr_t address, void* destination, std::size_t count) {
+    ReadTiming timing(count);
     if (count > max_read || address + count < address) throw std::runtime_error("invalid read range");
     SIZE_T actual = 0;
     if (count && (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), destination, count, &actual) || actual != count))
@@ -270,6 +431,10 @@ JSValue js_attach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
         auto& runtime = state();
         if (runtime.hooks.size() >= 512 || runtime.initialized) throw std::runtime_error("hooks may only be registered during initialization");
         auto hook = std::make_unique<Hook>();
+        hook->timing_id = static_cast<unsigned>(runtime.hooks.size());
+        auto label = JS_GetPropertyStr(c, args[1], "arkdpsName");
+        if (JS_IsString(label)) hook->timing_name = string(c, label).substr(0, 96);
+        JS_FreeValue(c, label);
         hook->address = reinterpret_cast<void*>(integer(c, args[0]));
         hook->callbacks = JS_DupValue(c, args[1]);
         // A leaf thunk: movabs volatile r11,Hook*; jmp [rip+0]; .quad entry.
@@ -323,7 +488,10 @@ void evaluate(JSContext* c, const std::string& source, const char* filename) {
 void callback(JSContext* c, Hook* hook, const char* name, JSValueConst receiver, int arguments, JSValueConst* args) {
     auto method = JS_GetPropertyStr(c, hook->callbacks, name);
     if (JS_IsFunction(c, method)) {
+        auto* measured = timing_active;
+        const auto began = measured ? ticks_now() : 0;
         auto result = JS_Call(c, method, receiver, arguments, args);
+        if (measured) measured->js += ticks_now()-began;
         if (JS_IsException(result)) { JS_FreeValue(c, method); throw std::runtime_error(exception(c)); }
         JS_FreeValue(c, result);
     }
@@ -332,6 +500,7 @@ void callback(JSContext* c, Hook* hook, const char* name, JSValueConst receiver,
 }
 
 extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
+    TimingSpan timing(hook->timing_id*2);
     auto& runtime = state();
     runtime.active.fetch_add(1);
     runtime.activity_generation.fetch_add(1);
@@ -348,7 +517,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     invocation = {hook, original_return, JS_UNDEFINED};
     frame->return_target = 1;
     try {
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
+        TimingLock lock(runtime.mutex, timing);
         if (!runtime.fatal.empty() || runtime.stopping.load()) return hook->original;
         auto* c = runtime.context;
         JS_UpdateStackTop(runtime.runtime);
@@ -392,8 +561,9 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     // can themselves enter instrumented functions and need a distinct TLS slot.
     auto& invocation = invocations.calls[invocations.depth - 1];
     const auto target = invocation.return_address;
+    TimingSpan timing(invocation.hook->timing_id*2+1);
     try {
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
+        TimingLock lock(runtime.mutex, timing);
         JS_UpdateStackTop(runtime.runtime);
         if (runtime.fatal.empty() && !JS_IsUndefined(invocation.receiver)) {
             auto value = pointer(runtime.context, frame->rax);
@@ -462,17 +632,36 @@ std::string readiness() {
     return runtime.ready;
 }
 std::string request(const std::string& json) {
+    unsigned operation_id = timing_request+3;
+    if (timing_state.enabled.load(std::memory_order_relaxed)) {
+        if (json.find("\"operation\":\"mark\"") != std::string::npos) operation_id = timing_request;
+        else if (json.find("\"operation\":\"read\"") != std::string::npos) operation_id = timing_request+1;
+        else if (json.find("\"operation\":\"ack\"") != std::string::npos) operation_id = timing_request+2;
+    }
+    bool timing_reply = false, timing_take_snapshot = false;
     auto& runtime = state();
     std::string result;
     std::exception_ptr failure;
     bool stopping = false;
+    {
+    TimingSpan timing(operation_id, true);
     try {
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
+        TimingLock lock(runtime.mutex, timing);
         if (json.size() > 8 * max_read) throw std::runtime_error("request is too large");
         const auto command = nlohmann::json::parse(json, [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
             if (depth > 64) throw std::runtime_error("request nesting exceeds limit");
             return true;
         });
+        if (command.is_object() && command.value("operation", nlohmann::json()) == "mark"
+                && command.contains("native_timing")) {
+            const auto& control = command["native_timing"];
+            if (control.is_object() && control.value("version", 0) == 1
+                    && control.contains("enabled") && control["enabled"].is_boolean()) {
+                timing_state.enabled.store(control["enabled"].get<bool>(), std::memory_order_relaxed);
+                timing_reply = true;
+                timing_take_snapshot = control.value("snapshot", false);
+            }
+        }
         stopping = command.is_object() && command.value("operation", nlohmann::json()) == "stop";
         if (stopping) {
             // This path is available even after a fatal callback. Do not leave
@@ -491,13 +680,16 @@ std::string request(const std::string& json) {
             if (!runtime.context) throw std::runtime_error("native runtime has no JavaScript context");
             JS_UpdateStackTop(runtime.runtime);
             auto argument = JS_NewStringLen(runtime.context, json.data(), json.size());
+            const auto dispatch_started = timing.sampled ? ticks_now() : 0;
             auto value = JS_Call(runtime.context, runtime.dispatch, JS_UNDEFINED, 1, &argument);
+            if (timing.sampled) timing.js += ticks_now()-dispatch_started;
             JS_FreeValue(runtime.context, argument);
             if (JS_IsException(value)) throw std::runtime_error(exception(runtime.context));
             result = string(runtime.context, value);
             JS_FreeValue(runtime.context, value);
         }
     } catch (...) { failure = std::current_exception(); }
+    }
     // No QuickJS lock while MinHook suspends threads: a game thread can be
     // blocked acquiring that lock after entering our thunk.
     if (MH_ApplyQueued() != MH_OK) throw std::runtime_error("could not apply native hook changes");
@@ -538,7 +730,30 @@ std::string request(const std::string& json) {
         }
         std::rethrow_exception(failure);
     }
+    if (timing_reply && !failure) try {
+        // Parsing/encoding diagnostic metadata must never hold the QuickJS mutex.
+        auto response = nlohmann::json::parse(result);
+        response["native_timing_control"] = {{"version", 1},
+            {"enabled", timing_state.enabled.load(std::memory_order_relaxed)}};
+        if (timing_take_snapshot) response["native_timing"] = timing_snapshot();
+        result = response.dump();
+    } catch (...) { /* Keep the original business reply if diagnostics fail. */ }
     return result;
+}
+std::uint64_t timing_begin() noexcept {
+    return timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
+}
+void timing_transport(unsigned phase, std::uint64_t start, std::size_t bytes) noexcept {
+    if (!start || phase > 3) return;
+    auto* thread = timing_slot();
+    if (!thread) return;
+    auto& c = thread->cells[timing_transport_base+phase];
+    const auto elapsed = ticks_now()-start;
+    c.revision.fetch_add(1, std::memory_order_acq_rel);
+    timing_add(c.calls, 1); timing_add(c.samples, 1); timing_add(c.ticks, elapsed);
+    timing_add(c.exclusive, elapsed); timing_add(c.bytes, bytes);
+    c.maximum.store((std::max)(c.maximum.load(std::memory_order_relaxed),elapsed),std::memory_order_relaxed);
+    c.revision.fetch_add(1, std::memory_order_acq_rel);
 }
 }
 

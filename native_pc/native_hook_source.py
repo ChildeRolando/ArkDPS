@@ -13,6 +13,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path, PurePosixPath
+from metrics import timed
 import re
 import secrets
 from threading import Lock
@@ -701,9 +702,18 @@ class NativeHookEventProbe:
         reset_probe_cursor(self)
         self._autochess_enabled = None
         self._timing_sink = self._timing_enabled = None
+        self._performance_sink = None
+        self._performance_enabled = lambda: False
+        self._performance_next_snapshot = 0.0
+        self._native_timing_may_be_enabled = False
+        self._native_timing_confirmed = False
 
     def set_request_timing_audit(self, sink=None, *, enabled=None):
         self._timing_sink, self._timing_enabled = sink, enabled
+
+    def set_performance_diagnostics(self, sink=None, *, enabled=None):
+        self._performance_sink = sink
+        self._performance_enabled = enabled or (lambda: False)
 
     def set_autochess_setting(self, enabled):
         self._autochess_enabled = enabled
@@ -806,11 +816,24 @@ class NativeHookEventProbe:
                 pass  # Keep failed resources and cleanup_errors for retry.
             raise
 
+    @timed('native_transport')
     def _raw_request(self, operation, *, timeout=None, **arguments):
         if self.status != ObserverStatus.READY or self._pipe is None:
             raise RuntimeError(self.error or 'native hook observer is not ready')
         if not self.collector.process.process_alive():
             raise RuntimeError('游戏进程已退出')
+        report_timing = False
+        if operation == 'mark':
+            enabled = bool(self._performance_enabled())
+            if enabled or self._native_timing_may_be_enabled:
+                now = time.perf_counter() if enabled else 0.0
+                report_timing = enabled and now >= self._performance_next_snapshot
+                if report_timing:
+                    self._performance_next_snapshot = now + 1.0
+                if report_timing or not enabled or not self._native_timing_confirmed:
+                    arguments['native_timing'] = dict(version=1, enabled=enabled, snapshot=report_timing)
+                # Retain this until a matching disable ACK, including lost replies.
+                self._native_timing_may_be_enabled |= enabled
         try:
             result = self._pipe.request(operation,
                 timeout=self.request_timeout if timeout is None else timeout, **arguments)
@@ -836,8 +859,26 @@ class NativeHookEventProbe:
                 except Exception:
                     pass  # Failure reporting cannot replace the transport error.
             raise
+        if operation == 'mark' and isinstance(result, dict):
+            control = result.get('native_timing_control')
+            if isinstance(control, dict) and control.get('version') == 1 and type(control.get('enabled')) is bool:
+                self._native_timing_confirmed = control['enabled']
+            if isinstance(control, dict) and control.get('version') == 1 and control.get('enabled') is False:
+                self._native_timing_may_be_enabled = False
+            if report_timing and self._performance_sink is not None:
+                native = result.get('native_timing')
+                data = dict(schema=1, source='native_runtime', utc=datetime.now(timezone.utc).isoformat(),
+                            available=isinstance(native, dict), native=native if isinstance(native, dict) else None)
+                try:
+                    self._performance_sink('native_performance_timing', data)
+                except Exception:
+                    pass
+            # Diagnostic extensions never enter binding, replay, archives or UI statistics.
+            result.pop('native_timing_control', None)
+            result.pop('native_timing', None)
         return result
 
+    @timed('native_request_and_binding')
     def _request(self, operation, *, timeout=None, **arguments):
         if self._timing_sink is None or (self._timing_enabled and not self._timing_enabled()):
             return self.binding.bind(operation, self._raw_request(operation, timeout=timeout, **arguments))

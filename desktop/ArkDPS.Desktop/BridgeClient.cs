@@ -242,6 +242,12 @@ internal sealed class BridgeClient : IAsyncDisposable
         bool canReplay = op is not ("hello" or "quit") && Hello.Bool("request_replay");
         bool retried = false;
         string phase = "write";
+        long phaseTiming = 0;
+        PerformanceTimings.Phase measuredPhase = PerformanceTimings.Phase.BridgeWrite;
+        void AdvanceTiming(PerformanceTimings.Phase next) {
+            PerformanceTimings.Shared.End(measuredPhase,phaseTiming);
+            measuredPhase=next; phaseTiming=PerformanceTimings.Shared.Begin();
+        }
         try
         {
             TimeSpan firstWait = canReplay ? timeout / 2 : timeout;
@@ -252,6 +258,7 @@ internal sealed class BridgeClient : IAsyncDisposable
                 if (remaining <= TimeSpan.Zero) throw new TimeoutException();
                 using var deadline = new CancellationTokenSource(remaining);
                 phase = "write";
+                AdvanceTiming(PerformanceTimings.Phase.BridgeWrite);
                 Task write = Task.Run(() =>
                 {
                     input.Write(request);
@@ -270,6 +277,7 @@ internal sealed class BridgeClient : IAsyncDisposable
                     throw;
                 }
                 phase = "read";
+                AdvanceTiming(PerformanceTimings.Phase.BridgeRead);
                 try
                 {
                     json = await ReceiveReply(id, deadline.Token).ConfigureAwait(false);
@@ -283,6 +291,7 @@ internal sealed class BridgeClient : IAsyncDisposable
                 }
             }
             phase = "validate";
+            AdvanceTiming(PerformanceTimings.Phase.BridgeValidate);
             using var document = JsonDocument.Parse(json);
             var reply = document.RootElement;
             var responseVersion = reply.Get("version");
@@ -305,6 +314,7 @@ internal sealed class BridgeClient : IAsyncDisposable
             if (kind != expectedKind) throw new IOException("worker 响应类型不匹配");
             if (op == "hello" && reply.Get("result").Text("transport") != "stdio-jsonl")
                 throw new IOException("Python worker 握手失败；请检查 UI 与采集器版本。");
+            PerformanceTimings.Shared.Enabled=reply.Get("state").Get("layout").Bool("performance_diagnostics");
             var debugSetting = reply.Get("state").Get("layout").Get("debug_mode");
             if (debugSetting.ValueKind is JsonValueKind.False or JsonValueKind.True)
                 debugMode = debugSetting.ValueKind == JsonValueKind.True;
@@ -326,6 +336,7 @@ internal sealed class BridgeClient : IAsyncDisposable
                 $"reply_bytes={Interlocked.Read(ref bytesRead) - previousBytes} error={cause.GetType().Name}");
             throw fault;
         }
+        finally { PerformanceTimings.Shared.End(measuredPhase,phaseTiming); }
     }
     public ValueTask DisposeAsync() => DisposeAsync(requireAcknowledgement: false);
 

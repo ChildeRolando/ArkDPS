@@ -5,6 +5,7 @@ keep their generation and sequence. Addresses and frames are not battle IDs.
 """
 from __future__ import annotations
 
+from metrics import timed
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -1942,6 +1943,7 @@ class BattleRuntime:
         self._pending_event_ack = None
         self._accepted_event_observer = None
 
+    @timed('event_consume')
     def _consume(self, observation):
         # Reject an invalid live handoff before journaling it as a consumable
         # observation; replay must not accept a prefix the live owner rejected.
@@ -1966,6 +1968,7 @@ class BattleRuntime:
             # ownership settles. Preserve the queue and the last good view.
             raise MappingRetry(str(exc), observation) from exc
 
+    @timed('capture_acquire')
     def _acquire(self, collector, observer):
         published_observer = None
         accepted = self._accepted_event_observer

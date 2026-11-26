@@ -40,7 +40,7 @@ from event_probe import BarrierBusy, CallbackBusyMark, NATIVE_PC_CONTRACT
 from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from log_context import LogContext
-from metrics import observation_age
+from metrics import observation_age, TimingWindow, timing_batch
 from native_pc.event_source import PcEventSource, PcEventSourceCleanupError
 from panel_model import (Category, EventAvailability, PanelConfig, Ranking, RateBasis, detail_rates,
                          live_damage_rates, panel_statistics, render_panel, rows_from_statistics,
@@ -67,7 +67,7 @@ BRIDGE_COMMANDS = frozenset((
     'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
     'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
     'history_refresh', 'history_select', 'history_config', 'export', 'connection_apply',
-    'multiplayer_enabled', 'debug_mode',
+    'multiplayer_enabled', 'debug_mode', 'performance_diagnostics',
 ))
 BRIDGE_KEY_COMMANDS = frozenset(('hello', 'connection_apply', 'rescan', 'history_refresh', 'quit', 'debug_mode'))
 PC_STARTUP_KEY_EVENTS = frozenset(('target_selected', 'loader_submitted', 'loader_completed', 'target_unavailable')) | NATIVE_HOOK_STARTUP_EVENTS
@@ -365,6 +365,8 @@ class DesktopState:
         self.store = LayoutStore(directory / 'layout.json')
         loaded = self.store.load()
         self.layout = loaded.layout
+        self._performance_timings = TimingWindow(lambda: self.layout.performance_diagnostics,
+            lambda kind, data: _write_diagnostic_event(kind, data), source='presentation')
         self.connection_store = ConnectionConfigStore(directory / 'connection.json')
         config = self.connection_store.load()
         self.connection = config.config
@@ -1088,6 +1090,7 @@ class DesktopState:
         result['players'] = players
         return result
 
+    @timing_batch
     def snapshot(self):
         # Bound the cache independently of layout editing or a long paused scope.
         # Ordinary polls share immutable projection work; age/FPS/IPC overlays below
@@ -1227,6 +1230,12 @@ class DesktopState:
                 raise ValueError('卫戍队友DPS开关必须是布尔值')
             if enabled != self.layout.multiplayer_enabled:
                 self.persist(replace(self.layout, multiplayer_enabled=enabled))
+        elif op == 'performance_diagnostics':
+            enabled = cmd.get('enabled')
+            if type(enabled) is not bool:
+                raise ValueError('性能计时开关必须是布尔值')
+            if enabled != self.layout.performance_diagnostics:
+                self.persist(replace(self.layout, performance_diagnostics=enabled))
         elif op == 'debug_mode':
             enabled = cmd.get('enabled')
             if type(enabled) is not bool:
@@ -1412,6 +1421,8 @@ class CollectionWorker:
         self.effective = (state.connection, state.layout.event_observation)
         self._request_lock = threading.Lock()
         self._autochess_enabled = state.layout.multiplayer_enabled
+        self._performance_enabled = threading.Event()
+        self.set_performance_diagnostics(state.layout.performance_diagnostics)
         self._debug_mode = threading.Event()
         self.set_debug_mode(state.layout.debug_mode)
         self._request_revision = 0
@@ -1444,6 +1455,12 @@ class CollectionWorker:
     @property
     def debug_mode(self):
         return self._debug_mode.is_set()
+
+    def set_performance_diagnostics(self, enabled):
+        if enabled:
+            self._performance_enabled.set()
+        else:
+            self._performance_enabled.clear()
 
     def set_debug_mode(self, enabled):
         if enabled:
@@ -1689,8 +1706,17 @@ class CollectionWorker:
                         journal.write('environment', environment)
                         _write_diagnostic_event('environment', environment)
 
+                pending_performance = []
+                pending_performance_dropped = 0
+
                 def audit(kind, value):
-                    nonlocal sampling_observation, last_lifecycle
+                    nonlocal sampling_observation, last_lifecycle, pending_performance_dropped
+                    if kind in ('performance_timing', 'native_performance_timing'):
+                        if len(pending_performance) < 8:
+                            pending_performance.append((kind, value))
+                        else:
+                            pending_performance_dropped += 1
+                        return
                     if kind == 'connected' and current_config is not None:
                         observe_environment(value.get('diagnostics', {}), current_config)
                     if kind == 'lifecycle_observation':
@@ -1719,12 +1745,17 @@ class CollectionWorker:
                         event_backend=backend, observer_status=observer_state[0], lifecycle=sessions.state))
 
                 def flush_capture_health():
+                    nonlocal pending_performance_dropped
                     for value in pending_capture_health:
                         try:
                             audit('capture_health', value)
                         except Exception:
                             pass  # Health diagnostics cannot stop collection or shutdown.
                     pending_capture_health.clear()
+                    for kind, value in pending_performance:
+                        journal.write(kind, dict(value, queue_dropped=pending_performance_dropped))
+                        pending_performance_dropped = 0
+                    pending_performance.clear()
 
                 capture_health = _CaptureHealth(enqueue_capture_health)
                 self._bootstrap_audit = audit
@@ -1814,7 +1845,8 @@ class CollectionWorker:
                             if self.release():
                                 try:
                                     session_kwargs = {'autochess_enabled': self.autochess_enabled,
-                                                      'debug_mode': lambda: self.debug_mode}
+                                                      'debug_mode': lambda: self.debug_mode,
+                                                      'performance_diagnostics': self._performance_enabled.is_set}
                                     pc_provider = self._pc_provider(config, enabled,
                                         explicit_retry=explicit_retry_pending)
                                     explicit_retry_pending = False
@@ -2102,7 +2134,7 @@ class CollectionWorker:
                         # Pace successful live reads start-to-start, with a short
                         # rest even if capture took longer than the whole period.
                         # Idle, paused and retry paths keep their existing backoff.
-                        if pending_capture_health and clock_retry_delay is None:
+                        if (pending_capture_health or pending_performance) and clock_retry_delay is None:
                             flush_capture_health()  # Keep disk I/O out of a pending native burst.
                         delay = (clock_retry_delay if clock_retry_delay is not None else
                                  COLLECTION_PERIOD if next_live_read is None else
@@ -2167,9 +2199,13 @@ def _drain_worker_events(worker, state):
 def serve(input_stream, output, state, worker=None, *, internal_capture=False):
     """Versioned UTF-8 JSON Lines: hello, snapshot/state/error, quit/bye."""
     handshake = False
+    timings = TimingWindow(lambda: state.layout.performance_diagnostics,
+        lambda kind, data: _write_diagnostic_event(kind, data), source='worker_stdio')
     forced_trace = os.environ.get('ARKDPS_BRIDGE_TRACE') == '1'
     last_reply: tuple[int, str, str, int] | None = None
     while True:
+        if not state.layout.performance_diagnostics:
+            timings.clear()
         trace = forced_trace or state.layout.debug_mode
         line = input_stream.readline(MAX_MESSAGE + 2)
         if not line:
@@ -2204,6 +2240,8 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
             now = time.perf_counter()
             if now - phase_start >= BRIDGE_SLOW_PHASE_SECONDS:
                 diagnostic('slow')
+            if state.layout.performance_diagnostics:
+                timings.add(phase, int((now-phase_start)*1_000_000_000))
             phase, phase_start = next_phase, now
             if trace:
                 diagnostic('begin')
@@ -2220,6 +2258,8 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
                 diagnostic('failed', error=type(exc).__name__)
                 return False
             advance('complete')
+            if state.layout.performance_diagnostics:
+                timings.flush()
             if log_op in BRIDGE_KEY_COMMANDS or trace or time.perf_counter() - started >= BRIDGE_SLOW_PHASE_SECONDS:
                 diagnostic('sent')
             return True
@@ -2319,6 +2359,8 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
                     state.finish_offline_connection()
                 elif op == 'multiplayer_enabled' and worker:
                     worker.set_multiplayer_enabled(state.layout.multiplayer_enabled)
+                elif op == 'performance_diagnostics' and worker:
+                    worker.set_performance_diagnostics(state.layout.performance_diagnostics)
                 elif op == 'debug_mode' and worker:
                     worker.set_debug_mode(state.layout.debug_mode)
                 kind = 'snapshot' if op == 'snapshot' else 'state'
