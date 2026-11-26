@@ -1,0 +1,107 @@
+{
+  "branches": {
+    "heal": {
+      "entry": {
+        "compact_bytes": 907,
+        "fields": 6,
+        "owned_bytes": 115,
+        "publication_revision": 0,
+        "read_bytes": 161,
+        "read_count": 12,
+        "scope_revision": 0,
+        "segments": 9
+      },
+      "first_max_hp": 200,
+      "leave": {
+        "compact_bytes": 6208,
+        "fields": 69,
+        "owned_bytes": 1096,
+        "publication_revision": 0,
+        "read_bytes": 1312,
+        "read_count": 87,
+        "scope_revision": 1,
+        "segments": 81
+      }
+    },
+    "nested_maxhp_dirty_hostclaim": {
+      "entry": {
+        "compact_bytes": 907,
+        "fields": 6,
+        "owned_bytes": 115,
+        "publication_revision": 0,
+        "read_bytes": 161,
+        "read_count": 12,
+        "scope_revision": 0,
+        "segments": 9
+      },
+      "fresh_max_hp": 240,
+      "leave": {
+        "compact_bytes": 125942,
+        "fields": 1645,
+        "owned_bytes": 13054,
+        "publication_revision": 1,
+        "read_bytes": 16674,
+        "read_count": 2203,
+        "scope_revision": 1,
+        "segments": 1873
+      }
+    },
+    "unchanged": {
+      "entry": {
+        "compact_bytes": 907,
+        "fields": 6,
+        "owned_bytes": 115,
+        "publication_revision": 0,
+        "read_bytes": 161,
+        "read_count": 12,
+        "scope_revision": 0,
+        "segments": 9
+      },
+      "leave": {
+        "compact_bytes": 576,
+        "fields": 3,
+        "owned_bytes": 72,
+        "publication_revision": 0,
+        "read_bytes": 72,
+        "read_count": 3,
+        "scope_revision": 0,
+        "segments": 3
+      }
+    }
+  },
+  "fixture_only": true,
+  "header_bytes": 312,
+  "negative_checks": [
+    "uid_change_disables_nochange",
+    "clock_changed_guard",
+    "scope_changed_guard"
+  ],
+  "nested_dirty_entry": {
+    "compact_bytes": 6227,
+    "fields": 70,
+    "owned_bytes": 1083,
+    "publication_revision": 0,
+    "read_bytes": 1345,
+    "read_count": 90,
+    "scope_revision": 1,
+    "segments": 81
+  },
+  "nested_dirty_leave": {
+    "compact_bytes": 6208,
+    "fields": 69,
+    "owned_bytes": 1096,
+    "publication_revision": 0,
+    "read_bytes": 1312,
+    "read_count": 87,
+    "scope_revision": 1,
+    "segments": 81
+  },
+  "publication_guards": 788,
+  "roster_members": 41,
+  "provenance": {
+    "source_base": "b1e78dbfc9529f11a24fc31415f7ba6c8470d578",
+    "strict_compiler": "aa59caac87b9a725f644b4fdb41af4292c9169b6",
+    "scope": "owned warm graph only; cold plan retained but not activated; no runtime readiness/FPS claim",
+    "generation": "production nativeCapturePlan/finalizeNativeCapturePlan/nativeCaptureScopeGraph/publicationGuardFields over existing owned world, 40 ChessInst + 1 token"
+  }
+}
