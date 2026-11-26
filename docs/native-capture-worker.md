@@ -254,25 +254,17 @@ HP record 不含生产计划中不存在的父 checkpoint，缺证负例必须�
 也不能代替实机 FPS。实验性的指针表示或字符串 codec 未通过收益门槛时不并入生产候选。
 
 
-### 当前lease的原始ReadPlan批读取
+### Raw program ownership
 
-ReadPlan在脚本setup注册，source evaluate结束后由engine显式seal；callback和宿主journal均
-不能再注册。每VM最多32plans，每plan最多32slots、12级指针路径；只描述固定raw bytes
-（1..128）或UTF16原始klass8/length4/text，单次输出硬限16384字节。计划绑定metadata对象
-对应的内部ID，role名在执行时映射当前append-only角色表。它不持有现场值，不计算HP、金额、
-回血、XOR结果、归属或scope结论。
+The independently registered HP ReadPlan experiment was removed after the
+actual shared-source A/B showed negative performance. There is no production
+plan-registration API, metadata/handle registry, tier execution endpoint or
+registration seal. HP retains the canonical source pointer-read path.
 
-`__arkdpsRegisterOwnedReadPlan(metadata,spec)`返回不可伪造handle；旧provider完全没有API时
-才返回null。`__arkdpsOwnedReadBatch(handle,arg0,tiers)`只在当前固定provider/lease执行，
-每一级pointer与最终bytes仍调用同一OwnedReplayView精确role/checkpoint/field读取；unique
-selector保留原Witness的单字段状态/并发优先级。结构缺口独立poison，不因JS catch消失；
-planned错误只在该slot保留status且没有payload，未请求tier为ffff，访问它是结构缺口。
-
-AB头16字节为u32 version/slot_count/executed_tiers/payload_bytes，各slot随后16字节为
-u16 status/kind、u32 offset/length/reserved0。成功slot由facade返回DataView，字符串raw布局为
-klass8+signed length4+UTF16 bytes；原JS业务验证继续唯一消费。所有返回bytes为新owned副本，
-保留它不延长native lease，也不授权下一record复用事实。注册/执行函数同其余provider一起
-固定身份，midrecord替换global不改变当前选择，下一record失配拒收，不回退现场读取。
+The raw executor remains owned by compiled CaptureGraph programs. Their packet
+ABI and all lease, role, checkpoint, unique-field, overlap, guard and failure
+rules remain unchanged. Programs use the fixed mask one; this internal packet
+field is retained for compatibility, not a second tier API.
 
 
 ### Captured graph raw batches
@@ -284,7 +276,7 @@ Native ABI: (kind, revision, graphModeEpoch, chunkIndex).
 
 Programs derive once from the compiled CaptureGraph after role/ID interning,
 retain flattened field order and split into 32-slot chunks. They share the
-setup ReadPlan executor and AB ABI. Each field requires the original unique
+same raw executor and AB ABI. Each field requires the original unique
 role/checkpoint witness and expected remapped ID before independently reading
 all pointer links and final bytes through OwnedReplayView. Planned guard error
 priority remains unchanged; genuine structural failures poison the replay.
@@ -326,5 +318,4 @@ replay lease, kind and graph object, and source checks it using
 `proof.slot(originalIndex)` rejects static fields and later records. Dynamic
 fields retain the shared JS canonical clock/state/phase/class interpretation.
 Failure-only native field index maps back to the fixed role/current checkpoint;
-no addresses or mutable facts are added to diagnostics. Existing setup plans
-and graph raw-batch paths keep their prior contracts.
+no addresses or mutable facts are added to diagnostics. Existing graph raw-batch paths keep their prior contracts.

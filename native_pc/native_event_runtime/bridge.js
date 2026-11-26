@@ -107,13 +107,12 @@ function __arkdpsReplayBegin(record){
  if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('invalid record checkpoint');
  if(record.native_view===true){
   const lease=globalThis.__nativeOwnedLease,read=globalThis.__nativeOwnedRead,scalar=globalThis.__nativeOwnedScalar,
-   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,graphCheck=globalThis.__nativeOwnedGraphCheck,graphFailure=globalThis.__nativeOwnedGraphFailure,graphBatch=globalThis.__nativeOwnedGraphReadBatch,batch=globalThis.__nativeOwnedReadBatch,register=globalThis.__nativeOwnedReadPlanRegister;
+   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,graphCheck=globalThis.__nativeOwnedGraphCheck,graphFailure=globalThis.__nativeOwnedGraphFailure,graphBatch=globalThis.__nativeOwnedGraphReadBatch;
   if(typeof lease!=='function'||typeof read!=='function'||typeof scalar!=='function'||typeof status!=='function'||typeof point!=='function')
    throw new Error('native owned provider unavailable');
-  if((batch!==undefined||register!==undefined)&&(typeof batch!=='function'||typeof register!=='function'))throw new Error('native owned batch provider unavailable');
   let native=__arkdpsNativeProvider;
-  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedGraphCheck!==graphCheck||native.__nativeOwnedGraphFailure!==graphFailure||native.__nativeOwnedGraphReadBatch!==graphBatch||native.__nativeOwnedReadBatch!==batch||native.__nativeOwnedReadPlanRegister!==register)
-   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedGraphCheck:graphCheck,__nativeOwnedGraphFailure:graphFailure,__nativeOwnedGraphReadBatch:graphBatch,__nativeOwnedReadBatch:batch,__nativeOwnedReadPlanRegister:register});
+  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedGraphCheck!==graphCheck||native.__nativeOwnedGraphFailure!==graphFailure||native.__nativeOwnedGraphReadBatch!==graphBatch)
+   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedGraphCheck:graphCheck,__nativeOwnedGraphFailure:graphFailure,__nativeOwnedGraphReadBatch:graphBatch});
   if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||native.__nativeOwnedLease(record.ticket)!==true)throw new Error('native owned lease unavailable');
   __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};return;
  }
@@ -275,7 +274,6 @@ function __arkdpsNativeCall(name,a,b,c,d,e){
    case '__nativeOwnedRead':return native.__nativeOwnedRead(a,b,c,d,e);
    case '__nativeOwnedScalar':return native.__nativeOwnedScalar(a,b,c,d,e);
    case '__nativeOwnedGraphReadBatch':return native.__nativeOwnedGraphReadBatch(a,b,c,d);
-   case '__nativeOwnedReadBatch':return native.__nativeOwnedReadBatch(a,b,c,d,e);
   }
  }catch(error){__arkdpsReplayGap('native owned provider failed '+name);}
  __arkdpsReplayGap('invalid native owned operation '+name);
@@ -294,22 +292,6 @@ function __arkdpsNativeAddress(address){
 }
 // Immutable metadata handles are registered once before native installation is
 // sealed. They contain read geometry only; values always come from this lease.
-const __arkdpsReadPlanMetadata=new WeakMap(),__arkdpsReadPlanHandles=new WeakMap();
-let __arkdpsReadPlanMetadataSerial=0;
-function __arkdpsRegisterOwnedReadPlan(metadata,spec){
- if(__arkdpsReplay!==null)__arkdpsReplayGap('owned read plan registration during replay');
- const register=globalThis.__nativeOwnedReadPlanRegister,execute=globalThis.__nativeOwnedReadBatch;
- if(register===undefined&&execute===undefined)return null;
- if(typeof register!=='function'||typeof execute!=='function'||!metadata||typeof metadata!=='object')throw Error('owned read plan provider unavailable');
- let owner=__arkdpsReadPlanMetadata.get(metadata);
- if(owner===undefined){owner=++__arkdpsReadPlanMetadataSerial;__arkdpsReadPlanMetadata.set(metadata,owner);}
- const id=register(owner,spec);
- if(!Number.isSafeInteger(id)||id<=0||id>32||!Array.isArray(spec.fields)||spec.fields.length>32)throw Error('invalid registered owned read plan');
- const tiers=Object.freeze(spec.fields.map(field=>field.tier)),kinds=Object.freeze(spec.fields.map(field=>field.kind==='utf16'?1:0)),sizes=Object.freeze(spec.fields.map(field=>field.kind==='utf16'?field.max_units:field.bytes));
- const handle=Object.freeze({});
- __arkdpsReadPlanHandles.set(handle,{id,owner,register,execute,tiers,kinds,sizes,mask:tiers.reduce((a,b)=>a|b,0)});
- return handle;
-}
 class __ArkDpsOwnedBatch {
  #view;#state;#mask;#head;
  constructor(bytes,state,mask){
@@ -335,16 +317,6 @@ class __ArkDpsOwnedBatch {
   }
   return new DataView(view.buffer,offset,size);
  }
-}
-function __arkdpsOwnedReadBatch(handle,root,tiers){
- const replay=__arkdpsReplay,state=__arkdpsReadPlanHandles.get(handle);
- if(!replay?.native||!state||replay.native.__nativeOwnedReadBatch!==state.execute||replay.native.__nativeOwnedReadPlanRegister!==state.register)__arkdpsReplayGap('owned batch provider changed or unavailable');
- if(!Number.isInteger(tiers)||tiers<=0||tiers>255||(tiers&~state.mask)!==0)__arkdpsReplayGap('invalid owned batch tiers');
- let address;try{address=__integer(root);}catch(error){__arkdpsReplayGap('invalid owned batch root');}
- if(address<0n||address>0xffffffffffffffffn)__arkdpsReplayGap('invalid owned batch root');
- const bytes=__arkdpsNativeCall('__nativeOwnedReadBatch',state.id,state.owner,__arkdpsNativeAddress(address),tiers,replay.checkpoint);
- if(bytes===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
- return new __ArkDpsOwnedBatch(bytes,state,tiers);
 }
 const __arkdpsGraphReadGeometry=new WeakMap();
 function __arkdpsOwnedGraphReadBatch(kind,graph,chunk){

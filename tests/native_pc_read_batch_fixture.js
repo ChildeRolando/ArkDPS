@@ -1,6 +1,6 @@
 'use strict';
 // Fake provider isolates JS protocol/pinning. Actual C++/QuickJS reads and
-// registration/guard priority are covered by owned_read_plan_test.cpp.
+// graph compile/guard priority are covered by owned_read_plan_test.cpp.
 const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
 const c=vm.createContext({});
 vm.runInContext(`
@@ -16,8 +16,6 @@ function rejects(fn){try{fn();return false;}catch(error){return true;}}
 `,c);
 vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8'),c);
 vm.runInContext(`
-const metadata={};globalThis.oldProvider=__arkdpsRegisterOwnedReadPlan(metadata,{version:1,fields:[]});
-function register(metadata,spec){plans.push({metadata,spec});return plans.length;}
 function execute(id,metadata,root,mask,cp){
  calls++;if(arguments.length!==5||cp!==3||root!==4096n||plans[id-1].metadata!==metadata)throw Error('batch ABI');
  if(mode==='undefined'){status=9;return;}
@@ -42,33 +40,10 @@ function execute(id,metadata,root,mask,cp){
  if(mode==='reserved')v.setUint32(28,1,true);
  return b.slice(0,cursor);
 }
-globalThis.__nativeOwnedReadPlanRegister=register;globalThis.__nativeOwnedReadBatch=execute;
-const spec={version:1,fields:[{tier:1,role:'body',bytes:8},{tier:2,role:'body',bytes:4},{tier:4,role:'body',kind:'utf16',max_units:200}]};
-const handle=__arkdpsRegisterOwnedReadPlan(metadata,spec);globalThis.handleFrozen=Object.isFrozen(handle);
-__arkdpsReplayBegin(nativeRecord());
-const batch=__arkdpsOwnedReadBatch(handle,4096n,5);globalThis.bytesValue=batch.slot(0).getBigUint64(0,true).toString();
-const raw=batch.slot(2);globalThis.rawString=[raw.getBigUint64(0,true).toString(),raw.getInt32(8,true),raw.getUint16(12,true),raw.getUint16(14,true)];
-globalThis.success=__arkdpsReplayEnd();
-mode='planned';__arkdpsReplayBegin(nativeRecord());const partial=__arkdpsOwnedReadBatch(handle,4096n,3);
-globalThis.partialValue=partial.slot(0).getBigUint64(0,true).toString();globalThis.planned=rejects(()=>partial.slot(1));globalThis.plannedEnd=__arkdpsReplayEnd();
-mode='ok';__arkdpsReplayBegin(nativeRecord());const pinned=__arkdpsOwnedReadBatch;
-globalThis.__nativeOwnedReadBatch=()=>{throw Error('replacement');};
-globalThis.pinnedValue=pinned(handle,4096n,1).slot(0).getBigUint64(0,true).toString();globalThis.pinnedEnd=__arkdpsReplayEnd();
-__arkdpsReplayBegin(nativeRecord());globalThis.changedProvider=rejects(()=>__arkdpsOwnedReadBatch(handle,4096n,1));globalThis.changedEnd=__arkdpsReplayEnd();globalThis.__nativeOwnedReadBatch=execute;
-globalThis.bad=[];
-for(const badMode of ['version','count','mask','kind','range','short','reserved','undefined']){
- mode=badMode;status=0;__arkdpsReplayBegin(nativeRecord());
- const rejected=rejects(()=>__arkdpsOwnedReadBatch(handle,4096n,1).slot(0));bad.push({rejected,complete:__arkdpsReplayEnd().complete});
-}
-mode='ok';__arkdpsReplayBegin(nativeRecord());globalThis.unrequested=rejects(()=>__arkdpsOwnedReadBatch(handle,4096n,1).slot(2));globalThis.unrequestedEnd=__arkdpsReplayEnd();
-__arkdpsReplayBegin(nativeRecord());globalThis.forged=rejects(()=>__arkdpsOwnedReadBatch({},4096n,1));globalThis.forgedEnd=__arkdpsReplayEnd();
-__arkdpsReplayBegin(nativeRecord());globalThis.lateRegister=rejects(()=>__arkdpsRegisterOwnedReadPlan(metadata,spec));globalThis.lateEnd=__arkdpsReplayEnd();
+globalThis.retiredApisAbsent=typeof __arkdpsRegisterOwnedReadPlan==='undefined'&&typeof __arkdpsOwnedReadBatch==='undefined'&&typeof __nativeOwnedReadPlanRegister==='undefined'&&typeof __nativeOwnedReadBatch==='undefined';
 globalThis.liveCount=live;
 `,c);
-assert.equal(c.oldProvider,null);assert(c.handleFrozen);assert.equal(c.bytesValue,'111');assert.deepEqual(Array.from(c.rawString),['20480',2,0x4e2d,0xd800]);assert(c.success.complete);
-assert(c.planned);assert(c.plannedEnd.complete);assert.equal(c.plannedEnd.unreadable_reads,1);assert.equal(c.partialValue,'111');
-assert.equal(c.pinnedValue,'111');assert(c.pinnedEnd.complete);assert(c.changedProvider);assert(!c.changedEnd.complete);
-assert(Array.from(c.bad).every(x=>x.rejected&&!x.complete));for(const k of ['unrequested','forged','late'])assert(c[k==='late'?'lateRegister':k]&&!c[k+'End'].complete);
+assert(c.retiredApisAbsent);
 vm.runInContext(`
 mode='ok';
 const scopeGraph=Object.freeze({revision:7,mode_epoch:2,fields:Object.freeze([{root:'absolute',kind:'bytes',bytes:8},{root:'absolute',kind:'utf16',max_units:200}])});
@@ -122,4 +97,4 @@ __arkdpsReplayBegin(nativeRecord());globalThis.emptyCheck=__arkdpsOwnedGraphChec
 assert.equal(c.noCheck,null);assert(c.proofGood&&!c.proofForged);assert.equal(c.proofValue,'111');assert(c.proofEnd.complete);
 assert(!c.proofExpired&&c.proofExpiredSlot&&!c.proofExpiredEnd.complete);assert(c.proofStatic&&!c.proofStaticEnd.complete);
 assert(c.checkFailure&&c.checkFailureEnd.complete);assert.equal(c.checkFailureEnd.unreadable_reads,1);assert.equal(c.checkUnsupported,null);assert(c.checkUnsupportedEnd.complete);assert.equal(c.emptyCheck,null);assert(c.emptyCheckEnd.complete);
-assert.equal(c.liveCount,0);console.log('PASS owned read batch facade: slots/UTF16/planned/tiers/providerpin/metadatahandle/malformed/registration/no fallback');
+assert.equal(c.liveCount,0);console.log('PASS owned graph batch facade: slots/UTF16/planned/providerpin/lease/malformed/no fallback');

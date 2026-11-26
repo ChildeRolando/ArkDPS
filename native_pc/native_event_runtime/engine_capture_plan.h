@@ -28,7 +28,7 @@ struct OwnedReadField {
     bool current_checkpoint=false,absolute_root=false,project=false;
     std::vector<OwnedReadWord> words;std::vector<std::uint16_t> utf16;bool compare_utf16=false;
 };
-struct OwnedReadProgram {std::uint64_t metadata=0;unsigned tiers=0;std::vector<OwnedReadField> fields;};
+struct OwnedReadProgram {unsigned tiers=0;std::vector<OwnedReadField> fields;};
 
 struct SavedEntryRoot {
     std::uint8_t slot=0, index=0;
