@@ -40,6 +40,14 @@ globalThis.packedProof={ticket:packed.ticket,invocation:packed.invocation_id,par
  pub:packed.facts.publication_revision,cold:packed.facts.cold_revision,missing:packed.facts.scope_unavailable,
  parents:packed.facts.parent_checkpoints},stableFacts:packed.facts===packed.facts,
  frozen:Object.isFrozen(packed)&&Object.isFrozen(packed.facts)&&Object.isFrozen(packed.facts.parent_checkpoints)};
+let retainedRecord=__arkdpsPackedCaptureRecord(header.slice(0));const retainedFacts=retainedRecord.facts;
+const recordPrototype=Object.getPrototypeOf(retainedRecord),numberMethod=recordPrototype.number,parentsMethod=recordPrototype.parents;
+recordPrototype.number=()=>{throw Error('Facts accessed Record.number');};recordPrototype.parents=()=>{throw Error('Facts accessed Record.parents');};
+globalThis.factsWithoutRecordMethods={mode:retainedFacts.mode_epoch,scope:retainedFacts.scope_mode_epoch,parents:retainedFacts.parent_checkpoints};
+recordPrototype.number=numberMethod;recordPrototype.parents=parentsMethod;
+globalThis.sharedParentArray=retainedRecord.parents()===retainedFacts.parent_checkpoints;
+retainedRecord=null;__arkdpsReplayBegin(nativeRecord());__arkdpsReplayEnd();leased=false;
+globalThis.retainedFactsProof={mode:retainedFacts.mode_epoch,scope:retainedFacts.scope_revision,parents:retainedFacts.parent_checkpoints,frozen:Object.isFrozen(retainedFacts)&&Object.isFrozen(retainedFacts.parent_checkpoints[0])};leased=true;
 const empty=__arkdpsPackedCaptureRecord(new ArrayBuffer(176));
 globalThis.packedEmpty=empty.facts.cold_revision===undefined&&empty.facts.scope_revision===undefined
  &&empty.facts.publication_revision===undefined&&empty.facts.parent_checkpoints.length===0&&empty.edge==='entry';
@@ -110,3 +118,5 @@ assert.deepEqual(Array.from(c.wrapValues),['0xffffffffffffffff','0x1','0xfffffff
 assert(c.providerFrozen);assert(c.providerReused);assert(c.providerRebuilt);assert.equal(c.compactGood,true);assert.equal(c.compactRebuilt,true);assert.equal(c.publicEnd.complete,true);assert.equal(c.compactExpired,false);assert.equal(c.compactPoison,false);
 
 assert(c.unknownOperation);assert.equal(c.unknownOperationEnd.complete,false);
+
+assert.equal(c.factsWithoutRecordMethods.mode,3);assert.equal(c.factsWithoutRecordMethods.scope,4);assert.equal(c.factsWithoutRecordMethods.parents[0].invocation_id,'9007199254741001');assert(c.sharedParentArray);assert.equal(c.retainedFactsProof.mode,3);assert.equal(c.retainedFactsProof.scope,21);assert.equal(c.retainedFactsProof.parents[0].invocation_id,'9007199254741001');assert(c.retainedFactsProof.frozen);

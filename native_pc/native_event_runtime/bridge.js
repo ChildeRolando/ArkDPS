@@ -21,20 +21,32 @@ let __arkdpsReplay=null,__arkdpsNativeProvider=null;
 // A record owns a small, fixed wire header. Cold fields stay lazy: most HP
 // edges never inspect ancestry, parents, publication or terminal metadata.
 // None of these getters consult the native view or a later capture lease.
-const __arkdpsEmptyParents=Object.freeze([]);
+const __arkdpsEmptyParents=Object.freeze([]),__arkdpsParentCache=Symbol();
+function __arkdpsPackedNumber(view,slot){const offset=slot*8;return view.getUint32(offset,true)+view.getUint32(offset+4,true)*4294967296;}
+function __arkdpsPackedParents(view){
+ const cached=view[__arkdpsParentCache];if(cached!==undefined)return cached;
+ const count=__arkdpsPackedNumber(view,21);if(!count)return __arkdpsEmptyParents;
+ const values=[];
+ for(let i=0;i<count;i++){
+  const at=176+i*16,invocation=view.getBigUint64(at,true),checkpoint=view.getUint32(at+8,true);
+  if(invocation===0n||checkpoint!==i+1||view.getUint32(at+12,true)!==0)throw Error('invalid packed parent checkpoint');
+  values.push(Object.freeze({invocation_id:invocation.toString(),checkpoint}));
+ }
+ return view[__arkdpsParentCache]=Object.freeze(values);
+}
 class __ArkDpsCaptureFacts {
- #record;
- constructor(record){this.#record=record;Object.freeze(this);}
- get mode_epoch(){return this.#record.number(7);}
- get scope_mode_epoch(){return this.#record.number(8);}
- get scope_revision(){return this.#record.number(9)||undefined;}
- get publication_revision(){return this.#record.number(10)||undefined;}
- get cold_revision(){return this.#record.number(11)||undefined;}
- get scope_unavailable(){return this.#record.number(20)!==0;}
- get parent_checkpoints(){return this.#record.parents();}
+ #view;
+ constructor(view){this.#view=view;Object.freeze(this);}
+ get mode_epoch(){return __arkdpsPackedNumber(this.#view,7);}
+ get scope_mode_epoch(){return __arkdpsPackedNumber(this.#view,8);}
+ get scope_revision(){return __arkdpsPackedNumber(this.#view,9)||undefined;}
+ get publication_revision(){return __arkdpsPackedNumber(this.#view,10)||undefined;}
+ get cold_revision(){return __arkdpsPackedNumber(this.#view,11)||undefined;}
+ get scope_unavailable(){return __arkdpsPackedNumber(this.#view,20)!==0;}
+ get parent_checkpoints(){return __arkdpsPackedParents(this.#view);}
 }
 class __ArkDpsCaptureRecord {
- #view;#facts;#parents;#ticket;
+ #view;#facts;#ticket;
  constructor(bytes){
   if(!(bytes instanceof ArrayBuffer)||bytes.byteLength<176)throw Error('invalid packed capture header');
   this.#view=new DataView(bytes);
@@ -42,19 +54,9 @@ class __ArkDpsCaptureRecord {
   if(count>256||bytes.byteLength!==176+count*16||this.number(18)>1)throw Error('invalid packed capture geometry');
   this.#ticket=this.text(0);Object.freeze(this);
  }
- number(slot){const offset=slot*8;return this.#view.getUint32(offset,true)+this.#view.getUint32(offset+4,true)*4294967296;}
+ number(slot){return __arkdpsPackedNumber(this.#view,slot);}
  text(slot){return this.#view.getBigUint64(slot*8,true).toString();}
- parents(){
-  if(this.#parents!==undefined)return this.#parents;
-  const count=this.number(21);if(!count)return this.#parents=__arkdpsEmptyParents;
-  const values=[];
-  for(let i=0;i<count;i++){
-   const at=176+i*16,invocation=this.#view.getBigUint64(at,true),checkpoint=this.#view.getUint32(at+8,true);
-   if(invocation===0n||checkpoint!==i+1||this.#view.getUint32(at+12,true)!==0)throw Error('invalid packed parent checkpoint');
-   values.push(Object.freeze({invocation_id:invocation.toString(),checkpoint}));
-  }
-  return this.#parents=Object.freeze(values);
- }
+ parents(){return __arkdpsPackedParents(this.#view);}
  get version(){return 1;}get native_view(){return true;}
  get ticket(){return this.#ticket;}
  get invocation_id(){return this.text(1);}get parent_invocation_id(){return this.text(2);}
@@ -64,7 +66,7 @@ class __ArkDpsCaptureRecord {
  get active_at_capture(){return this.number(14);}get active_after(){return this.number(15);}
  get lane(){return this.number(16);}get thread_id(){return this.number(17);}
  get edge(){return this.number(18)===0?'entry':'leave';}get closed_after(){return this.number(19)!==0;}
- get facts(){return this.#facts??(this.#facts=new __ArkDpsCaptureFacts(this));}
+ get facts(){return this.#facts??(this.#facts=new __ArkDpsCaptureFacts(this.#view));}
 }
 function __arkdpsPackedCaptureRecord(bytes){return new __ArkDpsCaptureRecord(bytes);}
 // One C++ -> JS entry per edge. The native owned-view lease is established

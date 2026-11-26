@@ -116,3 +116,16 @@ try/catch 保留 unknown，独立成功成员仍可使用；身份、名单槽�
 
 自有进程吞吐、队列年龄、回调现场成本和真实对局 FPS 分开报告。
 现有嵌套普通/元素、首笔回血、死亡、协防、第0帧、空卫戍端点、最终水位和 observer 恢复回归继续有效。
+
+
+## Packed 元数据的引用所有权
+
+worker 只向 packed record 交一份独立复制的 header ArrayBuffer，回调不取得该缓冲区的可变引用。Record 与 Facts 共用私有 DataView，Facts 不引用 Record：
+
+```text
+Record ──→ Facts ──→ 私有 DataView ──→ copied header ArrayBuffer
+   └───────────────────↑
+                       └──→ 延迟、冻结的 parents 数组及成员
+```
+
+DataView 的私有 parents 缓存只保存字符串 ID 和 checkpoint，不保存 Record、Facts 或原生读取租约。未保留 Record/Facts 时可由引用计数直接释放，不必等待循环 GC；只保留 Facts 时，Record 也可释放，而已复制的元数据仍可跨后续 record/lease 安全读取。现场字段仍只能在当前 native owned-view lease 内读取，这份元数据不延长任何现场读取权限。
