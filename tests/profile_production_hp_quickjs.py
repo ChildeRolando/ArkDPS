@@ -8,7 +8,7 @@ SETUP = 'let sampledFunctions={};let profileEdge="outside";\nfunction sampleFunc
 def run(source,binary,output):
     output.mkdir(parents=True,exist_ok=True)
     script=bundle(5000,True,source,source,True,8571)
-    script=script.replace('const results=[];',SETUP+'const results=[];').replace('__ownedProfile(true);nativeRequests=', '__ownedProfile(true);sampledFunctions={};nativeRequests=').replace('results.push({business_events_json:', 'results.push({sampled_functions:sampledFunctions,business_events_json:')
+    script=script.replace('const results=[];','\n'+SETUP+'const results=[];').replace('__ownedProfile(true);nativeRequests=', '__ownedProfile(true);sampledFunctions={};nativeRequests=').replace('results.push({business_events_json:', 'results.push({sampled_functions:sampledFunctions,business_events_json:')
     target=output/'sampled-phase-correct.js';target.write_text(script,encoding='utf-8')
     command=[str(binary),str(target),'--direct-hp','--sample-functions']
     result=subprocess.run(command,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60)
