@@ -24,7 +24,7 @@ int main() {
     plan=base; plan["address"]="0x1235"; reject(plan);
     plan=base; plan["address"]=" 4660"; reject(plan);
     plan=base; plan["arg_count"]=1; reject(plan);
-    plan=base; plan["max_reads"]=4097; reject(plan);
+    plan=base; plan["max_reads"]=max_reads+1; reject(plan);
     plan=base; plan["max_bytes"]=0; reject(plan);
     auto tree=base;
     tree["projections"]=Json::array({{{"kind","object"},{"bytes",8}}});
@@ -35,7 +35,7 @@ int main() {
     const auto compiled=compile_plan(tree,0x1234);
     expect(compiled.plan->projection_count==1 && compiled.plan->projections[0].bytes==8);
     plan=tree; plan["projections"][0]["kind"]="callback"; reject(plan);
-    plan=tree; plan["projections"][0]["max_visits"]=257; reject(plan);
+    plan=tree; plan["projections"][0]["max_visits"]=max_projection_visits+1; reject(plan);
     plan=tree; plan["projections"][0]["child_count"]=2; reject(plan);
     plan=tree; plan["projections"][0]["gate"]="fuzzy"; reject(plan);
     plan=tree; plan["projections"][0]["skip_negative_i32_offset"]=-2; reject(plan);
