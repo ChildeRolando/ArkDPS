@@ -641,6 +641,19 @@ function scopeFieldProjection(field){
  const comparison=rawGuardComparison(kind,field.expected,field.bytes);
  return {comparison,projection:comparison===null};
 }
+function scopePrimitiveObservation(field,projection){
+ if(!projection||typeof __arkdpsOwnedGraphPrimitives!=='function'||field.kind!=='bytes'||Array.isArray(field.expected))return {};
+ const values=field.role==='scope.clock_open'||field.role==='scope.clock_close'
+  ?(field.bytes===12?[{kind:'u32',offset:0},{kind:'i64',offset:4}]:null)
+  :field.bytes===4?[{kind:'i32',offset:0}]:field.bytes===8?[{kind:'u64',offset:0}]:null;
+ return values?{observation:{values}}:{};
+}
+function checkedScopePrimitives(graph){
+ if(typeof __arkdpsOwnedGraphPrimitives!=='function'||!__arkdpsReplayActive()||__arkdpsReplayRecord().native_view!==true)return null;
+ const io=__arkdpsOwnedGraphPrimitives('scope',graph);if(io===null)return null;
+ if(typeof __arkdpsVerifiedGraphPrimitives!=='function'||__arkdpsVerifiedGraphPrimitives(io,'scope',graph)!==true)__arkdpsReplayGap('unverified native scope primitives');
+ return io;
+}
 function checkedGraphProof(kind,graph){
  if(typeof __arkdpsOwnedGraphCheck!=='function'||!__arkdpsReplayActive()||__arkdpsReplayRecord().native_view!==true)return null;
  const proof=__arkdpsOwnedGraphCheck(kind,graph);if(proof===null)return null;
@@ -657,10 +670,11 @@ function scopeReadGeometry(fields){
  return Object.freeze(fields.map(field=>Object.freeze({...field,
   pointer_offsets:Object.freeze([...field.pointer_offsets]),
   ...(Object.prototype.hasOwnProperty.call(field,'comparison')?{comparison:sealRawComparison(field.comparison)}:{}),
+  ...(Object.prototype.hasOwnProperty.call(field,'observation')?{observation:sealedCaptureContract(field.observation)}:{}),
   ...(Array.isArray(field.expected)?{expected:Object.freeze(field.expected.map(row=>Array.isArray(row)?Object.freeze([...row]):row))}:{})})));
 }
 function sealNativeScopeGraph(graph){
- return Object.freeze({...graph,fields:scopeReadGeometry(graph.fields.map(field=>({...field,...scopeFieldProjection(field)}))),
+ return Object.freeze({...graph,fields:scopeReadGeometry(graph.fields.map(field=>{const classification=scopeFieldProjection(field);return {...field,...classification,...scopePrimitiveObservation(field,classification.projection)};})),
   ...(graph.context?{context:Object.freeze({...graph.context,identity:Object.freeze({...graph.context.identity})})}:{})});
 }
 function nativeCaptureScopeGraph(cache,stage,clockAddress,revision){
@@ -861,6 +875,24 @@ function compileCapturedScopeReads(graph){
  Object.defineProperty(all,'dynamic',{value:Object.freeze(all.filter(field=>field.projection===true))});reads=Object.freeze(all);
  nativeCaptureScopeReads.set(graph,reads);return reads;
 }
+function decodeCapturedScopeField(field,when,raw,primitive=null){
+ let address=field.address;
+ if(primitive===null&&!raw&&address===null){address=field.base;for(const offset of field.path)address=address.add(offset).readPointer();address=address.add(field.offset);}
+ if(field.comparison){if(primitive===null&&!matchesRawGuard(raw??rawGuardView(address,field.kind===0?'utf16':'bytes',field.bytes),field.comparison))throw new Error('captured scope guard changed');return null;}
+ if(field.kind===0){const value=raw?capturedUtf16(raw):str(address);if(value!==field.expected)throw new Error('captured stage text changed');return value;}
+ if(field.kind===1){
+  const view=primitive===null?(raw??checkedNativeView(address,12)):null;
+  const frame=primitive===null?view.getUint32(0,true):primitive[0],fixed=primitive===null?view.getBigInt64(4,true):primitive[1];
+  if(frame!==when.frame||Number(fixed)/4294967296!==when.game_time)throw new Error('captured scope clock mismatch');
+  return null;
+ }
+ if(field.kind===2){if(raw)scopeBlockView(raw,field.bytes,field.expected,'captured scope guard changed');else scopeBlock(address,field.bytes,field.expected,'captured scope guard changed');return null;}
+ if(field.kind===3){const current=primitive!==null?primitive[0]:raw?raw.getInt32(0,true):address.readS32();if(field.expected!==null&&field.expected!==undefined&&current!==field.expected)throw new Error('captured scope integer changed');return current;}
+ const current=primitive!==null?ptr(primitive[0]):raw?ptr(raw.getBigUint64(0,true)):address.readPointer();
+ if(field.expectedPointer!==null&&!current.equals(field.expectedPointer))throw new Error('captured scope pointer changed');
+ if(field.classCheck===1&&className(current)!=='BattleLogger'||field.classCheck===2&&className(current)!=='BattleStats')throw new Error('captured scope class changed');
+ return current;
+}
 function capturedNativeScopePoint(when){
  if(__arkdpsReplayActive()&&__arkdpsReplayRecord().facts?.cold_revision!==undefined){
   if(nativeCaptureColdRebuilding)return null;
@@ -874,25 +906,12 @@ function capturedNativeScopePoint(when){
  const record=__arkdpsReplayRecord(),revision=record.facts?.scope_revision;
  const graph=nativeCaptureScopes.get(revision);
  if(!graph?.available||graph.mode_epoch!==record.facts?.mode_epoch)return null;
- let phase=null,round=null,state=null;const chunks=nativeGraphChunks(),proof=checkedGraphProof('scope',graph),compiled=compileCapturedScopeReads(graph);
- for(const field of proof===null?compiled:compiled.dynamic){
-  const value=capturedGraphField('scope',graph,field.slot,chunks,field.role,raw=>{
-   let address=field.address;
-   if(!raw&&address===null){address=field.base;for(const offset of field.path)address=address.add(offset).readPointer();address=address.add(field.offset);}
-   if(field.comparison){if(!matchesRawGuard(raw??rawGuardView(address,field.kind===0?'utf16':'bytes',field.bytes),field.comparison))throw new Error('captured scope guard changed');return null;}
-   if(field.kind===0){const value=raw?capturedUtf16(raw):str(address);if(value!==field.expected)throw new Error('captured stage text changed');return value;}
-   if(field.kind===1){
-    const view=raw??checkedNativeView(address,12);
-    if(view.getUint32(0,true)!==when.frame||Number(view.getBigInt64(4,true))/4294967296!==when.game_time)throw new Error('captured scope clock mismatch');
-    return null;
-   }
-   if(field.kind===2){if(raw)scopeBlockView(raw,field.bytes,field.expected,'captured scope guard changed');else scopeBlock(address,field.bytes,field.expected,'captured scope guard changed');return null;}
-   if(field.kind===3){const current=raw?raw.getInt32(0,true):address.readS32();if(field.expected!==null&&field.expected!==undefined&&current!==field.expected)throw new Error('captured scope integer changed');return current;}
-   const current=raw?ptr(raw.getBigUint64(0,true)):address.readPointer();
-   if(field.expectedPointer!==null&&!current.equals(field.expectedPointer))throw new Error('captured scope pointer changed');
-   if(field.classCheck===1&&className(current)!=='BattleLogger'||field.classCheck===2&&className(current)!=='BattleStats')throw new Error('captured scope class changed');
-   return current;
-  },proof);
+ let phase=null,round=null,state=null;const chunks=nativeGraphChunks(),primitives=checkedScopePrimitives(graph),proof=primitives===null?checkedGraphProof('scope',graph):null,compiled=compileCapturedScopeReads(graph);
+ for(const field of primitives===null&&proof===null?compiled:compiled.dynamic){
+  const value=primitives!==null?(field.classCheck
+   ?__arkdpsReplayCheckpoint(field.role,record.checkpoint??0,()=>decodeCapturedScopeField(field,when,null,primitives.values(field.slot)))
+   :decodeCapturedScopeField(field,when,null,primitives.values(field.slot)))
+   :capturedGraphField('scope',graph,field.slot,chunks,field.role,raw=>decodeCapturedScopeField(field,when,raw),proof);
   if(field.output===1)phase=value;
   if(field.output===2)round=value;
   if(field.output===3)state=value;

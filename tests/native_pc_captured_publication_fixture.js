@@ -3,11 +3,15 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert');
 let live=0;
 const context=vm.createContext({__pid:()=>1,__nativeActive:()=>0,__read:()=>{live++;throw Error('LIVE');},__nativeCall:()=>{live++;throw Error('LIVE CALL');}});
 vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8'),context);
-const adapter=fs.readFileSync('event_probe_native_pc.js','utf8');vm.runInContext(adapter.slice(adapter.indexOf('function nativeCapturePlan(')),context);
+const adapter=fs.readFileSync('event_probe_native_pc.js','utf8');vm.runInContext(adapter.slice(adapter.indexOf('const nativeContractSnapshots='),adapter.indexOf('function prepareNativeCaptureHook('))+adapter.slice(adapter.indexOf('function nativeCapturePlan(')),context);
 const shared=fs.readFileSync('event_probe_runtime.js','utf8');vm.runInContext(shared.slice(shared.indexOf('function capturedUtf16('),shared.indexOf('function buff(')),context);
 const autoSource=fs.readFileSync('event_probe_autochess.js','utf8');vm.runInContext(autoSource.slice(autoSource.indexOf('function scopeBlock('),autoSource.indexOf('function scopeGuardGroup(')),context);
 vm.runInContext(shared.slice(shared.indexOf('function __arkdpsPublicationServed('),shared.indexOf('function receiveEventRequest(')),context);
-context.graphCheckSource=process.env.ARKDPS_SOURCE_GRAPH_CHECK==='1';
+context.graphPrimitiveSource=process.env.ARKDPS_SOURCE_GRAPH_PRIMITIVES==='1';
+context.graphCheckSource=process.env.ARKDPS_SOURCE_GRAPH_CHECK==='1'||context.graphPrimitiveSource;
+// The simulated old provider really lacks the new helper; the treatment installs
+// its owned-value acquisition simulator below before any record is consumed.
+context.__arkdpsOwnedGraphPrimitives=context.graphPrimitiveSource?()=>null:undefined;
 context.graphBatchSource=process.env.ARKDPS_SOURCE_GRAPH_BATCH==='1'||context.graphCheckSource;
 vm.runInContext(`
 const mem=new Map();
@@ -50,7 +54,7 @@ function record(){
 }
 checkedNativeView=(p,n)=>new DataView(p.readByteArray(n));
 str=p=>p.add(0x14).readUtf16String(p.add(0x10).readS32());
-className=p=>p.equals(ptr(0x30000))?'BattleLogger':p.equals(ptr(0x40000))?'BattleStats':'unknown';
+globalThis.classRoleReads=0;className=p=>{if(graphPrimitiveSource){const role=__arkdpsReplay.role;if(!/^scope\.(logger|stats)\.class\.(open|close)$/.test(role))throw Error('class metadata outside its role');classRoleReads++;}return p.equals(ptr(0x30000))?'BattleLogger':p.equals(ptr(0x40000))?'BattleStats':'unknown';};
 captureClockFixed=()=>__arkdpsReplayWitness('clock_close',()=>ptr(0xb004).readS64());
 time=()=>__arkdpsReplayWitness('clock_open',()=>{const v=new DataView(ptr(0xb000).readByteArray(12));return {frame:v.getUint32(0,true),game_time:Number(v.getBigInt64(4,true))/4294967296};});
 active=0;activeHooks=new Map();coalesceEnemyHp=false;sequence=3;epoch=8;fatal=null;stopped=false;queue=[{sequence:1},{sequence:2},{sequence:3}];acknowledgedSequence=0;readThroughSequence=0;hpContext=[];hpContextDropped=0;autoChessRoundStartEnvelope=()=>({});
@@ -85,6 +89,26 @@ if(graphCheckSource){
   if(!forgeGraphProof)proofOwners.set(proof,{kind,graph,record:__arkdpsReplayRecord()});return proof;
  };
 }
+if(graphPrimitiveSource){
+ // Source acquisition simulator only. Predicate/OwnedView reads are identical
+ // to the raw-path fixture; actual native format1 has independent CPP tests.
+ const owners=new WeakMap();globalThis.primitiveCalls=0;
+ globalThis.__arkdpsVerifiedGraphPrimitives=(io,kind,graph)=>{const state=owners.get(io);return !!state&&state.kind===kind&&state.graph===graph&&state.record===__arkdpsReplayRecord();};
+ globalThis.__arkdpsOwnedGraphPrimitives=(kind,graph)=>{
+  if(kind!=='scope')return null;
+  const fields=graph.fields;if(fields.some(f=>f.comparison===null||f.projection&&(!f.observation||!Array.isArray(f.observation.values))))return null;
+  primitiveCalls++;const values=new Map();
+  for(let index=0;index<fields.length;index++){
+   const field=fields[index],raw=__arkdpsOwnedGraphReadBatch(kind,graph,Math.floor(index/32)).slot(index%32);
+   if(field.comparison&&!matchesRawGuard(raw,field.comparison))return __arkdpsReplayCheckpoint(field.role,0,()=>__arkdpsNativeReadFailure(8));
+   if(field.projection)values.set(index,Object.freeze(field.observation.values.map(codec=>codec.kind==='u32'?raw.getUint32(codec.offset,true):codec.kind==='i32'?raw.getInt32(codec.offset,true):codec.kind==='u64'?raw.getBigUint64(codec.offset,true):raw.getBigInt64(codec.offset,true))));
+  }
+  const io=Object.freeze({values(index){const state=owners.get(io);if(!state||state.record!==__arkdpsReplayRecord()||!values.has(index))__arkdpsReplayGap('invalid primitive fixture lease/index');return values.get(index);}});
+  if(!forgeGraphProof)owners.set(io,{kind,graph,record:__arkdpsReplayRecord()});return io;
+ };
+ globalThis.unsupportedBlockKeepsFallback=graph.fields.some(f=>f.role==='scope.open.3'&&f.bytes===12&&f.observation===undefined);
+ globalThis.codecOwnership=graph.fields.filter(f=>f.observation!==undefined).every(f=>Object.isFrozen(f.observation)&&Object.isFrozen(f.observation.values)&&f.observation.values.every(Object.isFrozen));
+}else globalThis.oldGraphWithoutCodecs=graph.fields.every(f=>f.observation===undefined);
 function checkRecordView(record){if(graphCheckSource)Object.defineProperty(record,'native_view',{get:()=>__arkdpsReplayActive()});return record;}
 function attempt(change){const r=checkRecordView(record());if(change)change(r);__arkdpsReplayBegin(r);let result;try{result=__arkdpsOnClosedRecord(r);}finally{globalThis.lastNormalSummary=__arkdpsReplayEnd();}return result;}
 let scopeReadCount=0;const originalWitness=__arkdpsReplayWitness;__arkdpsReplayWitness=(role,body)=>{if(role.startsWith('scope.'))scopeReadCount++;return originalWitness(role,body);};
@@ -150,6 +174,7 @@ globalThis.publicationMetadataFrozen=Object.isFrozen(saved.guards)&&Object.isFro
 globalThis.publicationOriginalOwnerMutable=!Object.isFrozen(originalGuards)&&!Object.isFrozen(originalAddress)&&!Object.isFrozen(originalExpected)&&!Object.isFrozen(originalRows)&&!Object.isFrozen(originalRows[0]);
 
 `,context);
+if(context.graphPrimitiveSource){assert(context.codecOwnership);assert(context.unsupportedBlockKeepsFallback);assert(context.primitiveCalls>0);assert(context.classRoleReads>0);}else assert(context.oldGraphWithoutCodecs);
 if(context.graphCheckSource){assert(context.forgedProofRejected);assert.equal(context.forgedSummary.complete,false);}assert(context.predicateDefinitionsSealed);assert(context.surrogatePredicateJSONSafe);assert(context.good);assert(context.changedBlock12);assert(context.publicationMetadataOwned);assert(context.publicationMetadataFrozen);assert(context.publicationOriginalOwnerMutable);assert(context.noDuplicateScopeWitness);assert(context.scopeGeometryFrozen);assert(context.compiledScopeReused);assert(context.cacheArrayNotFrozen);assert(context.manualOwnerNotFrozen);assert(context.scopeReadsRepeat);assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
 for(const key of ['notClosed','wrongRevision','wrongGeneration','coldRejected','wrongRoots','wrongStateProjected','wrongGraphClockProjected','wrongPhaseProjected','wrongRoundProjected'])assert.equal(context[key],null,key);
 assert(context.fixedSemanticGood);assert.equal(context.fixedSemanticBad,null);assert(context.autoCrossChunkRejected);assert(context.autoGood);assert.equal(context.autoGood.mark.native_autochess_context.frame,10);assert.equal(context.autoGood.mark.native_autochess_context.memberships[0].player_uid,'account-one');assert.equal(context.autoMissingMembershipRejected,true);assert.equal(context.autoChangedMembershipRejected,true);assert.equal(context.missingSummary.complete,false);assert.equal(context.changedMemberInjected,true);assert.equal(context.readThroughSequence,0);assert.equal(context.good.events[0].future,undefined);assert.equal(context.delta.events_after,2);assert.equal(context.delta.events_through,3);assert.equal(context.delta.events.length,1);assert.equal(context.delta.events[0].sequence,3);assert.equal(context.emptyDelta.events.length,0);assert.equal(live,0);console.log('PASS_CAPTURED_PUBLICATION normal closed-prefix + five negative fences; no live read/call');

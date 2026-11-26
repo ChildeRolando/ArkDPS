@@ -36,3 +36,13 @@ def test_verified_graph_proof_source_preserves_guards_and_rejects_forged_success
                             env=dict(os.environ, ARKDPS_SOURCE_GRAPH_CHECK='1'))
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'PASS_CAPTURED_PUBLICATION' in result.stdout
+
+
+def test_scope_primitive_source_keeps_signed_values_and_role_metadata_guards():
+    import os
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(['node', 'tests/native_pc_captured_publication_fixture.js'], cwd=root,
+                            capture_output=True, text=True, timeout=30,
+                            env=dict(os.environ, ARKDPS_SOURCE_GRAPH_PRIMITIVES='1'))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'PASS_CAPTURED_PUBLICATION' in result.stdout
