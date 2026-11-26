@@ -716,13 +716,16 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     auto projection=JS_GetPropertyUint32(c,answer,1);
     auto complete=JS_GetPropertyUint32(c,answer,2);
     auto receiver=JS_GetPropertyUint32(c,answer,3);
-    const bool valid=JS_IsBool(complete) && JS_ToBool(c,complete)==1 && JS_IsObject(receiver)
+    const bool reducer_complete=JS_IsBool(complete) && JS_ToBool(c,complete)==1;
+    const bool receiver_valid=JS_IsObject(receiver)
         && (header.phase==Phase::entry || JS_VALUE_GET_PTR(receiver)==JS_VALUE_GET_PTR(call.receiver));
+    const bool valid=reducer_complete && receiver_valid;
     JS_FreeValue(c,complete);
     if (!valid || JS_IsException(record) || JS_IsException(projection)) {
         std::string diagnostic="native_replay_gap:v1,h="+std::to_string(header.hook_id)
             +",e="+std::to_string(header.phase==Phase::entry?0:1)+",t="+std::to_string(header.ticket);
         const auto diagnostic_base=diagnostic;
+        const auto fallback_code=std::string(reducer_complete&&!receiver_valid?"31":"30");
         auto failure_detail=JS_GetPropertyUint32(c,answer,4);
         try {
             const auto d=json_value(c,failure_detail);
@@ -742,20 +745,22 @@ void replay_record(const std::byte* bytes, std::size_t length) {
             bool first=true;unsigned code_count=0;
             if(d.contains("codes")&&d["codes"].is_array())for(const auto& code:d["codes"]){
                 if(!code.is_number_integer())continue;const auto n=code.get<int>();if(n<0||n>30)continue;
-                if(!first)diagnostic+=".";diagnostic+=std::to_string(n);first=false;
+                if(!first)diagnostic+=".";
+                diagnostic+=std::to_string(n);first=false;
                 if(++code_count==16)break;
             }
-            if(first)diagnostic+="0";
+            if(first)diagnostic+=fallback_code;
             diagnostic+=",q=";first=true;unsigned frame_count=0;
             if(d.contains("frames")&&d["frames"].is_array())for(const auto& frame:d["frames"]){
                 if(!frame.is_array()||frame.size()!=2||!frame[0].is_number_integer()||!frame[1].is_number_integer())continue;
                 const auto file=frame[0].get<int>(),line=frame[1].get<int>();
                 if(file<1||file>2||line<1||line>999999)continue;
-                if(!first)diagnostic+=".";diagnostic+=std::to_string(file)+":"+std::to_string(line);first=false;
+                if(!first)diagnostic+=".";
+                diagnostic+=std::to_string(file)+":"+std::to_string(line);first=false;
                 if(++frame_count==3)break;
             }
             if(first)diagnostic+="0";
-        } catch(...) {diagnostic=diagnostic_base+",r=0,p=0,f=-1,g=1,m=0,k=0,q=0";}
+        } catch(...) {diagnostic=diagnostic_base+",r=0,p=0,f=-1,g=1,m=0,k="+fallback_code+",q=0";}
         JS_FreeValue(c,failure_detail);JS_FreeValue(c,answer);
         JS_FreeValue(c,record);JS_FreeValue(c,projection);JS_FreeValue(c,receiver);
         throw std::runtime_error(diagnostic);

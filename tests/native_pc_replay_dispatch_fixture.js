@@ -85,3 +85,8 @@ vm.runInContext(`globalThis.pointGap=__arkdpsReplayDispatch(header(1,1),()=>{
  try{__arkdpsReplayGap('missing or ambiguous witness cold.root_close',{role:'cold.root_close',checkpoint:7,field_id:-1});}catch(ignored){}
 },{},0n,0,prefix);`,c);
 assert.equal(c.pointGap[4].role,'cold.root_close');assert.equal(c.pointGap[4].checkpoint,7);assert.equal(c.pointGap[4].field_id,-1);
+
+vm.runInContext(`globalThis.autoPointGap=__arkdpsReplayDispatch(header(1,1),()=>{
+ __arkdpsReplayPoint('cold.body',()=>{try{__arkdpsReplayGap('unverified cold metadata 0x123:8');}catch(ignored){}});
+},{},0n,0,prefix);`,c);
+assert.equal(c.autoPointGap[4].field_id,-1);assert.equal(c.autoPointGap[4].role,'cold.body');

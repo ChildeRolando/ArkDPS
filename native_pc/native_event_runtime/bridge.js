@@ -238,7 +238,7 @@ function __arkdpsReplayDiagnostic(replay){
  const codes=reasons.map(reason=>{const i=patterns.findIndex(p=>p.test(reason));return i<0?0:i+1;});
  const size=reasons.map(r=>/^unverified cold metadata [^ :]+:([0-9]+)$/.exec(r)).find(Boolean);
  return {codes:codes.length?codes:[30],count:Math.max(1,reasons.length),role:replay.gapRole||replay.role,
-  checkpoint:replay.gapCheckpoint??replay.checkpoint,field_id:replay.gapField??replay.fieldId??-1,
+  checkpoint:replay.gapCheckpoint??replay.checkpoint,field_id:(Object.hasOwn(replay,'gapField')?replay.gapField:replay.fieldId)??-1,
   metadata_read_size:size&&Number(size[1])<=1048576?Number(size[1]):0,frames:replay.gapFrames||[]};
 }
 function __arkdpsReplayGap(reason,point){

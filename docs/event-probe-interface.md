@@ -187,6 +187,6 @@ Sessions 只消费已取得的事务，不调用 observer。初始化用 anchor 
 
 结构缺口仍使观察器失败并拒绝发布/ACK。融合回放只在失败时增加内部 tuple 第五项；成功仍为四项。首个缺口记录发生时的 role/checkpoint/field，最多16个固定原因码，最多3个 `event-probe.js` / `native-bridge.js` 数字行号；只对已知 frozen metadata miss 提取读取长度，不传读取地址。C++把role映射为初始化intern的数字ID，并绑定实际hook/edge/raw ticket。服务器只接收 `native_replay_gap:v1` 的有界数字语法，其他异常继续原有脱敏。
 
-普通审计 `native_hook_request_failed` 保留 `replay_hook_id/edge/ticket/role_id/checkpoint/field_id/gap_count`、`metadata_read_size`、点分隔 `replay_reason_codes` 和 `replay_script_lines`（文件码1=event-probe，2=native-bridge）。field=-1表示自动选择；role=0表示未映射。原因码1..19依次为：cold metadata缺失、冻结metadata缺失、cold class identity、witness、optional字段、parent checkpoint、point、read、冲突观察、native structural、无效几何、禁止写/调用/分配、mode epoch、lease、provider、ancestry、cold binding、参数、health；0为未分类，30为未附加JS缺口的失败。不会传token、地址、原始异常文本、原始stack或源代码。
+普通审计 `native_hook_request_failed` 保留 `replay_hook_id/edge/ticket/role_id/checkpoint/field_id/gap_count`、`metadata_read_size`、点分隔 `replay_reason_codes` 和 `replay_script_lines`（文件码1=event-probe，2=native-bridge）。field=-1表示自动选择；role=0表示未映射。原因码1..19依次为：cold metadata缺失、冻结metadata缺失、cold class identity、witness、optional字段、parent checkpoint、point、read、冲突观察、native structural、无效几何、禁止写/调用/分配、mode epoch、lease、provider、ancestry、cold binding、参数、health；0为未分类，30为未附加JS缺口的失败，31为归约完整但receiver对象/identity不匹配。不会传token、地址、原始异常文本、原始stack或源代码。
 
 这些字段定位失败发生位置，不证明缺失字段的业务根因。失败回执不取代native独立poison验证，planned unreadable/changed_guard的既有处理不变。

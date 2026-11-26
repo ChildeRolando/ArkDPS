@@ -883,7 +883,7 @@ class NativeHookEventProbe:
                         codes = [int(v) for v in replay_gap[9].split('.')]
                         if (values[2] <= 2**64 - 1 and max(values[3:6]) <= 65535
                                 and 1 <= values[6] <= 16 and values[7] <= 1048576
-                                and all(v <= 30 for v in codes)):
+                                and all(v <= 31 for v in codes)):
                             diagnostic.update(code='native_replay_gap', replay_hook_id=values[0],
                                 replay_edge=values[1], replay_ticket=values[2], replay_role_id=values[3],
                                 replay_checkpoint=values[4], replay_field_id=values[5],
