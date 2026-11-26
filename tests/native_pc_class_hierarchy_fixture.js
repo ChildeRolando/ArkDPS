@@ -11,7 +11,12 @@ assert.equal(vm.runInContext('__arkdpsColdClassLineage(ptr(40)).length',c),39);
 assert.equal(vm.runInContext('Object.isFrozen(__arkdpsColdClassLineage(ptr(40)))',c),true);
 assert.throws(()=>vm.runInContext('__arkdpsColdAssignable(ptr(1),ptr(99))',c),/unverified/);
 assert.throws(()=>vm.runInContext('__arkdpsColdAssignable(ptr(99),ptr(99))',c),/unverified/);
-for(const bad of [new Map([['0x1','0x2'],['0x2','0x1']]),new Map([['0x1','0x2']])]){c.bad=bad;assert.throws(()=>vm.runInContext('__arkdpsSealClassHierarchy(bad)',c),/cycle|incomplete/);}
+for(const bad of [new Map([['0x1','0x1']]),new Map([['0x1','0x2'],['0x2','0x1']]),new Map([['0x1','0x2']])]){c.bad=bad;assert.throws(()=>vm.runInContext('__arkdpsSealClassHierarchy(bad)',c),/cycle|incomplete/);}
+for(const bad of [new Map([['0x0','0x0']]),new Map([['0x1','0x01']])]){c.bad=bad;assert.throws(()=>vm.runInContext('__arkdpsSealClassHierarchy(bad)',c),/address/);}
+c.tooMany=new Map(Array.from({length:65537},(_,i)=>['0x'+(i+1).toString(16),'0x0']));
+assert.throws(()=>vm.runInContext('__arkdpsSealClassHierarchy(tooMany)',c),/budget/);
+c.tooDeep=new Map(Array.from({length:2896},(_,i)=>['0x'+(i+1).toString(16),'0x'+i.toString(16)]));
+assert.throws(()=>vm.runInContext('__arkdpsSealClassHierarchy(tooDeep)',c),/relation budget/);
 // Failed replacement cannot publish partial new relationships.
 assert.equal(vm.runInContext('__arkdpsColdAssignable(ptr(1),ptr(40))',c),true);
 console.log('PASS_CLASS_HIERARCHY long/foreign/unknown/cycle/missing/atomic');

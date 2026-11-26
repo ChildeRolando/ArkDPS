@@ -233,7 +233,7 @@ function __arkdpsReplayEnd(compact=false){
 // Failure-only, bounded labels. Raw reasons never cross the native transport.
 function __arkdpsReplayDiagnostic(replay){
  const reasons=replay.structural.slice(0,16);
- const patterns=[/unverified cold metadata/,/metadata not frozen|frozen class parent/,/cold class identity/,/witness/,/optional capture field/,/parent checkpoint/,/missing captured point/,/missing captured read/,/conflicting|ambiguous captured/,/native owned structural/,/invalid.*(?:size|address|point|bytes)/,/NativeFunction|native write|native allocation/,/mode.*epoch/,/lease ended/,/provider failed/,/ancestry limit/,/cold.*binding/,/argument/,/health/];
+ const patterns=[/unverified cold metadata/,/metadata not frozen|class lineage not frozen|frozen class parent/,/cold class identity/,/witness/,/optional capture field/,/parent checkpoint/,/missing captured point/,/missing captured read/,/conflicting|ambiguous captured/,/native owned structural/,/invalid.*(?:size|address|point|bytes)/,/NativeFunction|native write|native allocation/,/mode.*epoch/,/lease ended/,/provider failed/,/ancestry|class hierarchy/,/cold.*binding/,/argument/,/health/];
  const codes=reasons.map(reason=>{const i=patterns.findIndex(p=>p.test(reason));return i<0?0:i+1;});
  const size=reasons.map(r=>/^unverified cold metadata [^ :]+:([0-9]+)$/.exec(r)).find(Boolean);
  return {codes:codes.length?codes:[30],count:Math.max(1,reasons.length),role:replay.gapRole||replay.role,

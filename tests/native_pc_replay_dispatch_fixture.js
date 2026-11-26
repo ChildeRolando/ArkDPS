@@ -90,3 +90,12 @@ vm.runInContext(`globalThis.autoPointGap=__arkdpsReplayDispatch(header(1,1),()=>
  __arkdpsReplayPoint('cold.body',()=>{try{__arkdpsReplayGap('unverified cold metadata 0x123:8');}catch(ignored){}});
 },{},0n,0,prefix);`,c);
 assert.equal(c.autoPointGap[4].field_id,-1);assert.equal(c.autoPointGap[4].role,'cold.body');
+for(const reason of ['captured class ancestry cycle','captured class ancestry budget','unverified cold class hierarchy 0x123']){
+ c.hierarchyReason=reason;
+ vm.runInContext(`globalThis.hierarchyGap=__arkdpsReplayDispatch(header(1,1),()=>{
+  try{__arkdpsReplayGap(hierarchyReason);}catch(ignored){}
+ },{},0n,0,prefix);`,c);
+ assert.equal(c.hierarchyGap[2],false);
+ assert.deepEqual(Array.from(c.hierarchyGap[4].codes),[16]);
+ assert(!JSON.stringify(c.hierarchyGap[4]).includes('0x123'));
+}

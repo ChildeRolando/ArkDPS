@@ -34,7 +34,9 @@ def test_actual_hp_warm_plan_wire_budget(tmp_path):
     result=subprocess.run([str(binary),str(plan),'--spill-pressure'],capture_output=True,text=True,timeout=15)
     assert result.returncode==0,(result.returncode,result.stdout,result.stderr)
     receipt=json.loads(result.stdout)
-    assert receipt['fixture_only'] is True and receipt['publication_guards']==788
+    # Three immutable Character/Unit/Entity parent links now belong to the
+    # verified metadata closure; dynamic identity/scope guards stay captured.
+    assert receipt['fixture_only'] is True and receipt['publication_guards']==785
     plain,heal,nested=(receipt['branches'][key] for key in ('unchanged','heal','nested_maxhp_dirty_hostclaim'))
     assert plain['entry']['read_count']==12 and plain['leave']['read_count']==3
     assert plain['leave']['scope_revision']==0

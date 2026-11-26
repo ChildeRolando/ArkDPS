@@ -290,7 +290,9 @@ std::string safe_diagnostic(const char* message, const char* phase) {
             "native capture replay failed", "native capture failed during replay",
             "native replay violated the capture boundary", "native capture record exceeds worker buffer",
             "native capture record has structural error", "cold metadata unreadable",
-            "cold metadata changed during setup", "cold field type unavailable", "cold generic cache mismatch"}) {
+            "cold metadata changed during setup", "cold field type unavailable", "cold generic cache mismatch",
+            "cold class hierarchy cycle", "cold class hierarchy incomplete", "cold class hierarchy budget",
+            "cold class hierarchy relation budget", "cold class hierarchy address"}) {
         if (first == text || first == type + ": " + text) detail = text;
     }
     // The finite producer fault code contains no pointer, token or game text.
