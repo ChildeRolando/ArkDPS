@@ -177,6 +177,37 @@ def child(binary):
     background_results = Queue()
     result_type = ctypes.c_uint64 * 4
     result_buffer = result_type()
+    # Fixed self-owned HP layout for engine/provider integration, never an
+    # address supplied by a caller. Keep every backing object alive in this child.
+    hp_buffers = {name: ctypes.create_string_buffer(size) for name, size in (
+        ('actor', 0x400), ('clock', 16), ('enemy_class', 0x180),
+        ('bobject_class', 0x180), ('string_class', 0x180), ('text', 420),
+        ('attributes', 0x80), ('cached', 0x80))}
+    hp_addresses = {name: ctypes.addressof(buffer) for name, buffer in hp_buffers.items()}
+
+    def owned_hp_layout():
+        for buffer in hp_buffers.values():
+            ctypes.memset(ctypes.addressof(buffer), 0, ctypes.sizeof(buffer))
+        actor, clock = hp_buffers['actor'], hp_buffers['clock']
+        struct.pack_into('<Q', actor, 0, hp_addresses['enemy_class'])
+        struct.pack_into('<I', actor, 0x18, 12)
+        struct.pack_into('<B', actor, 0x25, 1)
+        struct.pack_into('<q', actor, 0x40, 100 << 32)
+        struct.pack_into('<Q', actor, 0xb0, hp_addresses['attributes'])
+        struct.pack_into('<Q', actor, 0x148, hp_addresses['text'])
+        struct.pack_into('<Q', hp_buffers['attributes'], 0x68, hp_addresses['cached'])
+        struct.pack_into('<I', hp_buffers['cached'], 0x18, 1)
+        struct.pack_into('<Q', hp_buffers['cached'], 0x20, 17)
+        struct.pack_into('<Q', hp_buffers['cached'], 0x28, (1000 << 32) ^ 17)
+        struct.pack_into('<B', hp_buffers['cached'], 0x30, 1)
+        text = 'enemy_owned'
+        struct.pack_into('<Q', hp_buffers['text'], 0, hp_addresses['string_class'])
+        struct.pack_into('<i', hp_buffers['text'], 16, len(text))
+        hp_buffers['text'][20:20 + len(text) * 2] = text.encode('utf-16-le')
+        struct.pack_into('<Iq', clock, 0, 30, 1 << 32)
+        return dict(addresses={name: hex(value) for name, value in hp_addresses.items()},
+                    uid=12, hp_raw=str(100 << 32), frame=30, fixed=str(1 << 32), target_id=text)
+
 
     def owned_sret():
         # The Windows x64 hidden return buffer is the first native argument.
@@ -232,6 +263,22 @@ def child(binary):
                 producer_wall_ns=time.perf_counter_ns()-epoch,
                 p50_ns=timings[count//2], p99_ns=timings[min(count-1, count*99//100)],
                 maximum_ns=timings[-1], pacing='deadline_sleep_100us_tail_outside_call_timing')), flush=True)
+        elif operation == 'owned-hp-buffer':
+            if set(command) != {'operation'}:
+                raise ValueError('owned HP buffer accepts no external address or options')
+            print(json.dumps(owned_hp_layout()), flush=True)
+        elif operation == 'call-owned-hp':
+            if set(command) - {'operation', 'count'}:
+                raise ValueError('owned HP call accepts no external address')
+            count = command.get('count', 1)
+            if type(count) is not int or not 1 <= count <= 4:
+                raise ValueError('owned HP call count exceeds its bound')
+            function = libraries[0].ArkDpsTestInteger
+            function.argtypes, function.restype = [ctypes.c_uint64] * 12, ctypes.c_uint64
+            arguments = (hp_addresses['actor'], *range(2, 13))
+            results = [function(*arguments) for _ in range(count)]
+            print(json.dumps(dict(count=count, results=results,
+                                  expected=hp_addresses['actor'] + 649)), flush=True)
         elif operation == 'owned-sret-buffer':
             result_buffer[:] = (0, 0, 0, 0)
             print(json.dumps(dict(address=hex(ctypes.addressof(result_buffer)))), flush=True)
