@@ -21,7 +21,7 @@ const shared=fs.readFileSync('event_probe_runtime.js','utf8');assert.equal((shar
 console.log('PASS_CAPTURE_PLAN_INVENTORY '+names.length+' hook names; resolved metadata/independent guard fields/arg masks');
 
 context.ptr=value=>({toString:()=>value,add:offset=>({toString:()=> '0x'+(BigInt(value)+BigInt(offset)).toString(16)})});
-context.nativeCaptureMetadata={classes:{BattleController:'0x10000'},string_class:'0x20000'};
+context.nativeCaptureModeEpoch=0;context.nativeCaptureMetadata={classes:{BattleController:'0x10000'},string_class:'0x20000'};
 const pointer=value=>({toString:()=>value});
 const graph=context.nativeCaptureScopeGraph({identity:{controller:'0x1000',native:'0x2000',logger:'0x3000',stats:'0x4000',level:'0x5000'},addresses:{phase:pointer('0x6000'),round:pointer('0x6004')},scopeGuards:[['p',pointer('0x7000'),pointer('0x8000')],['i',pointer('0x7008'),3]],headerKey:'h',fingerprint:'f',roots:'r'}, {enabled:true,stageAddress:pointer('0x9000'),stagePointer:pointer('0xa000'),key:'r:AUTOCHESS_TEST'},pointer('0xb000'),1);
 assert(graph.fields.slice(0,graph.body_insertion_index).every(f=>f.guard_side==='before'));

@@ -11,7 +11,7 @@ function write(address,bytes){new Uint8Array(bytes).forEach((b,i)=>mem.set(BigIn
 function integer(address,value,size=8){const bytes=new ArrayBuffer(size),v=new DataView(bytes);if(size===8)v.setBigUint64(0,BigInt(value),true);else v.setUint32(0,Number(value),true);write(address,bytes);}
 function read(address,size){const bytes=new Uint8Array(size);for(let i=0;i<size;i++){const b=mem.get(BigInt(address)+BigInt(i));if(b===undefined)throw Error('fixture missing '+address+' '+size);bytes[i]=b;}return bytes.buffer;}
 function text(address,value){integer(address,0x20000);integer(BigInt(address)+16n,value.length,4);const bytes=new ArrayBuffer(value.length*2),v=new DataView(bytes);for(let i=0;i<value.length;i++)v.setUint16(i*2,value.charCodeAt(i),true);write(BigInt(address)+20n,bytes);}
-nativeCaptureMetadata={classes:{BattleController:'0x10000',LevelData:'0x60000'},string_class:'0x20000'};
+nativeCaptureModeEpoch=0;nativeCaptureMetadata={classes:{BattleController:'0x10000',LevelData:'0x60000'},string_class:'0x20000'};
 nativeCaptureScopes=new Map();nativeGeneration=2;
 const identity={controller:'0x1000',native:'0x2000',logger:'0x3000',stats:'0x4000',level:'0x5000'};
 const roots=Object.values(identity).join(':'),stageId='level_main_01';

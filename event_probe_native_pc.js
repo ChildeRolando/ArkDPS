@@ -139,7 +139,7 @@ function validateNativeTerminalBinding(candidate){
  return captureClockFrame()===frame&&captureClockFixed().toString()===fixed
   &&statics.readPointer().equals(controller)&&candidate.native_generation===nativeGeneration;
 }
-let nativeCaptureMetadata=null;
+let nativeCaptureMetadata=null,nativeCaptureModeEpoch=0,nativeCaptureModeBarrier=0n;
 function prepareNativeCaptureMetadata(meta){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;
  const fields=meta.found.SkillData.add(0x80).readPointer(),count=meta.found.SkillData.add(0x124).readU16();
@@ -167,19 +167,37 @@ function publishNativeCaptureScope(){
  nativeCaptureScopes.set(revision,graph);while(nativeCaptureScopes.size>4)nativeCaptureScopes.delete(nativeCaptureScopes.keys().next().value);
  __publishCaptureScope(graph);
 }
+function captureModeState(){return {version:1,mode_epoch:nativeCaptureModeEpoch,desired_mode:nativeAutoDesiredMode,effective_mode:nativeAutoEffective?.mode??null};}
+function installCaptureMode(enabled,barrier){
+ if(typeof enabled!=='boolean'||__arkdpsReplayActive()||active!==0||activeHooks.size!==0)throw new Error('capture mode barrier not quiet');
+ if(!barrier||barrier.version!==1||barrier.active!==0||!Number.isSafeInteger(barrier.mode_epoch)||barrier.mode_epoch!==nativeCaptureModeEpoch+1||
+    typeof barrier.processed_ticket!=='string'||!/^(0|[1-9][0-9]{0,19})$/.test(barrier.processed_ticket)||barrier.processed_ticket!==barrier.produced_ticket)throw new Error('invalid capture mode barrier');
+ const ticket=BigInt(barrier.processed_ticket);
+ if(ticket>0xffffffffffffffffn||ticket<nativeCaptureModeBarrier)throw new Error('capture mode barrier regressed');
+ setAutoChessMode(enabled);nativeCaptureModeEpoch=barrier.mode_epoch;nativeCaptureModeBarrier=ticket;
+ // Only the desired preference changes. Existing scope's effective mode is
+ // still latched by autoCollectionMode; old published tokens stay immutable.
+ publishNativeCaptureScope();
+ const previous=[...nativeCapturePublications.values()].at(-1);
+ if(previous)publishNativeCapturePublication(previous.binding);
+ return captureModeState();
+}
 function prepareNativeCaptureHook(address,callbacks){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;
  if(!nativeCaptureMetadata||typeof callbacks.arkdpsName!=='string')throw new Error('native hook capture metadata/name missing');
- callbacks.arkdpsCaptureContract=nativeCapturePlan(callbacks.arkdpsName,address,nativeCaptureMetadata);
+ callbacks.arkdpsCaptureContract={...nativeCapturePlan(callbacks.arkdpsName,address,nativeCaptureMetadata),mode_epoch:nativeCaptureModeEpoch};
  for(const edge of ['onEnter','onLeave'])if(typeof callbacks[edge]==='function'){
   const callback=callbacks[edge];
-  callbacks[edge]=function(...args){return __arkdpsReplayPoint('body',()=>callback.apply(this,args));};
+  callbacks[edge]=function(...args){
+   if(__arkdpsReplayActive()&&__arkdpsReplayRecord().facts?.mode_epoch!==nativeCaptureModeEpoch)__arkdpsReplayGap('captured mode epoch mismatch');
+   return __arkdpsReplayPoint('body',()=>callback.apply(this,args));
+  };
  }
 
 }
 const probeAdapter={
  prepareCaptureMetadata:prepareNativeCaptureMetadata,prepareCaptureHook:prepareNativeCaptureHook,publishCaptureScope:publishNativeCaptureScope,publishCapturePublication:publishNativeCapturePublication,capturedPublicationBinding:nativeCapturedPublicationBinding,
- captureScopePoint:capturedNativeScopePoint,
+ captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,
  captureRead(role,read){return typeof __arkdpsReplayWitness==='function'?__arkdpsReplayWitness(role,read):read();},
  moduleName:'GameAssembly.dll',imageSizeType:'size_t',requiredClasses:['LevelData'],allowNullClassRows:true,
  controllerFields:{s_fixedFrameCnt:0x14,s_fixedPlayTime:0x18,m_logger:0xe0,m_levelData:0x160,m_state:0x228},
@@ -403,7 +421,7 @@ function nativeCaptureScopeGraph(cache,stage,clockAddress,revision){
  add('scope.clock_close',clockAddress,12,1,'after');
  const before=fields.filter(f=>f.guard_side==='before'),after=fields.filter(f=>f.guard_side==='after');
  const ordered=[...before,...after];
- return {version:1,revision,available:true,fields:ordered,body_insertion_index:before.length,max_bytes:65536,max_reads:4096,
+ return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,available:true,fields:ordered,body_insertion_index:before.length,max_bytes:65536,max_reads:4096,
   context:{autochess:enabled,stage_id:stageId,identity:{...identity},header_key:cache.headerKey,fingerprint:cache.fingerprint,roots:cache.roots,
    stage_pointer:stage.stagePointer.toString(),phase_address:cache.addresses.phase?.toString()??null,round_address:cache.addresses.round?.toString()??null}};
 }
@@ -417,12 +435,12 @@ function publicationGuardFields(guards,stringClass,revision){
    const [kind,address,before,size]=part[i],text=kind==='text';
    fields.push({field_id:id++,phase:'checkpoint',role:'publication.'+(side==='before'?'open.':'close.')+(start+i),root:'absolute',root_index:0,absolute_address:address.toString(),pointer_offsets:[],offset:0,
     bytes:text?0:kind==='block'?size:kind==='b'?1:kind==='i'||kind==='u'?4:8,
-    kind:text?'utf16':'bytes',...(text?{expected_class:stringClass,max_units:128}:{}),
+    kind:text?'utf16':'bytes',...(text?{expected_class:stringClass,max_units:Math.max(1,before.length)}:{}),
     required:true,guard_id:i+1,guard_side:side});
   }
   chunks.push({schema_version:1,fields,max_bytes:131072,max_reads:4096});
  }
- return {version:1,revision,available:true,chunks};
+ return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,available:true,chunks};
 }
 function publishNativeCapturePublication(binding){
  if(globalThis.arkdpsNativeAsyncCapture!==true||__arkdpsReplayActive())return;

@@ -3662,6 +3662,14 @@ function markEvents(withPresence=false){
 // Called by the single worker only while this exact closed native record is
 // the sealed replay owner. New producer activity cannot invalidate an already
 // proved historical prefix; every binding input below comes from owned roles.
+function __arkdpsCaptureModeState(){
+ if(typeof probeAdapter.captureModeState!=='function')throw new Error('capture mode control unsupported');
+ return probeAdapter.captureModeState();
+}
+function __arkdpsInstallCaptureMode(enabled,barrier){
+ if(typeof probeAdapter.installCaptureMode!=='function')throw new Error('capture mode control unsupported');
+ return probeAdapter.installCaptureMode(enabled,barrier);
+}
 function __arkdpsPublicationServed(through){
  if(!Number.isSafeInteger(through)||through<acknowledgedSequence||through>sequence)throw new Error('served publication range unavailable');
  readThroughSequence=Math.max(readThroughSequence,through);
