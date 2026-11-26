@@ -56,6 +56,10 @@ public:
     bool reap_empty(std::size_t index) noexcept {
         if (index >= bank_count) return false;
         auto& bank = *banks_[index];
+        // Avoid taking the producer's owner cache line for every consumed
+        // record in a nonempty bank. This is only an early refusal: emptiness
+        // must still be proved again AFTER the writer-excluding CAS below.
+        if (bank.queue.head_ticket()) return false;
         auto owner = bank.owner.load(std::memory_order_acquire);
         if (!owner || (owner & (busy | releasing))) return false;
         const auto previous = owner;
