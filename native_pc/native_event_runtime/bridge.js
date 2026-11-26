@@ -310,7 +310,7 @@ function __arkdpsNativeCall(name,a,b,c,d,e){
    case '__nativeOwnedHpObservation':return c===undefined?native.__nativeOwnedHpObservation(a,b):native.__nativeOwnedHpObservation(a,b,c);
    case '__nativeOwnedConsumeHpFailure':return native.__nativeOwnedConsumeHpFailure(a);
    case '__nativeOwnedGraphFailure':return native.__nativeOwnedGraphFailure();
-   case '__nativeOwnedGraphCheck':return native.__nativeOwnedGraphCheck(a,b,c);
+   case '__nativeOwnedGraphCheck':return d===undefined?native.__nativeOwnedGraphCheck(a,b,c):native.__nativeOwnedGraphCheck(a,b,c,d);
    case '__nativeOwnedPoint':return native.__nativeOwnedPoint(a,b);
    case '__nativeOwnedRead':return native.__nativeOwnedRead(a,b,c,d,e);
    case '__nativeOwnedScalar':return native.__nativeOwnedScalar(a,b,c,d,e);
@@ -479,13 +479,13 @@ function __arkdpsOwnedGraphReadBatch(kind,graph,chunk){
 const __arkdpsGraphChecks=new WeakMap(),__arkdpsGraphProofs=new WeakMap();
 function __arkdpsVerifiedGraphProof(proof,kind,graph){
  const state=__arkdpsGraphProofs.get(proof);
- return state!==undefined&&state.replay===__arkdpsReplay&&state.kind===kind&&state.graph===graph;
+ return state!==undefined&&state.format===0&&state.replay===__arkdpsReplay&&state.kind===kind&&state.graph===graph;
 }
 class __ArkDpsVerifiedGraph {
- constructor(state){__arkdpsGraphProofs.set(this,state);Object.freeze(this);}
+ constructor(){Object.freeze(this);}
  slot(index){
   const state=__arkdpsGraphProofs.get(this);
-  if(!state||state.replay!==__arkdpsReplay)__arkdpsReplayGap('owned graph proof lease ended');
+  if(!state||state.format!==0||state.replay!==__arkdpsReplay)__arkdpsReplayGap('owned graph proof lease ended');
   const projected=state.geometry.indices[index];
   if(!Number.isInteger(index)||index<0||projected===undefined||projected<0)__arkdpsReplayGap('unprojected owned graph field');
   return state.batch.slot(projected);
@@ -521,7 +521,71 @@ function __arkdpsOwnedGraphCheck(kind,graph){
   __arkdpsNativeReadFailure(status);
  }
  const batch=new __ArkDpsOwnedBatch(bytes,geometry,1);
- return new __ArkDpsVerifiedGraph({replay,kind,graph,geometry,batch});
+ const proof=new __ArkDpsVerifiedGraph();__arkdpsGraphProofs.set(proof,{format:0,replay,kind,graph,geometry,batch});return proof;
+}
+// A primitive projection certifies the same complete GraphCheck; it is not a
+// separately registered read plan. Only the successful native factory mints it.
+const __arkdpsPrimitiveGeometry=new WeakMap();
+class __ArkDpsGraphPrimitives {
+ constructor(){Object.freeze(this);}
+ values(index){
+  const state=__arkdpsGraphProofs.get(this);
+  if(!state||state.format!==1||state.replay!==__arkdpsReplay)__arkdpsReplayGap('owned primitive graph lease ended');
+  if(!Number.isInteger(index)||index<0||index>=state.values.length||state.values[index]===null)__arkdpsReplayGap('unprojected primitive graph field');
+  return state.values[index];
+ }
+}
+function __arkdpsVerifiedGraphPrimitives(io,kind,graph){
+ const state=__arkdpsGraphProofs.get(io);
+ return state!==undefined&&state.format===1&&state.replay===__arkdpsReplay&&state.kind===kind&&state.graph===graph;
+}
+function __arkdpsOwnedGraphPrimitives(kind,graph){
+ const replay=__arkdpsReplay;
+ if(!replay?.native)__arkdpsReplayGap('owned primitive graph requires native replay');
+ const native=replay.native;
+ if(native.__nativeOwnedGraphCheck===undefined&&native.__nativeOwnedGraphFailure===undefined)return null;
+ if(typeof native.__nativeOwnedGraphCheck!=='function'||typeof native.__nativeOwnedGraphFailure!=='function'||kind!=='scope'||!graph||typeof graph!=='object'||
+    !Number.isSafeInteger(graph.revision)||graph.revision<=0||!Number.isSafeInteger(graph.mode_epoch)||graph.mode_epoch<0)__arkdpsReplayGap('invalid primitive graph');
+ let geometry=__arkdpsPrimitiveGeometry.get(graph);
+ if(!geometry){
+  const fields=graph.fields;if(!Array.isArray(fields)||fields.length===0)return null;
+  const codecs=[];
+  for(const field of fields){
+   if(!field||typeof field.projection!=='boolean'||field.comparison===null||(!field.projection&&field.comparison===undefined)||field.root!=='absolute'||!['bytes','utf16'].includes(field.kind)||(field.kind==='bytes'? !Number.isInteger(field.bytes)||field.bytes<1||field.bytes>128:!Number.isInteger(field.max_units)||field.max_units<1||field.max_units>200))return null;
+   if(!field.projection){codecs.push(null);continue;}
+   const values=field.observation?.values;
+   if(field.kind!=='bytes'||!Number.isInteger(field.bytes)||field.bytes<1||field.bytes>128||!Array.isArray(values)||values.length<1||values.length>4)return null;
+   const owned=[];for(const value of values){
+    const width=value?.kind==='u32'||value?.kind==='i32'?4:8;
+    if(!value||!['u32','i32','u64','i64'].includes(value.kind)||!Number.isInteger(value.offset)||value.offset<0||value.offset>field.bytes-width)return null;
+    owned.push(Object.freeze({kind:value.kind,offset:value.offset}));
+   }codecs.push(Object.freeze(owned));
+  }
+  if(codecs.filter(value=>value!==null).length>32)return null;
+  geometry=Object.freeze({fields:Object.freeze([...fields]),codecs:Object.freeze(codecs),revision:graph.revision,mode:graph.mode_epoch});__arkdpsPrimitiveGeometry.set(graph,geometry);
+ }
+ if(geometry.revision!==graph.revision||geometry.mode!==graph.mode_epoch)__arkdpsReplayGap('primitive graph geometry changed');
+ const packet=__arkdpsNativeCall('__nativeOwnedGraphCheck',kind,geometry.revision,geometry.mode,1);
+ if(packet===undefined){
+  const status=__arkdpsNativeCall('__nativeOwnedStatus'),index=__arkdpsNativeCall('__nativeOwnedGraphFailure');
+  if(Number.isInteger(index)&&index>=0&&index<geometry.fields.length)return __arkdpsReplayCheckpoint(geometry.fields[index].role,replay.record.checkpoint??0,()=>__arkdpsNativeReadFailure(status));
+  __arkdpsNativeReadFailure(status);
+ }
+ if(!Array.isArray(packet)||packet[0]!==1||packet[1]!==geometry.fields.length||packet[2]!==(replay.record.checkpoint??0)||packet[3]!==geometry.mode)__arkdpsReplayGap('invalid primitive graph packet');
+ let at=4;const decoded=[];
+ for(const codecs of geometry.codecs){
+  if(packet[at++]!==(codecs===null?0:codecs.length))__arkdpsReplayGap('invalid primitive graph value count');
+  if(codecs===null){decoded.push(null);continue;}
+  const values=[];for(const codec of codecs){
+   const value=packet[at++];
+   if(codec.kind==='u32'||codec.kind==='i32'){
+    if(typeof value!=='number'||!Number.isInteger(value)||value<(codec.kind==='u32'?0:-2147483648)||value>(codec.kind==='u32'?4294967295:2147483647))__arkdpsReplayGap('invalid primitive graph number');
+   }else if(typeof value!=='bigint'||value<(codec.kind==='u64'?0n:-9223372036854775808n)||value>(codec.kind==='u64'?18446744073709551615n:9223372036854775807n))__arkdpsReplayGap('invalid primitive graph integer');
+   values.push(value);
+  }decoded.push(Object.freeze(values));
+ }
+ if(at!==packet.length)__arkdpsReplayGap('invalid primitive graph trailing values');
+ const io=new __ArkDpsGraphPrimitives();__arkdpsGraphProofs.set(io,{format:1,replay,kind,graph,values:Object.freeze(decoded)});return io;
 }
 function __arkdpsOwnedScalar(address,kind){
  const replay=__arkdpsReplay;

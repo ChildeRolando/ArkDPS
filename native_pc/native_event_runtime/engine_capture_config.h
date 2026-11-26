@@ -17,7 +17,7 @@ struct CaptureGraph {
     std::uint16_t body_insertion=0;
     std::unique_ptr<CompiledPlan> code;
     std::vector<OwnedReadProgram> read_chunks;
-    OwnedReadProgram check_program;bool check_ready=false;
+    OwnedReadProgram check_program;bool check_ready=false,primitive_ready=false;
 };
 struct CaptureConfiguration {
     std::uint64_t id=0, mode_epoch=0;
@@ -128,11 +128,26 @@ public:
                     op.compare_utf16=true;for(const auto& unit:comparison.at("utf16"))op.utf16.push_back(plan_uint(unit,65535));
                 }
                 if(!op.project&&op.words.empty()&&!op.compare_utf16)throw std::runtime_error("empty static graph comparison");
+                if(op.project&&field.contains("observation")) {
+                    const auto& observation=field.at("observation");
+                    if(!observation.is_object()||observation.size()!=1||!observation.contains("values")||!observation.at("values").is_array()||observation.at("values").empty()||observation.at("values").size()>4)
+                        throw std::runtime_error("invalid graph observation");
+                    for(const auto& item:observation.at("values")) {
+                        if(!item.is_object()||item.size()!=2)throw std::runtime_error("invalid graph observation value");
+                        ObservationValue codec;codec.offset=plan_uint(item.at("offset"),128);const auto name=item.at("kind").get<std::string>();
+                        codec.kind=name=="u32"?1:name=="u64"?2:name=="i64"?3:name=="i32"?5:255;
+                        const unsigned width=codec.kind==1||codec.kind==5?4:8;
+                        if(codec.kind==255||op.kind||codec.offset>op.bytes||width>op.bytes-codec.offset)throw std::runtime_error("graph observation range");
+                        op.observations.push_back(codec);
+                    }
+                }
                 next->check_program.fields.push_back(std::move(op));
               }
             }
             next->check_ready=supported&&projected<=32&&index==original.size();
             if(!next->check_ready)next->check_program.fields.clear();else next->check_program.tiers=1;
+            next->primitive_ready=next->check_ready;
+            for(const auto& field:next->check_program.fields)if(field.project&&field.observations.empty())next->primitive_ready=false;
         }
         if (!publication && next->available) {
             next->body_insertion=plan_uint(graph.at("body_insertion_index"),next->code->plan->field_count);
@@ -207,6 +222,7 @@ private:
                 if (!old || !ids.emplace(old,id++).second) throw std::runtime_error("duplicate graph field ID");
             }
             for (auto field : original) {
+                field.erase("observation"); // Projection metadata is not another capture contract.
                 field["field_id"]=ids.at(plan_uint(field.at("field_id"),32767));
                 const auto old=plan_uint(field.at("guard_id"),max_guards-1);
                 if (old) {

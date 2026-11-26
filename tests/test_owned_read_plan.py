@@ -52,3 +52,10 @@ def test_sealed_native_provider_contract():
                           capture_output=True,text=True,timeout=20)
     assert result.returncode==0,result.stdout+result.stderr
     assert 'PASS_SEALED_PROVIDER' in result.stdout
+
+
+def test_graph_primitive_provider_contract():
+    result=subprocess.run(['node',str(ROOT/'tests/native_pc_graph_primitives_fixture.js')],cwd=ROOT,
+                          capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert 'PASS_GRAPH_PRIMITIVES' in result.stdout

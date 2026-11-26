@@ -16,6 +16,7 @@ inline nlohmann::json capture_capabilities(bool product_ready=false) {
     return {{"version",1},{"raw_collection","all"},{"lowered_projections",std::move(names)}};
 }
 
+struct ObservationValue {std::uint16_t offset=0;std::uint8_t kind=0;};
 struct OwnedReadWord {std::uint32_t offset=0;std::uint8_t kind=0;std::uint32_t bits=0;double number=0;};
 struct OwnedReadField {
     std::string role;
@@ -26,11 +27,11 @@ struct OwnedReadField {
     int selector=-1;
     std::uint8_t tier=0,depth=0,kind=0;
     bool current_checkpoint=false,absolute_root=false,project=false;
+    std::vector<ObservationValue> observations;
     std::vector<OwnedReadWord> words;std::vector<std::uint16_t> utf16;bool compare_utf16=false;
 };
 struct OwnedReadProgram {unsigned tiers=0;std::vector<OwnedReadField> fields;};
 
-struct ObservationValue {std::uint16_t offset=0;std::uint8_t kind=0;};
 struct ObservationSpec {std::uint16_t source_index=0;std::string name;std::vector<ObservationValue> values;};
 struct ObservationField {OwnedReadField raw;std::uint16_t presence_id=0;std::string name;std::vector<ObservationValue> values;};
 struct SavedEntryRoot {

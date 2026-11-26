@@ -85,6 +85,7 @@ function checkExecute(kind,revision,epoch){
 }
 globalThis.__nativeOwnedGraphCheck=checkExecute;globalThis.__nativeOwnedGraphFailure=()=>0;
 __arkdpsReplayBegin(nativeRecord());const proof=__arkdpsOwnedGraphCheck('scope',checkGraph);
+globalThis.constructorForged=__arkdpsVerifiedGraphProof(new proof.constructor({replay:__arkdpsReplay,kind:"scope",graph:checkGraph,batch:{}}),"scope",checkGraph);
 globalThis.proofGood=__arkdpsVerifiedGraphProof(proof,'scope',checkGraph)&&Object.isFrozen(proof);
 globalThis.proofForged=__arkdpsVerifiedGraphProof({},'scope',checkGraph)||__arkdpsVerifiedGraphProof(true,'scope',checkGraph)||__arkdpsVerifiedGraphProof(proof,'publication',checkGraph);
 globalThis.proofValue=proof.slot(1).getBigUint64(0,true).toString();globalThis.proofEnd=__arkdpsReplayEnd();
@@ -94,7 +95,7 @@ mode='check-failure';__arkdpsReplayBegin(nativeRecord());globalThis.checkFailure
 mode='ok';__arkdpsReplayBegin(nativeRecord());const unsupported={...checkGraph,fields:[{...checkGraph.fields[0],comparison:null,projection:true}]};globalThis.checkUnsupported=__arkdpsOwnedGraphCheck('scope',unsupported);globalThis.checkUnsupportedEnd=__arkdpsReplayEnd();
 __arkdpsReplayBegin(nativeRecord());globalThis.emptyCheck=__arkdpsOwnedGraphCheck('publication',{revision:9,mode_epoch:2,chunks:[]});globalThis.emptyCheckEnd=__arkdpsReplayEnd();
 `,c);
-assert.equal(c.noCheck,null);assert(c.proofGood&&!c.proofForged);assert.equal(c.proofValue,'111');assert(c.proofEnd.complete);
+assert.equal(c.noCheck,null);assert(c.proofGood&&!c.proofForged&&!c.constructorForged);assert.equal(c.proofValue,'111');assert(c.proofEnd.complete);
 assert(!c.proofExpired&&c.proofExpiredSlot&&!c.proofExpiredEnd.complete);assert(c.proofStatic&&!c.proofStaticEnd.complete);
 assert(c.checkFailure&&c.checkFailureEnd.complete);assert.equal(c.checkFailureEnd.unreadable_reads,1);assert.equal(c.checkUnsupported,null);assert(c.checkUnsupportedEnd.complete);assert.equal(c.emptyCheck,null);assert(c.emptyCheckEnd.complete);
 assert.equal(c.liveCount,0);console.log('PASS owned graph batch facade: slots/UTF16/planned/providerpin/lease/malformed/no fallback');
