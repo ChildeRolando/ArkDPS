@@ -23,7 +23,7 @@ setClock(10,5n*4294967296n);
 const graph=nativeCaptureScopeGraph({autochess:false,identity,roots,scopeGuards:[],addresses:{}},{key:roots+':'+stageId,enabled:false,stageAddress:ptr(0x5018),stagePointer:ptr(0xa000)},ptr(0xb000),1);
 nativeCaptureScopes.set(1,graph);
 const binding={native_generation:2,native_identity:identity,native_process_pid:1,native_stage_id:stageId,native_frame:1,native_fixed_time:'1',native_battle_state:2,lifecycle_baseline:{forbidden:true},live_character_collection_empty:true,live_character_data_uids:[]};
-nativeCapturePublications.set(1,{binding,guards:[]});
+nativeCapturePublications.set(1,{mode_epoch:0,binding,guards:[]});
 function record(){
  const segments=[];
  const own=(f,address,size)=>segments.push({field_id:f.field_id,role:f.role,checkpoint:0,address:String(address),bytes:read(address,size),status:'ok',guard_id:f.guard_id});
@@ -31,7 +31,7 @@ function record(){
   if(f.kind==='utf16'){own(f,address,8);own(f,address+16n,4);own(f,address+20n,new DataView(read(address+16n,4)).getUint32(0,true)*2);}else own(f,address,f.bytes);
  }
  for(const [i,role]of ['clock_open','clock_close'].entries())segments.push({field_id:201+i,role,checkpoint:0,address:'0xb000',bytes:read(0xb000,12),status:'ok',guard_id:63});
- return {version:1,edge:'leave',closed_after:true,checkpoint:0,facts:{scope_revision:1,publication_revision:1},segments};
+ return {version:1,edge:'leave',closed_after:true,checkpoint:0,facts:{mode_epoch:0,scope_revision:1,publication_revision:1},segments};
 }
 checkedNativeView=(p,n)=>new DataView(p.readByteArray(n));
 str=p=>p.add(0x14).readUtf16String(p.add(0x10).readS32());
@@ -55,9 +55,9 @@ text(0xa000,'AUTOCHESS_LIVE');integer(0xe000,4,4);integer(0xe004,8,4);text(0xc00
 const autoGraph=nativeCaptureScopeGraph({identity,roots,scopeGuards:[],addresses:{phase:ptr(0xe000),round:ptr(0xe004)},headerKey:'header',fingerprint:'fingerprint'}, {key:roots+':AUTOCHESS_LIVE',enabled:true,stageAddress:ptr(0x5018),stagePointer:ptr(0xa000)},ptr(0xb000),2);
 nativeCaptureScopes.set(2,autoGraph);
 const autoGuards=[['text',ptr(0xc000),'account-one']],autoBinding={...binding,native_stage_id:'AUTOCHESS_LIVE',native_autochess_context:{status:'available',scope_key:roots+':scope',phase:4,round:8,frame:1,game_time:1,memberships:[{data_uid:7,player_uid:'account-one'}]}};
-nativeCapturePublications.set(2,{binding:autoBinding,guards:autoGuards});
+nativeCapturePublications.set(2,{mode_epoch:0,binding:autoBinding,guards:autoGuards});
 autoScope=()=>roots+':scope';autoCollectionMode=()=> 'local';
-function autoRecord(){const r=record();r.facts={scope_revision:2,publication_revision:2};
+function autoRecord(){const r=record();r.facts={mode_epoch:0,scope_revision:2,publication_revision:2};
  // Replace normal scope fields with the complete auto scope graph snapshots.
  r.segments=r.segments.filter(s=>s.role==='clock_open'||s.role==='clock_close');
  const own=(f,address,size)=>r.segments.push({field_id:f.field_id,role:f.role,checkpoint:0,address:String(address),bytes:read(address,size),status:'ok',guard_id:f.guard_id});

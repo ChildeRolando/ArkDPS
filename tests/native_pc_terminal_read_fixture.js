@@ -128,3 +128,22 @@ for(const range of [[-1,4],[0.5,4],[1,3],[1,5],[5,4],[1,'4'],[null,4]]){
  assert.equal(racedMark.retry,true);assert.equal(racedMark.active,1);
 }
 console.log(JSON.stringify({owned_terminal_read_cases:cases,live_game:false}));
+
+// The closed publication must use the existing independently validated tail,
+// before attempting a normal live-root binding. Owned-memory oracle only;
+// native snapshot transport is covered separately by replay fixtures.
+{
+ const f=make();destroy(f,{afterEnter:()=>{f.write(slot(f),f.ptr(0));f.write(f.controller.add(0x10),f.ptr(0));}});
+ const originalReadThrough=f.vm.runInContext('readThroughSequence',f.context);
+ f.context.ownedTerminalRecord={version:1,edge:'leave',closed_after:true,facts:{mode_epoch:0}};
+ f.vm.runInContext("nativeCaptureModeHistory.set(0,'all');globalThis.__arkdpsReplayActive=()=>true;globalThis.__arkdpsReplayRecord=()=>ownedTerminalRecord;globalThis.__arkdpsReplayOptional=(_role,read)=>({available:true,value:read()});probeAdapter.capturedPublicationBinding=()=>{throw Error('terminal borrowed normal binding');};",f.context);
+ const projection=f.vm.runInContext('__arkdpsOnClosedRecord(ownedTerminalRecord)',f.context);
+ assert(projection,'closed terminal publication unavailable');
+ assert.equal(projection.terminal_read.retry,false);assert.equal(projection.terminal_read.terminal_only,true);
+ assert.deepEqual(json(projection.mark.terminal_boundary),json(projection.terminal_read.terminal_boundary));
+ for(const key of ['sequence','epoch','frame','game_time','damage_settlement_scope'])assert.equal(projection.mark[key],projection.terminal_read[key],key);
+ for(const key of Object.keys(projection.mark).filter(x=>x.startsWith('native_')))assert.deepEqual(json(projection.mark[key]),json(projection.terminal_read[key]),key);
+ assert.equal(f.vm.runInContext('readThroughSequence',f.context),originalReadThrough,'snapshot must not authorize ACK');
+ assert(f.context.rpc.exports.ackEvents(4).error);
+ f.vm.runInContext('__arkdpsPublicationServed(4)',f.context);assert.equal(f.context.rpc.exports.ackEvents(4).acknowledged,4);
+}

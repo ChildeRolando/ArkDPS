@@ -11,6 +11,15 @@ function api(n,r,a){
  return native;
 }
 function captureRead(role,read){return typeof probeAdapter.captureRead==='function'?probeAdapter.captureRead(role,read):read();}
+function immutableClassParent(klass){
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureImmutableMetadata==='function'){
+  const bytes=probeAdapter.captureImmutableMetadata(klass.add(0x58),8);
+  if(bytes===null||bytes.byteLength!==8)throw new Error('immutable class parent unavailable');
+  return ptr(new DataView(bytes).getBigUint64(0,true));
+ }
+ return klass.add(0x58).readPointer();
+}
+function captureInvocationRead(scope,read){return typeof probeAdapter.captureInvocationRead==='function'?probeAdapter.captureInvocationRead(scope,read):read();}
 function captureClockFrame(){return captureRead('clock_close',()=>clock.readU32());}
 function captureClockFixed(){return captureRead('clock_close',()=>clock.add(4).readS64());}
 function registerProbeHook(address,callbacks){
@@ -406,7 +415,7 @@ function isCharacterSourceClass(klass){
    sourceCharacterLineage.set(key,true);
    return true;
   }
-  current=current.add(0x58).readPointer();
+  current=immutableClassParent(current);
  }
  // Class metadata is stable, but a failed or truncated walk proves nothing.
  if(current.isNull())sourceCharacterLineage.set(key,false);
@@ -617,7 +626,7 @@ function captureSettlementAnchor(scope,type){
 }
 function stableSettlementAnchor(scope,when,requireActor=true){
  const a=scope.settlementAnchor;
- try{
+ try{return captureInvocationRead(scope,()=>{
   return !!a&&scope.tracksModifier&&!scope.mitigationModifierReused&&
    sameMitigationTime(scope.when,when)&&sameMitigationTime(a.when,when)&&
    damageModifier(scope.tid,scope.mod)===scope&&scope.mod.equals(a.modifier)&&
@@ -632,7 +641,7 @@ function stableSettlementAnchor(scope,when,requireActor=true){
    scope.mod.add(0x60).readS32()===0&&scope.mod.add(0x68).readS32()===a.type&&!!a.identity&&
    a.identity.target===a.targetId&&a.identity.target_uid===String(a.targetUid)&&
    a.identity.target_instance===a.target.toString();
- }catch(e){return false;}
+ });}catch(e){return false;}
 }
 function noteSettlementProofGap(scope,when,reason){
  if(!enemyDamageReady)return;
@@ -918,6 +927,7 @@ function beginTargetSettlement(invocation,scope){
  }catch(e){/* Missing target proof keeps strict settlement partial. */}
 }
 function targetSettlementIdentity(scope,hit,when,allowShieldCancel=false){
+ return captureInvocationRead(scope,()=>{
  const commit=hit?.commit;
  return !!commit&&!commit.invalid&&scope.targetHit===hit&&!scope.targetHitAmbiguous&&
   !scope.nestedModifierConflict&&!scope.targetObservationCrossThreadActivity&&
@@ -930,7 +940,7 @@ function targetSettlementIdentity(scope,hit,when,allowShieldCancel=false){
   targetKey(hit.target)===commit.targetKey&&scope.target?.equals(hit.target)&&
   scope.mod.add(0x10).readPointer().equals(hit.target)&&damageTargetUid(hit.target)===hit.uid&&
   hit.uid===scope.settlementTargetUid&&scope.mod.add(0x60).readS32()===0&&
-  scope.mod.add(0x68).readS32()===commit.type&&(allowShieldCancel||scope.mod.add(0x70).readS32()===0);
+  scope.mod.add(0x68).readS32()===commit.type&&(allowShieldCancel||scope.mod.add(0x70).readS32()===0); });
 }
 function numericFullBlockSettlement(scope,hit,when,amount){
  const absorbed=scope.numericShield,incoming=scope.firstShieldIncoming;
@@ -1138,12 +1148,12 @@ function recordTriggeringElementalBar(burst,when){
   sameMitigationTime(scope.when,when));
  if(candidates.length!==1)return;
  const bar=candidates[0];
- if(bar.mitigationModifierReused||bar.mod.add(0x60).readS32()!==5||
-    bar.mod.add(0x68).readS32()!==0||
-    !bar.mod.add(0x10).readPointer().equals(target)||entityId(bar.mod.readPointer())!==bar.source)return;
+ if(bar.mitigationModifierReused||captureInvocationRead(bar,()=>bar.mod.add(0x60).readS32())!==5||
+    captureInvocationRead(bar,()=>bar.mod.add(0x68).readS32())!==0||
+    !captureInvocationRead(bar,()=>bar.mod.add(0x10).readPointer()).equals(target)||captureInvocationRead(bar,()=>entityId(bar.mod.readPointer()))!==bar.source)return;
  // A full bar can invoke the HP settlement before its own ApplyModifier
  // returns. Publish the verified triggering bar first, once per invocation.
- recordElementalBar(bar,when,fp(bar.mod.add(0x30)));
+ recordElementalBar(bar,when,captureInvocationRead(bar,()=>fp(bar.mod.add(0x30))));
 }
 // Absorption observed in a frame but not verifiable for a target cannot prove
 // that a lethal hit's excess was not absorbed, so its overkill stays unknown.
@@ -1219,7 +1229,7 @@ function captureParentBeforeNestedSettlement(parent,child){
      damageTargetUid(child.target)!==hit.uid||!child.mod.add(0x10).readPointer().equals(hit.target)||
      parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
      shieldContextUnknown(child.when.frame,hit.target)||shieldTotal(child.when.frame,hit.target)!==0)return null;
-  const real=fp(parent.mod.add(0x48)),hp=targetHp(hit.target),amount=fp(parent.mod.add(0x30));
+  const {real,hp,amount}=captureInvocationRead(parent,()=>({real:fp(parent.mod.add(0x48)),hp:targetHp(hit.target),amount:fp(parent.mod.add(0x30))}));
   // A same-target child can settle inside the parent's active Unit callback.
   // Anchor the untouched parent HP before the child and verify its own signed
   // delta when it closes. Ordinary children use the existing single-child proof.
@@ -1279,7 +1289,7 @@ function captureNestedElementalStep(parent,child,checkpoint,hpBefore){
      parent.nestedModifierConflict||child.nestedModifierConflict||
      !(hpBefore>0)||child.hpBefore!==hpBefore||targetHp(child.target)!==hpBefore||
      !sameMitigationTime(checkpoint.when,child.when)||
-     !targetSettlementIdentity(parent,parent.targetHit,child.when)||fp(parent.mod.add(0x48))!==checkpoint.real||
+     !targetSettlementIdentity(parent,parent.targetHit,child.when)||captureInvocationRead(parent,()=>fp(parent.mod.add(0x48)))!==checkpoint.real||
      child.mod.add(0x60).readS32()!==0||child.mod.add(0x70).readS32()!==0||
      damageTargetUid(child.target)!==checkpoint.uid||!child.mod.add(0x10).readPointer().equals(child.target)||
      parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
@@ -3662,6 +3672,10 @@ function markEvents(withPresence=false){
 // Called by the single worker only while this exact closed native record is
 // the sealed replay owner. New producer activity cannot invalidate an already
 // proved historical prefix; every binding input below comes from owned roles.
+function __arkdpsRetireCaptureGraphs(bounds){
+ if(typeof probeAdapter.retireCaptureGraphs!=='function')throw new Error('capture retirement unsupported');
+ return probeAdapter.retireCaptureGraphs(bounds);
+}
 function __arkdpsCaptureModeState(){
  if(typeof probeAdapter.captureModeState!=='function')throw new Error('capture mode control unsupported');
  return probeAdapter.captureModeState();
@@ -3674,7 +3688,7 @@ function __arkdpsPublicationServed(through){
  if(!Number.isSafeInteger(through)||through<acknowledgedSequence||through>sequence)throw new Error('served publication range unavailable');
  readThroughSequence=Math.max(readThroughSequence,through);
 }
-function __arkdpsSnapshotPublication(fence){
+function __arkdpsSnapshotPublication(fence,terminalProof=null){
  if(!fence||fence.sequence!==sequence||fence.epoch!==epoch||active!==0||activeHooks.size!==0)throw new Error('publication reducer fence changed');
  const records=queue.slice();
  if(records.length!==sequence-acknowledgedSequence||records.some((event,index)=>event.sequence!==acknowledgedSequence+index+1))throw new Error('publication prefix incomplete');
@@ -3683,8 +3697,8 @@ function __arkdpsSnapshotPublication(fence){
  Object.assign(baseline,autoChessRoundStartEnvelope(fence,queue,acknowledgedSequence,sequence));
  const mark={...fence,...baseline};
  const read_fields={...eventQuality(),...fence,...baseline,hp_context_dropped:hpContextDropped};
- let terminal_read=null;
- if(currentTerminalBoundary()){
+ let terminal_read=terminalProof;
+ if(terminal_read===null&&currentTerminalBoundary()){
   const terminal=readTerminalEvents(acknowledgedSequence,sequence,false);
   if(terminal.retry===false)terminal_read=terminal;
  }
@@ -3695,9 +3709,19 @@ function __arkdpsSnapshotPublication(fence){
  return freeze(owned);
 }
 function __arkdpsOnClosedRecord(record){
+ return typeof probeAdapter.captureRecordMode==='function'?probeAdapter.captureRecordMode(record,()=>capturedClosedRecordProjection(record)):capturedClosedRecordProjection(record);
+}
+function capturedClosedRecordProjection(record){
  if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive()||record!==__arkdpsReplayRecord()||
     record.edge!=='leave'||record.closed_after!==true||active!==0||typeof probeAdapter.capturedPublicationBinding!=='function')return null;
  try{
+ const boundary=currentTerminalBoundary();
+ if(boundary){
+  const terminal=readTerminalEvents(acknowledgedSequence,sequence,false);
+  if(terminal.retry!==false)return null;
+  const {events:_events,hp_context:_context,after:_after,through:_through,terminal_only:_terminal,...fence}=terminal;
+  return __arkdpsSnapshotPublication(fence,terminal);
+ }
  const binding=probeAdapter.capturedPublicationBinding();if(!binding)return null;
  if(coalesceEnemyHp)flushCoalescedEnemyHp();
  const current=time(true,false);if(!current)return null;

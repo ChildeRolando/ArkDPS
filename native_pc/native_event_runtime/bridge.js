@@ -48,7 +48,11 @@ function __arkdpsCapturedAssignable(base,klass){
  base=ptr(base);let current=ptr(klass);
  for(let depth=0;depth<10&&!current.isNull();depth++){
   if(current.equals(base))return true;
-  current=current.add(0x58).readPointer();
+  if(typeof __arkdpsColdMetadataRead==='function'){
+   const owned=__arkdpsColdMetadataRead(current.add(0x58),8);
+   if(!(owned instanceof ArrayBuffer)||owned.byteLength!==8)__arkdpsReplayGap('invalid frozen class parent');
+   current=ptr(new DataView(owned).getBigUint64(0,true));
+  }else current=current.add(0x58).readPointer();
  }
  if(current.isNull())return false;
  __arkdpsReplayGap('captured class ancestry limit');
@@ -60,13 +64,31 @@ function __arkdpsReplayPoint(role,body){
  replay.role=role;replay.fieldId=null;
  try{return body();}finally{replay.role=previous[0];replay.fieldId=previous[1];}
 }
+function __arkdpsReplayCheckpoint(role,checkpoint,body){
+ if(__arkdpsReplay===null)return body();
+ if(!Number.isSafeInteger(checkpoint)||checkpoint<0)__arkdpsReplayGap('invalid parent checkpoint');
+ const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId,replay.checkpoint];
+ replay.role=role;replay.fieldId=null;replay.checkpoint=checkpoint;
+ try{return body();}finally{[replay.role,replay.fieldId,replay.checkpoint]=previous;}
+}
 function __arkdpsReplayWitness(role,body){
  if(__arkdpsReplay===null)return body();
- const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId];
- const ids=new Set([...replay.segments,...replay.fields].filter(f=>f.role===role&&f.checkpoint===replay.checkpoint).map(f=>f.field_id));
+ const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId,replay.checkpoint],checkpoint=replay.record.checkpoint??0;
+ const ids=new Set([...replay.segments,...replay.fields].filter(f=>f.role===role&&f.checkpoint===checkpoint).map(f=>f.field_id));
  if(ids.size!==1)__arkdpsReplayGap('missing or ambiguous witness '+role);
- replay.role=role;replay.fieldId=[...ids][0];
- try{return body();}finally{replay.role=previous[0];replay.fieldId=previous[1];}
+ replay.role=role;replay.fieldId=[...ids][0];replay.checkpoint=checkpoint;
+ try{return body();}finally{[replay.role,replay.fieldId,replay.checkpoint]=previous;}
+}
+function __arkdpsReplayOptional(role,read){
+ if(__arkdpsReplay===null)return {available:true,value:read()};
+ const replay=__arkdpsReplay,checkpoint=replay.record.checkpoint??0;
+ const states=replay.fields.filter(field=>field.role===role&&field.checkpoint===checkpoint);
+ if(states.length!==1)__arkdpsReplayGap('missing optional capture field '+role);
+ if(states[0].status!=='ok'){
+  if(['missing_plan_field','invalid_plan','missing_field'].includes(states[0].status))__arkdpsReplayGap('invalid optional capture field '+role);
+  replay.unreadable++;return {available:false,value:null};
+ }
+ return {available:true,value:__arkdpsReplayWitness(role,read)};
 }
 function __arkdpsReplayEnd(){
  if(__arkdpsReplay===null)throw new Error('no replay active');
@@ -84,13 +106,16 @@ function __arkdpsOwnedRead(address,size){
  }
  const replay=__arkdpsReplay;
  if(replay===null)return __read(address,size);
- const matches=replay.segments.filter(s=>s.role===replay.role&&s.checkpoint===replay.checkpoint&&(replay.fieldId===null||s.field_id===replay.fieldId)&&
+ let matches=replay.segments.filter(s=>s.role===replay.role&&s.checkpoint===replay.checkpoint&&(replay.fieldId===null||s.field_id===replay.fieldId)&&
   address>=s.address&&address+BigInt(size)<=s.address+BigInt(s.bytes.byteLength));
  const failedMatching=replay.fields.filter(f=>f.role===replay.role&&f.checkpoint===replay.checkpoint&&f.status!=='ok'&&
   matches.some(s=>s.field_id===f.field_id));
  if(failedMatching.length){
   if(failedMatching.some(f=>['missing_plan_field','invalid_plan','missing_field'].includes(f.status)))__arkdpsReplayGap('invalid captured plan field '+replay.role);
-  replay.unreadable++;throw new Error('captured field failed '+replay.role);
+  // A failed field cannot lend its already-read links. In auto-ID mode an
+  // independently successful field may still own the exact requested bytes.
+  if(replay.fieldId===null)matches=matches.filter(s=>!failedMatching.some(f=>f.field_id===s.field_id));
+  if(matches.length===0||replay.fieldId!==null){replay.unreadable++;throw new Error('captured field failed '+replay.role);}
  }
  if(matches.length===0){
   const failed=replay.fields.filter(f=>f.role===replay.role&&f.checkpoint===replay.checkpoint&&(replay.fieldId===null||f.field_id===replay.fieldId)&&f.status!=='ok'&&
@@ -102,7 +127,7 @@ function __arkdpsOwnedRead(address,size){
  if(matches.some(s=>s.status!=='ok')){replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
  const segment=matches[0],start=Number(address-segment.address),result=segment.bytes.slice(start,start+size);
  if(matches.length>1){
-  if(replay.fieldId!==null||matches.some(s=>(s.guard_id??0)!==0))__arkdpsReplayGap('ambiguous captured witness '+replay.role);
+  if(replay.fieldId===null&&matches.some(s=>(s.guard_id??0)!==0))__arkdpsReplayGap('ambiguous captured witness '+replay.role);
   const expected=new Uint8Array(result);
   for(const candidate of matches.slice(1)){
    const other=new Uint8Array(candidate.bytes,Number(address-candidate.address),size);

@@ -30,3 +30,7 @@ assert(graph.fields.every(f=>f.root==='absolute'));
 assert(graph.fields.some(f=>f.role==='scope.singleton.before'&&f.pointer_offsets.join(',')==='88,184'));
 assert.equal(context.nativeCaptureScopeGraph(null,null,pointer('0x1'),2).available,false);
 console.log('PASS_CAPTURE_SCOPE_GRAPH independent singleton/owner/clock/account brackets');
+
+const frozenHp=context.nativeCapturePlan('hp.Entity.SetHpInternal',{toString:()=> '0x9000'},{...meta,immutable_class_parents:true});assert(frozenHp.fields.every(f=>!f.name.includes('lineage')));assert.equal(frozenHp.fields.length,11);assert(frozenHp.fields.find(f=>f.name==='hp.identity'&&f.bytes===0x1c));assert(frozenHp.fields.find(f=>f.name==='hp.closing'&&f.offset===0x18&&f.bytes===0x30));assert(frozenHp.fields.filter(f=>f.tier==='changed').length===2);
+const rawModifier=context.nativeCapturePlan('Entity.ApplyModifier',{toString:()=> '0x9000'},meta),frozenModifier=context.nativeCapturePlan('Entity.ApplyModifier',{toString:()=> '0x9000'},{...meta,immutable_class_parents:true});assert(frozenModifier.fields.length<rawModifier.fields.length);
+console.log('PASS_CAPTURE_FROZEN_LINEAGE modifier '+rawModifier.fields.length+' -> '+frozenModifier.fields.length+' fields; HP exact 11-field plan/no cached live object values');

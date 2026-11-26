@@ -98,6 +98,7 @@ function verifyAutoChessPhaseEnum(field){
  autoPhaseEnums.add(key);
 }
 function autoIdentity(k,name,namespace){
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureClassIdentity==='function')return probeAdapter.captureClassIdentity(k,name,namespace);
  return !k.isNull()&&className(k)===name&&classNamespace(k)===namespace;
 }
 function autoLayout(k,name,namespace,count,specs,check=null){
@@ -402,6 +403,7 @@ function autoData(address,read){
   host_key:token&&!host.isNull()?read.text(host):null,host_uid:token?hostUid:null};
 }
 function captureAutoCharacterFormPoint(scope,when,stamp){
+ if(typeof probeAdapter.captureCharacterFormPoint==='function'&&typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive())return probeAdapter.captureCharacterFormPoint(scope,when,stamp);
  if(scope.source!=='char_002_amiya'||!scope.sourceCharacterUid)return;
  const cache=nativeAutoCache,stage=nativeAutoStage;
  if(!scope.mod||!scope.nativeModifierSource||!sourceCharacterClasses||!enemyEntryConfig||!cache||!stage?.enabled||
@@ -472,6 +474,7 @@ function autoCharacterFormEvidence(scope,when){
  return {version:1,entity_cid,data_cid,data_uid,instance_uid,frame,game_time,scope_key,phase,round,collection_mode};
 }
 function autoTokenHostEvidence(scope,when){
+ if(typeof probeAdapter.captureTokenHostEvidence==='function'&&typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive())return probeAdapter.captureTokenHostEvidence(scope,when);
  // A short-lived token can disappear before the next membership sample.
  const stamp=when.native_autochess_scope,entry=scope.when,cache=nativeAutoCache;
  if(stamp?.status!=='available'||![4,5,6].includes(stamp.phase)||!entry||
@@ -939,7 +942,9 @@ const nativeRootFailures={
  stats_missing:'BattleLogger statistics object missing',
  stats_class_mismatch:'Statistics object class differs from BattleStats'
 };
-function currentNativeIdentity(reject){
+function captureRootRead(side,read){return typeof probeAdapter.captureRootRead==='function'?probeAdapter.captureRootRead(side,read):read();}
+function currentNativeIdentity(reject,side='open'){return captureRootRead(side,()=>currentNativeIdentityPoint(reject));}
+function currentNativeIdentityPoint(reject){
  if(!nativeControllerClass)return reject?.('controller_class_unavailable')??null;
  const parent=nativeControllerClass.add(0x58).readPointer();
  if(parent.isNull())return reject?.('singleton_parent_missing')??null;
@@ -962,6 +967,9 @@ function readAutoChessViewMode(manager){
  }catch(e){return null;}
 }
 function nativeBinding(prepared=null,captureRoundStart=false){
+ return typeof probeAdapter.captureBindingRead==='function'?probeAdapter.captureBindingRead(()=>nativeBindingPoint(prepared,captureRoundStart)):nativeBindingPoint(prepared,captureRoundStart);
+}
+function nativeBindingPoint(prepared=null,captureRoundStart=false){
  // Read the same five ownership roots and exact Q32.32 clock as the guarded
  // Windows sampler. The host binds this evidence to its battle serial.
  let step='root_identity';nativeAutoBindingDiagnostic=null;
@@ -984,7 +992,7 @@ function nativeBinding(prepared=null,captureRoundStart=false){
   // Both reads still bracket the ownership roots and exact game clock.
   step='controller_state';
   const stateOffset=probeAdapter.autoChessStateOffset??0x228;
-  const stateAddress=ptr(before.controller).add(stateOffset),state=stateAddress.readS32();
+  const stateAddress=ptr(before.controller).add(stateOffset),state=captureRootRead('open',()=>stateAddress.readS32());
   if(state!==2&&state!==3){
    nativeAutoCache=null;
    return unavailable('BattleController is not PLAYING or FINISHED');
@@ -992,7 +1000,7 @@ function nativeBinding(prepared=null,captureRoundStart=false){
   if(state!==2)prepared=null;
   step='stage_metadata';
   const level=ptr(before.level),levelClass=probeAdapter.autoChessReflected?level.readPointer():null;
-  const stageAddress=level.add(probeAdapter.autoChessStageOffset??0x18),stagePointer=stageAddress.readPointer(),stage=str(stagePointer);
+  const stageAddress=level.add(probeAdapter.autoChessStageOffset??0x18),stagePointer=captureRootRead('open',()=>stageAddress.readPointer()),stage=captureRootRead('open',()=>str(stagePointer));
   if(typeof stage!=='string'||!stage.length)return unavailable('LevelData stage identifier unavailable');
   const frame=captureClockFrame(),fixed=captureClockFixed().toString();
   const enabled=/AUTOCHESS/i.test(stage);
@@ -1017,13 +1025,13 @@ function nativeBinding(prepared=null,captureRoundStart=false){
    nativeAutoCache=null;
    return unavailable('LevelData or stage identity changed during binding');
   }
-  const after=currentNativeIdentity(rejectRoot);
+  const after=currentNativeIdentity(rejectRoot,'close');
   if(after===null)return null;
   const endFrame=captureClockFrame(),endFixed=captureClockFixed().toString();
-  const endStagePointer=probeAdapter.autoChessReflected?stagePointer:stageAddress.readPointer();
+  const endStagePointer=probeAdapter.autoChessReflected?stagePointer:captureRootRead('close',()=>stageAddress.readPointer());
   if(Object.keys(before).some(key=>before[key]!==after[key])
-     ||stateAddress.readS32()!==state||!endStagePointer.equals(stagePointer)||
-     !probeAdapter.autoChessReflected&&str(endStagePointer)!==stage){
+     ||captureRootRead('close',()=>stateAddress.readS32())!==state||!endStagePointer.equals(stagePointer)||
+     !probeAdapter.autoChessReflected&&captureRootRead('close',()=>str(endStagePointer))!==stage){
    nativeAutoCache=null;
    return unavailable('battle roots, clock, state or stage changed during binding');
   }

@@ -135,13 +135,18 @@ function validateNativeTerminalBinding(candidate){
  // A successfully read replacement stage is a conflict, not a missing view.
  // The frozen stage remains historical evidence when its object was released.
  try{const stage=ptr(identity.level).add(0x18).readPointer();
-  if(!stage.isNull()&&str(stage)!==candidate.native_stage_id)return false;}catch(e){}
+  if(!stage.isNull()){
+   const value=typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()?__arkdpsReplayOptional('terminal.stage_text',()=>str(stage)):{available:true,value:str(stage)};
+   if(value.available&&value.value!==candidate.native_stage_id)return false;
+  }}catch(e){}
  return captureClockFrame()===frame&&captureClockFixed().toString()===fixed
   &&statics.readPointer().equals(controller)&&candidate.native_generation===nativeGeneration;
 }
-let nativeCaptureMetadata=null,nativeCaptureModeEpoch=0,nativeCaptureModeBarrier=0n;
+let nativeCaptureMetadata=null,nativeCaptureModeEpoch=0;
+const nativeCaptureModeHistory=new Map();
 function prepareNativeCaptureMetadata(meta){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;
+ nativeCaptureModeHistory.set(0,nativeAutoDesiredMode);
  const fields=meta.found.SkillData.add(0x80).readPointer(),count=meta.found.SkillData.add(0x124).readU16();
  const fieldType=api('il2cpp_field_get_type','pointer',['pointer']),classFrom=api('il2cpp_class_from_type','pointer',['pointer']);
  let stringClass=null;
@@ -155,6 +160,13 @@ function prepareNativeCaptureMetadata(meta){
   skill_wait:meta.skillCastStateMethods?.wait??null,attack_type_offset:meta.mitigationMethods?.damageType??null,
   factory_addresses:meta.mitigationMethods?.factories?.map(x=>x.toString())??[],
   classes:Object.fromEntries(Object.entries(meta.found).filter(([,v])=>v&&!v.isNull()).map(([k,v])=>[k,v.toString()]))};
+ if(typeof __arkdpsPrepareColdMetadata==='function'){
+  const extra=__arkdpsPrepareColdMetadata({...meta,native_capture:nativeCaptureMetadata});
+  if(extra!==undefined){if(!extra||typeof extra!=='object')throw new Error('invalid cold metadata');Object.assign(nativeCaptureMetadata,extra);}
+ }
+ nativeCaptureMetadata.immutable_class_parents=typeof __arkdpsColdMetadataRead==='function';
+ if(typeof __arkdpsBuildColdCapturePlan==='function')nativeCaptureMetadata.cold_plan=__arkdpsBuildColdCapturePlan(nativeCaptureMetadata);
+
 }
 let nativeCaptureScopeRevision=0;
 const nativeCaptureScopes=new Map();
@@ -164,23 +176,45 @@ function publishNativeCaptureScope(){
  const revision=++nativeCaptureScopeRevision;
  if(!Number.isSafeInteger(revision))throw new Error('native capture scope revision exhausted');
  const graph=nativeCaptureScopeGraph(nativeAutoCache,nativeAutoStage,clock,revision);
- nativeCaptureScopes.set(revision,graph);while(nativeCaptureScopes.size>4)nativeCaptureScopes.delete(nativeCaptureScopes.keys().next().value);
+ if(nativeCaptureScopes.size>=256)throw new Error('capture scope history budget exceeded');nativeCaptureScopes.set(revision,graph);
  __publishCaptureScope(graph);
 }
-function captureModeState(){return {version:1,mode_epoch:nativeCaptureModeEpoch,desired_mode:nativeAutoDesiredMode,effective_mode:nativeAutoEffective?.mode??null};}
-function installCaptureMode(enabled,barrier){
- if(typeof enabled!=='boolean'||__arkdpsReplayActive()||active!==0||activeHooks.size!==0)throw new Error('capture mode barrier not quiet');
- if(!barrier||barrier.version!==1||barrier.active!==0||!Number.isSafeInteger(barrier.mode_epoch)||barrier.mode_epoch!==nativeCaptureModeEpoch+1||
-    typeof barrier.processed_ticket!=='string'||!/^(0|[1-9][0-9]{0,19})$/.test(barrier.processed_ticket)||barrier.processed_ticket!==barrier.produced_ticket)throw new Error('invalid capture mode barrier');
- const ticket=BigInt(barrier.processed_ticket);
- if(ticket>0xffffffffffffffffn||ticket<nativeCaptureModeBarrier)throw new Error('capture mode barrier regressed');
- setAutoChessMode(enabled);nativeCaptureModeEpoch=barrier.mode_epoch;nativeCaptureModeBarrier=ticket;
- // Only the desired preference changes. Existing scope's effective mode is
- // still latched by autoCollectionMode; old published tokens stay immutable.
- publishNativeCaptureScope();
- const previous=[...nativeCapturePublications.values()].at(-1);
- if(previous)publishNativeCapturePublication(previous.binding);
+function captureModeState(){return {version:1,mode_epoch:nativeCaptureModeEpoch,desired_mode:nativeCaptureModeHistory.get(nativeCaptureModeEpoch)??nativeAutoDesiredMode,effective_mode:nativeAutoEffective?.mode??null};}
+function installCaptureMode(enabled,control){
+ if(typeof enabled!=='boolean'||__arkdpsReplayActive())throw new Error('capture mode control during replay');
+ if(!control||control.version!==1||!Number.isSafeInteger(control.mode_epoch)||control.mode_epoch!==nativeCaptureModeEpoch+1)throw new Error('invalid capture mode epoch');
+ if(nativeCaptureModeHistory.size>=256)throw new Error('capture mode history budget exceeded');
+ nativeCaptureModeHistory.set(control.mode_epoch,enabled?'all':'local');
+ nativeCaptureModeEpoch=control.mode_epoch;nativeAutoDesiredMode=nativeCaptureModeHistory.get(nativeCaptureModeEpoch);
+ publishNativeCaptureScope();const previous=[...nativeCapturePublications.values()].at(-1);if(previous)publishNativeCapturePublication(previous.binding);
+ // A native invocation pins its entry epoch through its leave. A mode command
+ // only installs immutable history; native producer swaps epoch after return.
  return captureModeState();
+}
+function retireCaptureGraphs(bounds){
+ if(__arkdpsReplayActive()||!bounds||typeof bounds!=='object')throw new Error('invalid capture retirement');
+ for(const [key,map,current]of [['scope_before',nativeCaptureScopes,nativeCaptureScopeRevision],['publication_before',nativeCapturePublications,nativeCapturePublicationRevision],['mode_before',nativeCaptureModeHistory,nativeCaptureModeEpoch]]){
+  const bound=bounds[key];if(bound===undefined)continue;
+  if(!Number.isSafeInteger(bound)||bound<0||bound>current)throw new Error('invalid capture retirement bound');
+  for(const revision of map.keys())if(revision<bound)map.delete(revision);
+ }
+}
+function withCapturedMode(record,body){
+ if(!__arkdpsReplayActive())return body();
+ const epoch=record.facts?.mode_epoch;
+ if(!Number.isSafeInteger(epoch)||!nativeCaptureModeHistory.has(epoch))__arkdpsReplayGap('captured mode epoch unavailable');
+ nativeAutoDesiredMode=nativeCaptureModeHistory.get(epoch);
+ try{return body();}finally{nativeAutoDesiredMode=nativeCaptureModeHistory.get(nativeCaptureModeEpoch);}
+}
+function captureNativeInvocationRead(scope,read){
+ if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive())return read();
+ const record=__arkdpsReplayRecord(),invocation=scope?.nativeCaptureInvocation;
+ if(typeof invocation!=='string'||typeof record.invocation_id!=='string')__arkdpsReplayGap('missing native scope invocation');
+ if(scope.tid!==record.thread_id)throw new Error('cross-thread parent checkpoint');
+ if(invocation===record.invocation_id)return __arkdpsReplayCheckpoint('body',record.checkpoint??0,read);
+ const matches=(record.facts?.parent_checkpoints??[]).filter(point=>point.invocation_id===invocation);
+ if(matches.length!==1||!Number.isSafeInteger(matches[0].checkpoint))__arkdpsReplayGap('missing exact parent checkpoint');
+ return __arkdpsReplayCheckpoint('parent.body',matches[0].checkpoint,read);
 }
 function prepareNativeCaptureHook(address,callbacks){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;
@@ -189,15 +223,35 @@ function prepareNativeCaptureHook(address,callbacks){
  for(const edge of ['onEnter','onLeave'])if(typeof callbacks[edge]==='function'){
   const callback=callbacks[edge];
   callbacks[edge]=function(...args){
-   if(__arkdpsReplayActive()&&__arkdpsReplayRecord().facts?.mode_epoch!==nativeCaptureModeEpoch)__arkdpsReplayGap('captured mode epoch mismatch');
-   return __arkdpsReplayPoint('body',()=>callback.apply(this,args));
+   return withCapturedMode(__arkdpsReplayActive()?__arkdpsReplayRecord():null,()=>__arkdpsReplayPoint('body',()=>callback.apply(this,args)));
   };
  }
 
 }
 const probeAdapter={
  prepareCaptureMetadata:prepareNativeCaptureMetadata,prepareCaptureHook:prepareNativeCaptureHook,publishCaptureScope:publishNativeCaptureScope,publishCapturePublication:publishNativeCapturePublication,capturedPublicationBinding:nativeCapturedPublicationBinding,
- captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,
+ captureCharacterFormPoint:capturedCharacterFormPoint,captureTokenHostEvidence:capturedTokenHostEvidence,
+ captureRootRead(side,read){
+  if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&__arkdpsReplayRecord().facts?.cold_revision!==undefined)
+   return __arkdpsReplayWitness('cold.root_'+side,read);
+  return read();
+ },
+ captureBindingRead(read){
+  if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive())return read();
+  const record=__arkdpsReplayRecord();
+  if(record.facts?.cold_revision!==undefined)return __arkdpsReplayPoint('cold.body',read);
+  return nativeCapturedPublicationBinding(true);
+ },
+ captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,retireCaptureGraphs,captureRecordMode:withCapturedMode,captureInvocationRead:captureNativeInvocationRead,
+ captureClassIdentity(klass,name,namespace){
+  if(typeof __arkdpsColdClassIdentity!=='function')__arkdpsReplayGap('immutable class identity not frozen');
+  return __arkdpsColdClassIdentity(klass,name,namespace);
+ },
+ captureImmutableMetadata(address,size){
+  if(typeof __arkdpsColdMetadataRead==='function')return __arkdpsColdMetadataRead(address,size);
+  if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive())__arkdpsReplayGap('immutable metadata not frozen');
+  return address.readByteArray(size);
+ },
  captureRead(role,read){return typeof __arkdpsReplayWitness==='function'?__arkdpsReplayWitness(role,read):read();},
  moduleName:'GameAssembly.dll',imageSizeType:'size_t',requiredClasses:['LevelData'],allowNullClassRows:true,
  controllerFields:{s_fixedFrameCnt:0x14,s_fixedPlayTime:0x18,m_logger:0xe0,m_levelData:0x160,m_state:0x228},
@@ -279,11 +333,13 @@ function nativeCapturePlan(name,address,metadata){
   // existing reducer may validate their same-scope membership and host proof.
   add(phase,role+'.data.flags',root,index,[...path,0x538],0x90,2,{required:false});
   add(phase,role+'.data.host_uid',root,index,[...path,0x538],0xa0,4,{required:false});
+  add(phase,role+'.data.cid_pointer',root,index,[...path,0x538],0x50,8,{required:false});
+  add(phase,role+'.data.host_pointer',root,index,[...path,0x538],0x98,8,{required:false});
   add(phase,role+'.data.cid',root,index,[...path,0x538,0x50],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200,required:false});
   add(phase,role+'.data.host',root,index,[...path,0x538,0x98],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200,required:false});
   add(phase,role+'.player_side',root,index,path,0x20,4,{required:false});
   }
-  for(let depth=0;depth<10;depth++)
+  if(!metadata.immutable_class_parents)for(let depth=0;depth<10;depth++)
    add(phase,role+'.lineage',root,index,[...path,0,...Array(depth).fill(0x58)],0x58,8,{required:false});
  };
  const modifier=(phase,index=1)=>{
@@ -306,7 +362,10 @@ function nativeCapturePlan(name,address,metadata){
   add(phase,'skill.owner.current',root,index,[...path,f.owner],f.charSkill,8);
   entity(phase,'skill.actor',index,[...path,f.owner],true);
   add(phase,'skill.data',root,index,[...path,f.data],0,8);
-  for(const field of ['prefab','id','name'])add(phase,'skill.'+field,root,index,[...path,f.data,f[field]],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200});
+  for(const field of ['prefab','id','name']){
+   add(phase,'skill.'+field+'.pointer',root,index,[...path,f.data],f[field],8);
+   add(phase,'skill.'+field,root,index,[...path,f.data,f[field]],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200,required:false});
+  }
   if(metadata.skill_wait!==null)add(phase,'skill.wait',root,index,path,metadata.skill_wait,1);
  };
  let profile;
@@ -317,8 +376,17 @@ function nativeCapturePlan(name,address,metadata){
   add('checkpoint','parent.hp','parent_ref',1,[0x10],0x40,8,{required:false});
   entity('checkpoint','parent.source',1,[0],true,'parent_ref');entity('checkpoint','parent.target',1,[0x10],true,'parent_ref',false);
  }else if(['Entity.SetHpInternal','Entity.SetHpInternalDirectly','Entity.OnAttributeDirty'].includes(normalized)){
-  profile='hp';for(const phase of ['entry','leave']){clock(phase);entity(phase,'target',0,[],false,null,false);}
-  attr('leave',0); // Native profile filters non-enemy/unborn/index!=0 and no-change before optional scope/MaxHP reads.
+  profile='hp';clock('entry');clock('leave');
+  add('entry','hp.identity','arg',0,[],0,0x1c);
+  add('entry','hp.born','arg',0,[],0x25,1);
+  add('entry','hp.before','arg',0,[],0x40,8);
+  add('entry','hp.id','arg',0,[0x148],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200});
+  add('leave','hp.closing','entry_ref',0,[],0x18,0x30);
+  const optional=fields.length;attr('leave',0);
+  for(const field of fields.slice(optional))field.tier='changed';
+  // Entry ID text is owned BEFORE the write; no-change cannot delay it.
+  // The native profile may skip only changed-tier MaxHP/closing scope when
+  // exact opening/closing HP agrees and this is not a max-HP dirty callback.
  }else if(['Enemy.Born','Enemy._UpdatePlayerSideAndMapLayer','Enemy.DoFakeDeath','Enemy.DoReborn','Enemy.OnFinish','Entity.OnFinish','BObject.OnRecycle','Character.Born'].includes(normalized)){
   profile='lifecycle';for(const phase of ['entry','leave']){clock(phase);entity(phase,'actor',0,[],false,null,normalized==='Character.Born');add(phase,'actor.tile',phase==='entry'?'arg':'entry_ref',0,[],0x360,8,{required:false});add(phase,'actor.finish_reason',phase==='entry'?'arg':'entry_ref',0,[],0x158,4,{required:false});}
   if(normalized==='Enemy.Born'||normalized==='Enemy._UpdatePlayerSideAndMapLayer')attr('leave',0,true);
@@ -330,7 +398,12 @@ function nativeCapturePlan(name,address,metadata){
  }else if(normalized==='Buff.OnTakeDamage'){
   profile='buff';for(const phase of ['entry','leave']){clock(phase);add(phase,'buff',phase==='entry'?'arg':'entry_ref',0,[],0x18,8);add(phase,'buff.shield',phase==='entry'?'arg':'entry_ref',0,[],0x27c,1);add(phase,'buff.key',phase==='entry'?'arg':'entry_ref',0,[0x208],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200});}
  }else if(normalized==='BlockDamage._AssignDynamicVar'){
-  profile='shield';for(const phase of ['entry','leave']){
+  profile='shield';
+  add('entry','buff.key_pointer','parent_ref',0,[],0x208,8,{required:false});
+  add('entry','buff.key','parent_ref',0,[0x208],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200,required:false});
+  add('entry','buff.source','parent_ref',0,[],0x18,8,{required:false});add('entry','buff.shield','parent_ref',0,[],0x27c,1,{required:false});
+  entity('entry','buff.source_actor',0,[0x18],true,'parent_ref');
+  for(const phase of ['entry','leave']){
    clock(phase);modifier(phase,2);const root=phase==='entry'?'arg':'entry_ref';
    const count=add(phase,'blackboard.count',root,1,[],0x18,4,{guard_id:2,guard_side:'before'});
    add(phase,'blackboard.entries',root,1,[0x10],0x20,0,{kind:'utf16_array',count_field_id:count,element_bytes:24,element_pointer_offset:0,max_count:128,expected_class:metadata.string_class,max_units:200,stop_utf16_literal:'dynamic',guard_id:2,guard_side:'member'});
@@ -351,7 +424,21 @@ function nativeCapturePlan(name,address,metadata){
  }else if(['BattleController.set_state','BattleController.Destroy','BattleController.ClearRunTimeData'].includes(normalized)){
   profile='boundary';for(const phase of ['entry','leave']){clock(phase);
    const root=phase==='entry'?'arg':'entry_ref';
-   for(const [role,path,offset,bytes] of [['controller',[],0,8],['controller.state',[],0x228,4],['native',[],0x10,8],['native.owner',[0x10],0x28,8],['logger',[],0xe0,8],['logger.owner',[0xe0],0x18,8],['stats',[0xe0],0x30,8],['level',[],0x160,8]])add(phase,role,root,0,path,offset,bytes);
+   for(const [role,path,offset,bytes] of [['controller',[],0,0x18],['controller.state',[],0x228,4],['native',[],0x10,8],['native.owner',[0x10],0x28,8],['logger',[],0xe0,8],['logger.owner',[0xe0],0x18,8],['stats',[0xe0],0x30,8],['level',[],0x160,8]])add(phase,role,root,0,path,offset,bytes,{required:!(normalized==='BattleController.Destroy'&&phase==='leave')});
+   add(phase,'terminal.singleton','absolute',0,[0x58,0xb8],0,8,{absolute_address:metadata.classes.BattleController});
+   const absolute={absolute_address:metadata.classes.BattleController,required:false};
+   for(const [name,path,offset,bytes]of [['root.controller',[0x58,0xb8,0],0,0x18],['root.logger',[0x58,0xb8,0,0xe0],0,0x38],['root.level',[0x58,0xb8,0,0x160],0,8],['root.native_owner',[0x58,0xb8,0,0x10],0x28,8],['root.stats',[0x58,0xb8,0,0xe0,0x30],0,8],['root.state',[0x58,0xb8,0],0x228,4],['root.stage_pointer',[0x58,0xb8,0,0x160],0x18,8]])add(phase,name,'absolute',0,path,offset,bytes,absolute);
+   add(phase,'root.stage_text','absolute',0,[0x58,0xb8,0,0x160,0x18],0,0,{...absolute,kind:'utf16',expected_class:metadata.string_class,max_units:200});
+   add(phase,'receiver.logger_view',root,0,[0xe0],0,0x38,{required:false});
+   add(phase,'receiver.level_class',root,0,[0x160],0,8,{required:false});
+   add(phase,'receiver.stats_class',root,0,[0xe0,0x30],0,8,{required:false});
+
+   if(normalized==='BattleController.Destroy'&&phase==='leave'){
+    add(phase,'terminal.old_logger_stats','entry_ref',8,[],0x30,8,{required:false});
+    add(phase,'terminal.old_stage_pointer','entry_ref',9,[],0x18,8,{required:false});
+    add(phase,'terminal.stage_text','entry_ref',9,[0x18],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200,required:false,role:'terminal.stage_text'});
+   }
+
   }
  }else throw new Error('unplanned native hook '+name);
  let argMask=1,argCount=1;
@@ -372,7 +459,13 @@ function nativeCapturePlan(name,address,metadata){
  }
  return {schema_version:1,complete:false,name:normalized,address:address.toString(),abi:'win64-gp',profile,arg_count:argCount,arg_mask:argMask,
   globals,fields,max_bytes:profile==='shield'?131072:65536,max_reads:4096,
+  ...(profile==='hp'?{hp_filter:{receiver_arg:0,attribute_index_arg:normalized==='Entity.OnAttributeDirty'?1:null,max_hp_attribute:0,enemy_class:metadata.classes.Enemy??null,enemy_base_class:metadata.classes.BObject??null,normal_setter:normalized==='Entity.SetHpInternal',nochange_preserve_epoch:true}}:{}),
   metadata:{classes:metadata.classes,skill_offsets:metadata.skill_offsets,attack_type_offset:metadata.attack_type_offset},
+  ...(profile==='boundary'?{entry_roots:[{slot:8,root:'arg',root_index:0,pointer_offsets:[0xe0]},{slot:9,root:'arg',root_index:0,pointer_offsets:[0x160]},{slot:10,root:'arg',root_index:0,pointer_offsets:[0x10]},{slot:11,root:'arg',root_index:0,pointer_offsets:[0xe0,0x30]}]}:{}),
+  ...(metadata.cold_plan?{cold_plan:metadata.cold_plan}:{}),
+  ...(normalized==='BattleController.set_state'?{force_cold_boundary:{phase:'leave',condition:'arg_equals',arg_index:1,value:2}}:{}),
+  ...(normalized==='BattleController.ClearRunTimeData'?{force_cold_boundary:{phase:'leave',condition:'always'}}:{}),
+  ...(normalized==='BattleController.Destroy'?{force_full_binding:{phase:'entry'}}:{}),
   // These producer checkpoints are mandatory profile operations. Engine must
   // reject installation until it can capture them, never ignore or sync-fallback.
   required_projections:['live_scope_guards','same_point_class_ancestry',...(profile==='modifier'?['open_parent_checkpoint','token_host_and_character_form']:[]),...(profile==='boundary'?['full_native_binding']:[]),...(profile==='shield'?['current_buff_and_blackboard_keys']:[])]};
@@ -451,16 +544,16 @@ function publishNativeCapturePublication(binding){
  if(!binding.native_autochess_context){
   const roots=['controller','native','logger','stats','level'].map(k=>binding.native_identity[k]).join(':');
   const graph=nativeCaptureScopeGraph({autochess:false,identity:binding.native_identity,roots,scopeGuards:[],addresses:{}},nativeAutoStage,clock,++nativeCaptureScopeRevision);
-  nativeCaptureScopes.set(graph.revision,graph);while(nativeCaptureScopes.size>4)nativeCaptureScopes.delete(nativeCaptureScopes.keys().next().value);__publishCaptureScope(graph);
+  if(nativeCaptureScopes.size>=256)throw new Error('capture scope history budget exceeded');nativeCaptureScopes.set(graph.revision,graph);__publishCaptureScope(graph);
  }
  const revision=++nativeCapturePublicationRevision;
  if(!Number.isSafeInteger(revision))throw new Error('publication revision exhausted');
  const guards=(binding.native_autochess_context?body.read.guards:[]).map(g=>Object.freeze([...g]));
  // These are membership/account/text witnesses, not cached mutable HP. Every
  // original input is re-read by the producer before this view can publish.
- const value={binding:JSON.parse(JSON.stringify(binding)),guards};
+ const value={mode_epoch:nativeCaptureModeEpoch,binding:JSON.parse(JSON.stringify(binding)),guards};
+ if(nativeCapturePublications.size>=64)throw new Error('capture publication history budget exceeded');
  nativeCapturePublications.set(revision,value);
- while(nativeCapturePublications.size>4)nativeCapturePublications.delete(nativeCapturePublications.keys().next().value);
  __publishCapturePublication(publicationGuardFields(guards,nativeCaptureMetadata.string_class,revision));
 }
 function capturedGuardValue(guard,role){
@@ -477,12 +570,12 @@ function capturedGuardValue(guard,role){
   return true;
  });
 }
-function nativeCapturedPublicationBinding(){
+function nativeCapturedPublicationBinding(forCallback=false){
  if(!__arkdpsReplayActive())throw new Error('captured publication outside replay');
  const record=__arkdpsReplayRecord(),facts=record.facts;
- if(record.edge!=='leave'||record.closed_after!==true||!facts||!Number.isSafeInteger(facts.publication_revision))return null;
+ if((!forCallback&&(record.edge!=='leave'||record.closed_after!==true))||!facts||!Number.isSafeInteger(facts.publication_revision))return null;
  const owned=nativeCapturePublications.get(facts.publication_revision);
- if(!owned)return null;
+ if(!owned||owned.mode_epoch!==record.facts.mode_epoch)return null;
  for(const side of ['open','close'])owned.guards.forEach((guard,index)=>capturedGuardValue(guard,'publication.'+side+'.'+index));
  // Scope/root/stage/state/clock proofs have their own roles. Membership graph
  // success does not replace them, and cached values never supply a new clock.
@@ -506,7 +599,7 @@ function capturedNativeScopePoint(when){
  if(!__arkdpsReplayActive())throw new Error('captured scope outside replay');
  const record=__arkdpsReplayRecord(),revision=record.facts?.scope_revision;
  const graph=nativeCaptureScopes.get(revision);
- if(!graph?.available)return null;
+ if(!graph?.available||graph.mode_epoch!==record.facts?.mode_epoch)return null;
  let phase=null,round=null,state=null;
  for(const field of graph.fields){
   const value=__arkdpsReplayWitness(field.role,()=>{
@@ -537,4 +630,41 @@ function capturedNativeScopePoint(when){
  const scope_key=autoScope(context.roots,phase,round,when.frame,fixed,context.fingerprint,context.header_key);
  return {protocol_version:1,status:'available',verified_same_frame:true,frame:when.frame,game_time:when.game_time,
   scope_key,phase,round,collection_mode:autoCollectionMode(scope_key,phase)};
+}
+
+function capturedActorDataPoint(scope){
+ return captureNativeInvocationRead(scope,()=>{
+  const source=scope.mod.readPointer();
+  if(source.isNull()||!scope.nativeModifierSource?.equals(source))return null;
+  const klass=source.readPointer();if(!isCharacterSourceClass(klass)||!__arkdpsCapturedAssignable(ptr(nativeCaptureMetadata.classes.BObject),klass))return null;
+  const entity_cid=entityId(source),instance_uid=source.add(0x18).readU32(),data=source.add(0x538).readPointer();
+  if(!instance_uid||data.isNull()||entity_cid!==scope.source)return null;
+  const dataClass=data.readPointer();if(!dataClass.equals(sourceCharacterClasses.data))return null;
+  const data_uid=data.add(0x6c).readU32(),token=data.add(0x90).readU8(),predefined=data.add(0x91).readU8();
+  if(!data_uid||data_uid!==scope.sourceCharacterUid||token>1||predefined>1)return null;
+  const data_cid=str(data.add(0x50).readPointer());
+  if(typeof data_cid!=='string'||data_cid.length>128||/[\u0000-\u001f\u007f]/.test(data_cid))return null;
+  return {source,klass,data,dataClass,entity_cid,data_cid,data_uid,instance_uid,is_token:token===1,is_predefined:predefined===1};
+ });
+}
+function capturedCharacterFormPoint(scope,when,stamp){
+ if(scope.source!=='char_002_amiya'||!scope.sourceCharacterUid||!sourceCharacterClasses||!enemyEntryConfig||stamp?.status!=='available'||![4,5,6].includes(stamp.phase)||!['all','local'].includes(stamp.collection_mode))return;
+ const captured=capturedNativeScopePoint(when);
+ if(!captured||!sameNativeEventScope({native_autochess_scope:captured},{native_autochess_scope:stamp}))return;
+ const point=capturedActorDataPoint(scope);
+ if(!point||point.is_token||point.is_predefined||point.data_cid===point.entity_cid||!/^char_[A-Za-z0-9_#.-]{1,123}$/.test(point.data_cid??''))return;
+ const {is_token,is_predefined,...identity}=point;return identity;
+}
+function capturedTokenHostEvidence(scope,when){
+ const stamp=when.native_autochess_scope;
+ if(!scope.source?.startsWith('token_')||!scope.sourceCharacterUid||!sourceCharacterClasses||!enemyEntryConfig||stamp?.status!=='available'||![4,5,6].includes(stamp.phase)||!['all','local'].includes(stamp.collection_mode)||
+    !sameMitigationTime(scope.when,when)||!sameNativeEventScope(scope.when,when))return;
+ const captured=capturedNativeScopePoint(when);
+ if(!captured||!sameNativeEventScope({native_autochess_scope:captured},when))return;
+ const point=capturedActorDataPoint(scope);if(!point?.is_token||point.data_cid!==scope.source)return;
+ return captureNativeInvocationRead(scope,()=>{
+  const host_key=str(point.data.add(0x98).readPointer()),host_uid=point.data.add(0xa0).readU32(),player_side=point.source.add(0x20).readS32();
+  if(!host_key||!/^[A-Za-z0-9_#.-]{1,128}$/.test(host_key)||!host_uid||host_uid===point.data_uid||player_side<0||player_side>4)return;
+  return {host_key,host_uid,player_side};
+ });
 }
