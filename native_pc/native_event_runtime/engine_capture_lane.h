@@ -19,7 +19,8 @@ struct InvocationState {
 };
 struct RecordHeader {
     std::uint64_t ticket = 0, invocation = 0, parent = 0, activity = 0, activity_begin = 0;
-    std::uint64_t return_value = 0, thread_birth = 0;
+    std::uint64_t return_value = 0, thread_birth = 0, captured_qpc = 0;
+    std::uint64_t publication_request = 0;
     std::uintptr_t return_address = 0;
     std::array<std::uint64_t, 16> args{};
     std::uint32_t hook_id = 0, thread_id = 0, lane = 0, depth = 0;
@@ -39,6 +40,15 @@ struct Lane {
     CaptureQueue queue{{8192, 8*1024*1024}};
     Snapshot snapshot{};
     std::array<std::byte, record_capacity> scratch{};
+    // One producer writes this cache line; only worker reads diagnostic mirrors.
+    struct alignas(64) ProducerCounts {
+        std::atomic<std::uint64_t> records{0}, bytes{0}, peak_records{0}, peak_bytes{0};
+    } submitted;
+    // Only worker writes this cache line; producer reads reclamation mirrors.
+    struct alignas(64) ConsumerCounts {
+        std::atomic<std::uint64_t> records{0}, bytes{0};
+        std::uint64_t observed_pending_qpc=0, last_age=0, maximum_age=0;
+    } consumed;
 };
 class CaptureLanes final {
 public:
@@ -94,12 +104,27 @@ public:
         if (!lane.queue.push(header.ticket, lane.scratch.data(), offset)) {
             poison(LaneFault::queue_full); return false;
         }
+        const auto records=lane.submitted.records.load(std::memory_order_relaxed)+1;
+        const auto bytes=lane.submitted.bytes.load(std::memory_order_relaxed)+offset;
+        lane.submitted.records.store(records,std::memory_order_relaxed);
+        lane.submitted.bytes.store(bytes,std::memory_order_relaxed);
+        const auto reclaimed_records=lane.consumed.records.load(std::memory_order_acquire);
+        const auto reclaimed_bytes=lane.consumed.bytes.load(std::memory_order_acquire);
+        const auto resident_records=records-reclaimed_records;
+        const auto resident_bytes=bytes-reclaimed_bytes;
+        if (resident_records>lane.submitted.peak_records.load(std::memory_order_relaxed))
+            lane.submitted.peak_records.store(resident_records,std::memory_order_relaxed);
+        if (resident_bytes>lane.submitted.peak_bytes.load(std::memory_order_relaxed))
+            lane.submitted.peak_bytes.store(resident_bytes,std::memory_order_relaxed);
         return true;
     }
     std::array<std::unique_ptr<Lane>, lane_count> lanes;
     std::atomic<unsigned> failure{0};
     std::atomic<std::uint64_t> reserved{0};
     std::atomic<bool> enabled{false};
+    // Host writes minimum then pending revision; worker clears only by CAS of
+    // the exact served revision, so a concurrent fresh mark cannot be lost.
+    std::atomic<std::uint64_t> request_serial{0}, pending_publication{0}, minimum_publication_ticket{0};
 };
 inline bool capture_read(void*, std::uintptr_t address, void* target, std::size_t bytes) noexcept {
     if (!bytes) return true;

@@ -9,6 +9,7 @@ extern "C" {
 #include <quickjs.h>
 }
 #include "bridge_source.h"
+#include "publication_source.h"
 #include "json.hpp"
 #include <array>
 #include <atomic>
@@ -44,9 +45,11 @@ struct Allocation { std::uintptr_t base; std::size_t size; };
 struct Runtime {
     arkdps::EngineWorker worker;
     std::unique_ptr<arkdps::capture::CaptureLanes> lanes;
-    std::uint64_t processed_ticket = 0, closed_ticket = 0, delivered_sequence = 0;
+    std::atomic<arkdps::capture::CaptureLanes*> ingress{nullptr};
+    std::uint64_t processed_ticket = 0, closed_ticket = 0, delivered_sequence = 0, published_sequence = 0;
     bool replay_active = false;
     JSValue prefix_projection = JS_UNDEFINED;
+    JSValue publication_publish = JS_UNDEFINED, publication_request = JS_UNDEFINED;
     std::string captured_publication;
     std::uint64_t published_ticket = 0;
     arkdps::capture::RecordHeader replay_header;
@@ -564,6 +567,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     js_property(c,record,"lane",JS_NewUint32(c,header.lane));
     js_property(c,record,"thread_id",JS_NewUint32(c,header.thread_id));
     js_property(c,record,"thread_birth",JS_NewString(c,std::to_string(header.thread_birth).c_str()));
+    js_property(c,record,"publication_request",JS_NewString(c,std::to_string(header.publication_request).c_str()));
     const auto segment_start=sizeof header;
     const auto field_start=segment_start+header.segment_count*sizeof(Segment);
     const auto payload=bytes+field_start+header.field_count*sizeof(FieldState);
@@ -627,41 +631,67 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     } catch (...) { callback_failure=std::current_exception(); }
     if (runtime.lanes->failure.load(std::memory_order_acquire))
         callback_failure=std::make_exception_ptr(std::runtime_error("native replay violated the capture boundary"));
-    std::string projection;
+    JSValue projection=JS_UNDEFINED;
     if (!callback_failure && header.closed_after && JS_IsFunction(c,runtime.prefix_projection)) {
         auto frozen=JS_Call(c,runtime.prefix_projection,JS_UNDEFINED,1,&record);
         if (JS_IsException(frozen)) callback_failure=std::make_exception_ptr(std::runtime_error(exception(c)));
-        else if (!JS_IsUndefined(frozen) && !JS_IsNull(frozen)) {
-            auto encoded=JS_JSONStringify(c,frozen,JS_UNDEFINED,JS_UNDEFINED);
-            if (JS_IsException(encoded)) callback_failure=std::make_exception_ptr(std::runtime_error(exception(c)));
-            else projection=string(c,encoded);
-            JS_FreeValue(c,encoded);
-        }
+        else projection=JS_DupValue(c,frozen);
         JS_FreeValue(c,frozen);
     }
     auto ended=JS_Call(c,runtime.replay_end,JS_UNDEFINED,0,nullptr);
     runtime.replay_active=false;
-    JS_FreeValue(c,record);
     if (JS_IsException(ended)) throw std::runtime_error(exception(c));
     auto complete=JS_GetPropertyStr(c,ended,"complete");
     const bool valid=JS_ToBool(c,complete)==1;
     JS_FreeValue(c,complete); JS_FreeValue(c,ended);
-    if (!valid) throw std::runtime_error("native callback replay has structural gaps");
-    if (callback_failure) std::rethrow_exception(callback_failure);
+    if (!valid || runtime.lanes->failure.load(std::memory_order_acquire)) {
+        JS_FreeValue(c,record); JS_FreeValue(c,projection);
+        throw std::runtime_error("native callback replay has structural gaps");
+    }
+    if (callback_failure) {
+        JS_FreeValue(c,record); JS_FreeValue(c,projection);
+        std::rethrow_exception(callback_failure);
+    }
     if (header.phase==Phase::leave) {
         JS_FreeValue(c,call.receiver); call={}; --depth;
     }
     runtime.processed_ticket=header.ticket;
     if (header.closed_after) {
         runtime.closed_ticket=header.ticket;
-        if (!projection.empty()) {
-            const auto parsed=nlohmann::json::parse(projection);
+        if (!JS_IsUndefined(projection) && !JS_IsNull(projection)) {
+            std::array<JSValue,2> arguments{{record,projection}};
+            // The journal is pure even though ReplayEnd already cleared the JS
+            // read view. Native primitives remain forbidden throughout publish.
+            runtime.replay_active=true;
+            auto published=JS_Call(c,runtime.publication_publish,JS_UNDEFINED,2,arguments.data());
+            runtime.replay_active=false;
+            if (JS_IsException(published) || runtime.lanes->failure.load(std::memory_order_acquire)) {
+                JS_FreeValue(c,published); JS_FreeValue(c,record); JS_FreeValue(c,projection);
+                throw std::runtime_error("native publication failed its owned boundary");
+            }
+            auto encoded=JS_JSONStringify(c,published,JS_UNDEFINED,JS_UNDEFINED);
+            JS_FreeValue(c,published);
+            if (JS_IsException(encoded)) { JS_FreeValue(c,record); JS_FreeValue(c,projection); throw std::runtime_error(exception(c)); }
+            std::string text;
+            try { text=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); JS_FreeValue(c,record); JS_FreeValue(c,projection); throw; }
+            JS_FreeValue(c,encoded);
+            const auto parsed=nlohmann::json::parse(text);
             if (parsed.is_object() && !parsed.value("retry",false) && parsed.value("error",nlohmann::json()).is_null()) {
-                runtime.captured_publication=projection;
+                const auto& fence=parsed.at("native_publication");
+                if (arkdps::capture::plan_uint(fence.at("version"),1)!=1
+                    || fence.at("closed_ticket")!=std::to_string(header.ticket)
+                    || !fence.at("token").is_string() || fence.at("token").get<std::string>().empty())
+                    throw std::runtime_error("published mark does not bind native closed record");
+                runtime.captured_publication=text;
                 runtime.published_ticket=header.ticket;
+                runtime.published_sequence=arkdps::capture::plan_uint(fence.at("sequence"),9007199254740991ULL);
+                auto pending=header.publication_request;
+                if (pending && header.ticket>=runtime.lanes->minimum_publication_ticket.load(std::memory_order_acquire))
+                    runtime.lanes->pending_publication.compare_exchange_strong(pending,0,std::memory_order_acq_rel);
             }
         }
     }
+    JS_FreeValue(c,record); JS_FreeValue(c,projection);
 }
 void drain_captures() noexcept {
     using namespace arkdps::capture;
@@ -671,20 +701,33 @@ void drain_captures() noexcept {
         if (runtime.lanes->failure.load(std::memory_order_acquire))
             throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
         // Bounded poll work keeps host jobs responsive under sustained producers.
+        const auto poll_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(2);
         for (unsigned budget=0;budget<512;++budget) {
             Lane* found=nullptr;
             for (auto& lane : runtime.lanes->lanes) {
                 auto ticket=lane->queue.head_ticket();
+                if (ticket && !lane->consumed.observed_pending_qpc) lane->consumed.observed_pending_qpc=ticks_now();
+                if (!ticket) lane->consumed.observed_pending_qpc=0;
                 if (ticket && *ticket==runtime.processed_ticket+1) { found=lane.get(); break; }
             }
             if (!found) break; // A reserved but unpublished ticket is not skippable.
             std::uint64_t ticket=0; std::size_t size=0;
             if (found->queue.try_pop(ticket,runtime.consume_buffer.data(),runtime.consume_buffer.size(),size)!=CaptureQueue::PopResult::popped)
                 throw std::runtime_error("native capture record exceeds worker buffer");
+            found->consumed.records.store(found->consumed.records.load(std::memory_order_relaxed)+1,std::memory_order_release);
+            found->consumed.bytes.store(found->consumed.bytes.load(std::memory_order_relaxed)+size,std::memory_order_release);
+            RecordHeader timing_header;
+            std::memcpy(&timing_header,runtime.consume_buffer.data(),sizeof timing_header);
+            if (timing_header.captured_qpc) {
+                const auto now=ticks_now();
+                found->consumed.last_age=now>=timing_header.captured_qpc ? now-timing_header.captured_qpc : 0;
+                found->consumed.maximum_age=(std::max)(found->consumed.maximum_age,found->consumed.last_age);
+            }
             JS_UpdateStackTop(runtime.runtime);
             replay_record(runtime.consume_buffer.data(),size);
             if (runtime.lanes->failure.load(std::memory_order_acquire))
                 throw std::runtime_error("native capture failed during replay");
+            if (std::chrono::steady_clock::now()>=poll_deadline) break;
         }
     } catch (const std::exception& error) {
         runtime.captured_publication.clear(); runtime.published_ticket=0;
@@ -734,6 +777,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     ++lane->depth; frame->return_target=1;
     RecordHeader header{};
     header.ticket=call.id; header.invocation=call.id; header.parent=call.parent;
+    header.captured_qpc=timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
     header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
     header.active=runtime.active.load(std::memory_order_acquire);
     header.activity=header.activity_begin; header.args=context.args; header.return_address=call.return_address;
@@ -770,6 +814,8 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     header.depth=lane->depth; header.phase=Phase::leave;
     header.args=call.context.args; header.arg_mask=call.context.args_valid;
     header.return_value=frame->rax; header.return_address=call.return_address;
+    header.publication_request=lanes.pending_publication.load(std::memory_order_acquire);
+    header.captured_qpc=timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
     header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
     header.active=runtime.active.load(std::memory_order_acquire);
     call.context.return_value=frame->rax; call.context.return_valid=true;
@@ -804,6 +850,7 @@ void initialize_on_worker(const std::string& source) {
     function(c,global,"__send",js_send,1);function(c,global,"__nativeActive",js_active,0);function(c,global,"__pid",js_pid,0);
     try {
         evaluate(c, arkdps_bridge_source, "native-bridge.js");
+        evaluate(c, arkdps_publication_source, "native-publication.js");
         evaluate(c, "globalThis.arkdpsNativeAsyncCapture=true;", "native-async.js");
         runtime.replay_begin=JS_GetPropertyStr(c,global,"__arkdpsReplayBegin");
         runtime.replay_end=JS_GetPropertyStr(c,global,"__arkdpsReplayEnd");
@@ -812,6 +859,10 @@ void initialize_on_worker(const std::string& source) {
         runtime.dispatch = JS_GetPropertyStr(c, global, "__arkdpsRequest");
         evaluate(c, source, "event-probe.js");
         runtime.prefix_projection=JS_GetPropertyStr(c,global,"__arkdpsOnClosedRecord");
+        runtime.publication_publish=JS_GetPropertyStr(c,global,"__arkdpsPublishClosedRecord");
+        runtime.publication_request=JS_GetPropertyStr(c,global,"__arkdpsPublicationRequest");
+        if (!JS_IsFunction(c,runtime.publication_publish) || !JS_IsFunction(c,runtime.publication_request))
+            throw std::runtime_error("native async publication journal unavailable");
         if (runtime.ready.empty()) throw std::runtime_error("probe did not publish readiness");
         for (const auto& hook : runtime.hooks) {
             if (hook->detached) continue;
@@ -835,7 +886,7 @@ std::string readiness_on_worker() {
     if (!runtime.initialized || !runtime.fatal.empty()) throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
     return runtime.ready;
 }
-std::string request_on_worker(const std::string& json) {
+std::string request_on_worker(const std::string& json, std::uint64_t minimum_ticket) {
     auto& runtime=state();
     if (json.size()>8*max_read) throw std::runtime_error("request too large");
     const auto command=nlohmann::json::parse(json,[](int depth,nlohmann::json::parse_event_t,nlohmann::json&) {
@@ -883,52 +934,93 @@ std::string request_on_worker(const std::string& json) {
         if (!runtime.initialized || !runtime.fatal.empty()) throw std::runtime_error(runtime.fatal.empty() ? "native runtime not ready" : runtime.fatal);
     }
     auto async_state=[&] {
-        return nlohmann::json{{"version",1},{"reserved_ticket",runtime.lanes->reserved.load(std::memory_order_acquire)},
+        const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
+        nlohmann::json state{{"version",1},{"reserved_ticket",reserved},
             {"processed_ticket",runtime.processed_ticket},{"closed_ticket",runtime.closed_ticket},
             {"published_ticket",runtime.published_ticket},{"publication_ready",!runtime.captured_publication.empty()},
             {"activity_generation",runtime.activity_generation.load(std::memory_order_acquire)},
             {"active",runtime.active.load(std::memory_order_acquire)},
-            {"failure_code",runtime.lanes->failure.load(std::memory_order_acquire)}};
+            {"failure_code",runtime.lanes->failure.load(std::memory_order_acquire)},
+            {"captured_prefix_lag_records",reserved-runtime.processed_ticket},
+            {"publication_lag_records",runtime.processed_ticket-runtime.published_ticket},
+            {"published_event_sequence",runtime.published_sequence},{"delivered_event_sequence",runtime.delivered_sequence},
+            {"read_prefix_lag_events",runtime.published_sequence>=runtime.delivered_sequence ? runtime.published_sequence-runtime.delivered_sequence : 0}};
+        const bool age=timing_state.enabled.load(std::memory_order_relaxed);
+        LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
+        state["queue_age_available"]=age;
+        state["queue_age_qpc_frequency"]=frequency.QuadPart;
+        state["lane_metrics"]=nlohmann::json::array();
+        for (unsigned index=0;index<capture::lane_count;++index) {
+            auto& lane=*runtime.lanes->lanes[index];
+            const auto owner=lane.owner.load(std::memory_order_acquire);
+            if (!owner || owner==MAXDWORD) continue;
+            const auto submitted=lane.submitted.records.load(std::memory_order_acquire);
+            const auto consumed=lane.consumed.records.load(std::memory_order_relaxed);
+            const auto bytes=lane.submitted.bytes.load(std::memory_order_acquire);
+            const auto reclaimed=lane.consumed.bytes.load(std::memory_order_relaxed);
+            nlohmann::json row{{"lane",index},{"captured_records",submitted},{"consumed_records",consumed},
+                {"resident_records_approx",submitted>=consumed ? submitted-consumed : 0},
+                {"resident_bytes_approx",bytes>=reclaimed ? bytes-reclaimed : 0},
+                {"peak_resident_records",lane.submitted.peak_records.load(std::memory_order_acquire)},
+                {"peak_resident_bytes",lane.submitted.peak_bytes.load(std::memory_order_acquire)}};
+            row["last_capture_to_replay_qpc"]=age ? nlohmann::json(lane.consumed.last_age) : nlohmann::json();
+            row["maximum_capture_to_replay_qpc"]=age ? nlohmann::json(lane.consumed.maximum_age) : nlohmann::json();
+            row["observed_pending_age_lower_bound_qpc"]=age && lane.consumed.observed_pending_qpc
+                ? nlohmann::json(ticks_now()-lane.consumed.observed_pending_qpc) : nlohmann::json();
+            state["lane_metrics"].push_back(std::move(row));
+        }
+        return state;
     };
-    const auto opening=async_state();
     if (operation=="ack") {
-        const auto sequence=capture::plan_uint(command.at("sequence"),UINT64_MAX);
+        const auto sequence=arkdps::capture::plan_uint(command.at("sequence"),UINT64_MAX);
         if (sequence>runtime.delivered_sequence) throw std::runtime_error("native ACK exceeds delivered event prefix");
     }
-    const bool reads=operation=="mark" || operation=="read" || operation=="terminal_read";
-    // No compatibility quiet-defer certificate is valid for the async backend.
-    // Terminal publication must be supplied by the native closed-prefix owner;
-    // until that endpoint is installed, refuse without calling JS read/ACK code.
-    if (operation=="terminal_read" || (reads && (opening.at("active")!=0
-        || opening.at("reserved_ticket")!=opening.at("processed_ticket"))))
-        return nlohmann::json{{"retry",true},{"events",nlohmann::json::array()},
-            {"hp_context",nlohmann::json::array()},{"error",nullptr},{"stopped",false},
-            {"mark_retry_reason","native_async_prefix_pending"},{"native_async_capture",opening}}.dump();
+    const bool publication_operation=operation=="mark" || operation=="read" || operation=="terminal_read" || operation=="ack";
+    if (operation=="mark") {
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(100);
+        while (runtime.published_ticket<minimum_ticket && std::chrono::steady_clock::now()<deadline) {
+            drain_captures();
+            if (!runtime.fatal.empty()) throw std::runtime_error(runtime.fatal);
+            if (runtime.published_ticket<minimum_ticket) Sleep(1);
+        }
+        if (runtime.published_ticket<minimum_ticket)
+            return nlohmann::json{{"retry",true},{"error",nullptr},{"stopped",false},
+                {"events",nlohmann::json::array()},{"hp_context",nlohmann::json::array()},
+                {"mark_retry_reason","native_fresh_publication_not_ready"},{"native_async_capture",async_state()}}.dump();
+    }
     JS_UpdateStackTop(runtime.runtime);
-    auto argument=JS_NewStringLen(runtime.context,json.data(),json.size());
-    auto value=JS_Call(runtime.context,runtime.dispatch,JS_UNDEFINED,1,&argument);
+    JSValue argument=publication_operation ? JS_ParseJSON(runtime.context,json.data(),json.size(),"native-command.json")
+                                          : JS_NewStringLen(runtime.context,json.data(),json.size());
+    if (JS_IsException(argument)) throw std::runtime_error(exception(runtime.context));
+    // Publication requests are pure journal operations. C++ primitives must
+    // reject live access even when a script catches the resulting exception.
+    runtime.replay_active=publication_operation;
+    auto value=JS_Call(runtime.context,publication_operation ? runtime.publication_request : runtime.dispatch,JS_UNDEFINED,1,&argument);
+    runtime.replay_active=false;
     JS_FreeValue(runtime.context,argument);
     if (JS_IsException(value)) throw std::runtime_error(exception(runtime.context));
-    std::string encoded;
-    try { encoded=string(runtime.context,value); } catch (...) { JS_FreeValue(runtime.context,value); throw; }
+    if (runtime.lanes->failure.load(std::memory_order_acquire)) {
+        JS_FreeValue(runtime.context,value); drain_captures();
+        throw std::runtime_error("native journal violated owned memory boundary");
+    }
+    JSValue serialized=publication_operation ? JS_JSONStringify(runtime.context,value,JS_UNDEFINED,JS_UNDEFINED) : JS_DupValue(runtime.context,value);
     JS_FreeValue(runtime.context,value);
+    if (JS_IsException(serialized)) throw std::runtime_error(exception(runtime.context));
+    std::string encoded;
+    try { encoded=string(runtime.context,serialized); } catch (...) { JS_FreeValue(runtime.context,serialized); throw; }
+    JS_FreeValue(runtime.context,serialized);
     auto response=nlohmann::json::parse(encoded);
     if (!response.is_object()) throw std::runtime_error("native worker reply must be an object");
-    const auto closing=async_state();
     response.erase("native_quiet_boundary_version"); response.erase("native_deferred_callbacks");
-    response["native_async_capture"]=closing;
-    if (reads && (opening.at("activity_generation")!=closing.at("activity_generation")
-        || closing.at("active")!=0 || closing.at("reserved_ticket")!=closing.at("processed_ticket"))) {
-        response["retry"]=true; response["events"]=nlohmann::json::array(); response["hp_context"]=nlohmann::json::array();
-        response["mark_retry_reason"]="native_async_prefix_changed";
-    } else if (operation=="read" && response.value("error",nlohmann::json()).is_null()
+    response["native_async_capture"]=async_state();
+    if ((operation=="read" || operation=="terminal_read") && response.value("error",nlohmann::json()).is_null()
                && !response.value("retry",false) && response.contains("events") && response.at("events").is_array()) {
-        const auto after=capture::plan_uint(command.at("after"),UINT64_MAX);
-        const auto through=capture::plan_uint(command.at("through"),UINT64_MAX);
+        const auto after=arkdps::capture::plan_uint(command.at("after"),UINT64_MAX);
+        const auto through=arkdps::capture::plan_uint(command.at("through"),UINT64_MAX);
         bool contiguous=through>=after && through-after==response.at("events").size();
         std::uint64_t sequence=after;
         for (const auto& event : response.at("events")) {
-            if (!event.is_object() || !event.contains("sequence") || capture::plan_uint(event.at("sequence"),UINT64_MAX)!=++sequence) contiguous=false;
+            if (!event.is_object() || !event.contains("sequence") || arkdps::capture::plan_uint(event.at("sequence"),UINT64_MAX)!=++sequence) contiguous=false;
         }
         if (contiguous) runtime.delivered_sequence=(std::max)(runtime.delivered_sequence,through);
     }
@@ -944,6 +1036,7 @@ void initialize(const std::string& source) {
     auto& runtime=state();
     runtime.worker.start([source] {
         state().lanes=std::make_unique<capture::CaptureLanes>();
+        state().ingress.store(state().lanes.get(),std::memory_order_release);
         initialize_on_worker(source);
     },drain_captures);
     runtime.worker.wait_initialized();
@@ -952,7 +1045,20 @@ std::string readiness() {
     return state().worker.submit([] { return readiness_on_worker(); });
 }
 std::string request(const std::string& json) {
-    return state().worker.submit([json] { return request_on_worker(json); });
+    if (json.size()>8*max_read) throw std::runtime_error("request too large");
+    const auto command=nlohmann::json::parse(json);
+    std::uint64_t minimum=0;
+    if (command.value("operation",std::string())=="mark") {
+        auto* lanes=state().ingress.load(std::memory_order_acquire);
+        if (!lanes) throw std::runtime_error("native capture not initialized");
+        const auto reserved=lanes->reserved.load(std::memory_order_acquire);
+        if (reserved==UINT64_MAX) throw std::runtime_error("native capture ticket exhausted");
+        minimum=reserved+1;
+        lanes->minimum_publication_ticket.store(minimum,std::memory_order_release);
+        const auto revision=lanes->request_serial.fetch_add(1,std::memory_order_acq_rel)+1;
+        lanes->pending_publication.store(revision,std::memory_order_release);
+    }
+    return state().worker.submit([json,minimum] { return request_on_worker(json,minimum); });
 }
 std::string captured_prefix_publication() {
     return state().worker.submit([] { if (!state().fatal.empty()) throw std::runtime_error(state().fatal); return state().captured_publication; });

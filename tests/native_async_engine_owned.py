@@ -21,7 +21,10 @@ source=source.replace("if(name==='Slow')activity.writeU64(1);",'').replace("if(n
 source=source.replace('this.serial = ++serial;',"this.serial = ++serial; if(serial===1){const until=Date.now()+400;while(Date.now()<until){}}")
 source=source.replace("if(name==='Sret')record.values=", "if(name==='Sret')__arkdpsReplayRole('leave',0,1); if(name==='Sret')record.values=")
 source += r"""
-let lastClosedRecord=null;
+let lastClosedRecord=null,ownedAcknowledged=0,servedThrough=0;
+globalThis.__arkdpsPublicationServed=through=>{servedThrough=Math.max(servedThrough,through);};
+const originalAck=rpc.exports.ackEvents;
+rpc.exports.ackEvents=sequence=>{const answer=originalAck(sequence);ownedAcknowledged=answer.acknowledged;return answer;};
 globalThis.__arkdpsOnClosedRecord=record=>{
  if(record.edge!=='leave'||record.closed_after!==true||record.active_after!==0
     ||BigInt(record.activity_end)!==BigInt(record.activity_begin)+1n
@@ -29,11 +32,34 @@ globalThis.__arkdpsOnClosedRecord=record=>{
   throw new Error('invalid owned closed record fence');
  lastClosedRecord=Object.freeze({ticket:record.ticket,activity_begin:record.activity_begin,
   activity_end:record.activity_end,active_after:record.active_after,closed_after:record.closed_after});
- return Object.freeze({error:null,retry:false,owned_fixture_closed_record:lastClosedRecord});
+ const events=records.map((record,index)=>({...record,sequence:index+1}));
+ return Object.freeze({mark:{sequence:records.length,epoch:serial,active:0,active_hooks:[],
+  frame:records.length,game_time:records.length/30,error:null,retry:false,stopped:false,
+  records:records.slice(),retained_arguments:retainedArgumentProof(),owned_closed_record:lastClosedRecord},
+  acknowledged:ownedAcknowledged,events:events.filter(e=>e.sequence>ownedAcknowledged),
+  hp_context:[],read_fields:{error:null,stopped:false},terminal_read:null});
 };
-const originalMark=rpc.exports.mark;
-rpc.exports.mark=()=>({...originalMark(),owned_closed_record:lastClosedRecord});
+// The production engine must route these through the journal, never back here.
+rpc.exports.mark=()=>{throw new Error('legacy live mark was called');};
+rpc.exports.readEvents=()=>{throw new Error('legacy live read was called');};
 """
+from threading import Thread
+from queue import Queue
+
+def fresh_mark(pipe,fixture):
+ result=Queue()
+ def request():
+  try: result.put(pipe.request('mark'))
+  except BaseException as error: result.put(error)
+ pending=Thread(target=request)
+ pending.start()
+ time.sleep(.01)
+ fixture.command('full-arguments')
+ pending.join(timeout=3)
+ assert not pending.is_alive(),'fresh mark did not finish'
+ answer=result.get_nowait()
+ if isinstance(answer,BaseException): raise answer
+ return answer
 receipt={}
 with tempfile.TemporaryDirectory(prefix='arkdps-async-owned-') as temp:
  f=Fixture(Path(temp)/'valid',binary); pipe=None
@@ -46,24 +72,36 @@ with tempfile.TemporaryDirectory(prefix='arkdps-async-owned-') as temp:
   receipt['call_duration_seconds']=duration; receipt['abi']=result
   receipt['full_arguments_call']=f.command('full-arguments')
   assert result['integer']==650 and result['floating']==62.5 and result['sret']==[17,29,46,12] and result['nested']==687,result
-  deadline=time.monotonic()+4
-  while time.monotonic()<deadline:
-   mark=pipe.request('mark')
-   if not mark.get('retry') and mark['native_async_capture']['processed_ticket']==mark['native_async_capture']['reserved_ticket']:break
-  else:raise AssertionError('owned capture prefix did not drain')
+  mark=fresh_mark(pipe,f)
+  assert not mark.get('retry'),mark
   receipt['mark']=mark
   assert mark['native_async_capture']['failure_code']==0 and mark['native_async_capture']['closed_ticket']>0,mark
   assert mark['native_async_capture']['publication_ready'] is True,mark
+  assert mark['native_async_capture']['queue_age_available'] is True,mark
+  assert any(lane['peak_resident_records']>=2 and lane['peak_resident_bytes']>0 for lane in mark['native_async_capture']['lane_metrics']),mark
   assert int(mark['owned_closed_record']['ticket'])==mark['native_async_capture']['published_ticket'],mark
   assert mark['retained_arguments']['values']==list(map(str,FULL_ARGUMENT_VALUES)),mark['retained_arguments']
-  assert len(mark['records'])==12,mark['records']
-  terminal=pipe.request('terminal_read',after=0,through=0); assert terminal['retry'] and terminal['events']==[],terminal
+  assert len(mark['records'])==14,mark['records']
+  token=mark['native_publication']['token']
+  read=pipe.request('read',publication_token=token,after=0,through=mark['sequence'])
+  assert len(read['events'])==mark['sequence'],read
+  assert pipe.request('ack',sequence=mark['sequence'])['acknowledged']==mark['sequence']
+  receipt['read_ack']=read
+  terminal=pipe.request('terminal_read',publication_token=token,after=mark['sequence'],through=mark['sequence']); assert terminal['retry'] and terminal['events']==[],terminal
   receipt['terminal_stage_refusal']=terminal
   f.command('start-threads',function='Slow')
   pending=pipe.request('mark')
   assert pending.get('retry') is True and pending['native_async_capture']['active']>0,pending
   receipt['active_original_mark_retry']=pending
+  historical=pipe.request('read',publication_token=token,after=mark['sequence'],through=mark['sequence'])
+  assert not historical.get('retry') and historical['events']==[],historical
+  receipt['historical_read_during_active_original']=historical
   assert f.command('join-threads')['results']==[523]*4
+  assert not fresh_mark(pipe,f).get('retry')
+  disabled=pipe.request('mark',native_timing={'version':1,'enabled':False})
+  assert disabled['native_async_capture']['queue_age_available'] is False,disabled
+  assert all(lane['maximum_capture_to_replay_qpc'] is None for lane in disabled['native_async_capture']['lane_metrics'])
+  receipt['timing_disabled']=disabled
   receipt['stop']=pipe.request('stop'); assert receipt['stop']['native_quiet'] is True
   assert f.command('snapshot')['code']==loaded['code'],'original code not restored'
  finally:
