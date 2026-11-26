@@ -28,7 +28,14 @@ __arkdpsReplayBegin({version:1,edge:'entry',checkpoint:0,segments:[],fields:[{fi
 __arkdpsReplayRole('entry',1,0);globalThis.wrongCheckpointRejected=rejects(()=>ptr(4096).readU32());globalThis.wrongCheckpointSummary=__arkdpsReplayEnd();
 globalThis.wrapRejected=rejects(()=>__arkdpsReplayBegin({version:1,edge:'entry',segments:[{field_id:0,role:'entry',checkpoint:0,address:'0xffffffffffffffff',bytes:bytes(7),status:'ok'}]}));
 __arkdpsReplayBegin({version:1,edge:'entry',segments:[]});globalThis.badSizeRejected=rejects(()=>ptr(4096).readByteArray(-1));globalThis.badSizeSummary=__arkdpsReplayEnd();
+
+__arkdpsReplayBegin({version:1,edge:'entry',segments:[]});
+const argsBytes=new ArrayBuffer(128);new DataView(argsBytes).setBigUint64(0,42n,true);
+const maskedArgs=__arkdpsArguments(argsBytes,1);globalThis.capturedArgument=maskedArgs[0].toInt32();
+globalThis.maskedArgumentRejected=rejects(()=>maskedArgs[1]);globalThis.maskSummary=__arkdpsReplayEnd();
+globalThis.invalidMaskRejected=rejects(()=>__arkdpsArguments(new ArrayBuffer(8),2));
+globalThis.defaultArgs=__arkdpsArguments(argsBytes)[0].toInt32();
 `,context);
 assert.equal(context.before,7);assert.equal(context.after,8);
 for(const name of ['missing','roleMissing','nativeForbidden','writeForbidden','allocForbidden','shortRejected','ambiguousRejected'])assert.equal(context[name],true,name);
-assert.equal(context.wrongCheckpointRejected,true);assert.equal(context.wrongCheckpointSummary.complete,false);assert.equal(context.wrapRejected,true);assert.equal(context.badSizeRejected,true);assert.equal(context.badSizeSummary.complete,false);assert.equal(context.failedSummary.complete,false);assert.equal(context.shortSummary.complete,true);assert.equal(context.shortSummary.unreadable_reads,1);assert.equal(live,0);console.log('PASS_OWNED_REPLAY 18 assertions; zero live native reads/calls');
+assert.equal(context.wrongCheckpointRejected,true);assert.equal(context.wrongCheckpointSummary.complete,false);assert.equal(context.wrapRejected,true);assert.equal(context.badSizeRejected,true);assert.equal(context.badSizeSummary.complete,false);assert.equal(context.failedSummary.complete,false);assert.equal(context.shortSummary.complete,true);assert.equal(context.shortSummary.unreadable_reads,1);assert.equal(context.capturedArgument,42);assert.equal(context.defaultArgs,42);assert.equal(context.maskedArgumentRejected,true);assert.equal(context.maskSummary.complete,false);assert.equal(context.invalidMaskRejected,true);assert.equal(live,0);console.log('PASS_OWNED_REPLAY 23 assertions; zero live native reads/calls');

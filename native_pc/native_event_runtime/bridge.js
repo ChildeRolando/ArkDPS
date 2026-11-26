@@ -107,8 +107,10 @@ class NativePointer {
 function ptr(value){return value instanceof NativePointer?value:new NativePointer(value);}
 // The engine passes an owned copy of every integer argument slot. Preserve
 // dense-array behavior, but build a pointer only when its value is inspected.
-const __deferredArgument=Symbol(),__argumentViews=new WeakMap();
+const __deferredArgument=Symbol(),__argumentViews=new WeakMap(),__argumentMasks=new WeakMap();
 function __materializeArgument(array,key){
+ const index=Number(key);
+ if((__argumentMasks.get(array)&(1<<index))===0)__arkdpsReplayGap('uncaptured native argument '+index);
  const pointer=new NativePointer(__argumentViews.get(array).getBigUint64(Number(key)*8,true));
  array[key]=pointer;
  return pointer;
@@ -130,9 +132,13 @@ const __argumentHandler={
   return Reflect.defineProperty(array,key,descriptor);
  }
 };
-function __arkdpsArguments(bytes){
- const view=new DataView(bytes),args=Array(view.byteLength/8).fill(__deferredArgument);
- __argumentViews.set(args,view);
+function __arkdpsArguments(bytes,mask=null){
+ if(!(bytes instanceof ArrayBuffer)||bytes.byteLength%8!==0||bytes.byteLength>128)__arkdpsReplayGap('invalid native argument bytes');
+ const count=bytes.byteLength/8,allowed=(1<<count)-1;
+ if(mask===null)mask=allowed;
+ if(!Number.isInteger(mask)||mask<0||mask>65535||(mask&~allowed)!==0)__arkdpsReplayGap('invalid native argument mask');
+ const view=new DataView(bytes),args=Array(count).fill(__deferredArgument);
+ __argumentViews.set(args,view);__argumentMasks.set(args,mask);
  return new Proxy(args,__argumentHandler);
 }
 const Memory={alloc(size){if(__arkdpsReplay!==null)__arkdpsReplayGap('native allocation during replay');return ptr(__alloc(size));}};
