@@ -114,7 +114,9 @@ def build(output=DEFAULT_OUTPUT, *, compiler='g++', c_compiler=None, cache=None,
     with TemporaryDirectory(prefix='native-runtime-', dir=output.parent) as temporary:
         stage = Path(temporary)
         source_files = ('engine.cpp', 'engine.h', 'engine_worker.h', 'engine_capture_lane.h',
-                        'engine_capture_plan.h', 'capture_queue.h', 'capture_spill_pool.h', 'native_capture.cpp', 'native_capture.h',
+                        'engine_capture_plan.h', 'engine_capture_config.h', 'engine_capture_pipeline.h',
+                        'capture_queue.h', 'capture_spill_pool.h', 'native_capture.cpp', 'native_capture.h',
+                        'owned_replay_view.h', 'owned_replay_js.h',
                         'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'cold_plan.js', 'build.py')
         snapshots = {name: (SOURCE / name).read_bytes() for name in source_files}
         for name, contents in snapshots.items():
