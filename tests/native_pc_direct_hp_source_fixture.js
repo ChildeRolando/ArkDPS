@@ -17,20 +17,21 @@ function run(direct,mode='damage'){
  f.context.scopeCache={autochess:false,identity:baseline.native_identity,roots,scopeGuards:[],addresses:{}};
  const scope=JSON.parse(vm.runInContext('JSON.stringify(nativeCaptureScopeGraph(scopeCache,nativeAutoStage,clock,1))',f.context));f.context.scopeGraph=scope;vm.runInContext('nativeCaptureScopes.set(1,scopeGraph)',f.context);
  const hook=f.callback('SetHpInternal',f.entity);f.context.directHook=hook;
- vm.runInContext(`const issued=new WeakMap();globalThis.issueSourceIo=()=>{const io=Object.freeze(Object.create(pointerHpIo));issued.set(io,{record:__arkdpsReplayRecord(),contract:directHook.arkdpsCaptureContract});return io;};
+ vm.runInContext(`const issued=new WeakMap();globalThis.issueSourceIo=()=>{const io=Object.create(pointerHpIo);if(globalThis.directFault==='unused')Object.defineProperty(io,'attributeWords',{value:()=>__arkdpsReplayGap('unused HP attribute missing')});if(globalThis.directFault==='closing')Object.defineProperty(io,'closing',{value:()=>__arkdpsReplayGap('demanded HP closing missing')});Object.freeze(io);issued.set(io,{record:__arkdpsReplayRecord(),contract:directHook.arkdpsCaptureContract});return io;};
  globalThis.__arkdpsIsPreparedHpObservation=(io,contract,enemy)=>{const owner=issued.get(io);return !!owner&&owner.record===__arkdpsReplayRecord()&&owner.contract===contract;};
  arkdpsNativeAsyncCapture=true;prepareNativeCaptureHook(ptr(0x9000),directHook);
  globalThis.finishCalls=0;const realFinish=finishModifierHpWriter;finishModifierHpWriter=function(...args){finishCalls++;return realFinish(...args);};`,f.context);
+ f.context.directFault=mode==='unused-error'?'unused':null;
  const plan=hook.arkdpsCaptureContract,call={threadId:1};let latestIo;
  function invoke(edge){
   const body=harness.captureFields(plan.fields.filter(field=>field.phase===edge),[target],[target],[]),guards=harness.captureFields(scope.fields.map((field,index)=>({...field,field_id:1000+index})),[target],[target],[]);
   const record={version:1,edge,checkpoint:0,thread_id:1,fields:[...body.fields,...guards.fields],segments:[...body.segments,...guards.segments],facts:{mode_epoch:0,scope_mode_epoch:0,scope_revision:1}};
   harness.replay(record,()=>{
-   if(direct){let io=f.context.issueSourceIo();if(mode==='forged'&&edge==='entry')io={verified:true,identity(){throw Error('forged IO read');}};if(mode==='old-lease'&&edge==='leave')io=latestIo;try{edge==='entry'||mode==='wrong-edge'?hook.arkdpsDirectHpEntry.call(call,target,io):hook.arkdpsDirectHpLeave.call(call,io);}catch(error){if(!['forged','old-lease','wrong-edge'].includes(mode))throw error;}latestIo=io;}
+   if(direct){let io=f.context.issueSourceIo();if(mode==='forged'&&edge==='entry')io={verified:true,identity(){throw Error('forged IO read');}};if(mode==='old-lease'&&edge==='leave')io=latestIo;try{edge==='entry'||mode==='wrong-edge'?hook.arkdpsDirectHpEntry.call(call,target,io):hook.arkdpsDirectHpLeave.call(call,io);}catch(error){if(!['forged','old-lease','wrong-edge','demanded-error'].includes(mode))throw error;}latestIo=io;}
    else edge==='entry'?hook.onEnter.call(call,[target]):hook.onLeave.call(call);
   });return f.context.fixtureSummary;
  }
- const entry=invoke('entry');if(mode==='damage')f.write(target.add(0x40),10n*4294967296n);else if(mode==='heal')f.write(target.add(0x40),60n*4294967296n);
+ const entry=invoke('entry');if(mode==='demanded-error')f.context.directFault='closing';if(mode==='damage')f.write(target.add(0x40),10n*4294967296n);else if(mode==='heal')f.write(target.add(0x40),60n*4294967296n);
  const leave=mode==='forged'?null:invoke('leave');
  const value={entry:JSON.parse(JSON.stringify(entry)),leave:leave&&JSON.parse(JSON.stringify(leave)),queue:JSON.parse(vm.runInContext('JSON.stringify(queue)',f.context)),active:vm.runInContext('active',f.context),epoch:vm.runInContext('epoch',f.context),unknown:vm.runInContext('enemyStateUnknown',f.context),finish:f.context.finishCalls};
  assert.equal(harness.late(),0);harness.restore();return value;
@@ -39,6 +40,8 @@ for(const mode of ['damage','heal','unchanged']){const generic=run(false,mode),d
 const forged=run(true,'forged');assert.equal(forged.entry.complete,false);assert.equal(forged.queue.length,0);
 const stale=run(true,'old-lease');assert.equal(stale.leave.complete,false);
 const wrong=run(true,'wrong-edge');assert.equal(wrong.leave.complete,false);
+const unused=run(true,'unused-error');assert.equal(unused.leave.complete,true);assert.equal(unused.finish,1);assert.equal(unused.active,0);
+const demanded=run(true,'demanded-error');assert.equal(demanded.leave.complete,false);assert.equal(demanded.queue.length,0);
 {
  const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),enemyHpState:true});
  const h=ownedFields(f,{clock:vm.runInContext('clock',f.context),string_class:'0x1000',classes:{Enemy:f.enemyClass.toString()},skill_offsets:{}});
