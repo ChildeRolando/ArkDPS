@@ -2,6 +2,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace arkdps::capture {
 static_assert(sizeof(std::uintptr_t) == 8, "capture plans require the verified 64-bit ABI");
@@ -16,7 +17,8 @@ enum class Phase : std::uint8_t { entry, leave, checkpoint };
 enum class Root : std::uint8_t { arg, entry_ref, parent_ref, global_slot, return_value, checkpoint_ref, absolute };
 enum class Kind : std::uint8_t { bytes, utf16, counted_bytes, utf16_array, projection_tree };
 enum class ProjectionKind : std::uint8_t { object, utf16, array };
-enum class TypeGate : std::uint8_t { none, exact, ancestor };
+constexpr std::size_t max_class_set_entries = 65536;
+enum class TypeGate : std::uint8_t { none, exact, ancestor, class_set };
 // Fixed metadata layout only: no callbacks, predicates, owner inference or arbitrary bytecode.
 struct ProjectionNode {
     ProjectionKind kind = ProjectionKind::object;
@@ -27,6 +29,7 @@ struct ProjectionNode {
     TypeGate gate = TypeGate::none;
     std::uintptr_t expected_class = 0;
     std::uint8_t ancestry_depth = 0;
+    std::uint32_t class_set_begin = 0, class_set_count = 0;
     bool allow_null = false;
     std::uint16_t max_units = 0;
     std::uint32_t count_offset = 0, items_offset = 0, data_offset = 0;
@@ -68,6 +71,8 @@ struct HookCapturePlan {
     std::array<Field, max_fields> fields{};
     std::uint16_t projection_count = 0;
     std::array<ProjectionNode, max_projection_nodes> projections{};
+    // Installation-owned immutable metadata. Never resized by capture.
+    std::vector<std::uintptr_t> class_set_entries;
 };
 struct Context {
     std::array<std::uintptr_t, max_roots> args{}, entry_refs{}, parent_refs{}, globals{}, checkpoint_refs{};

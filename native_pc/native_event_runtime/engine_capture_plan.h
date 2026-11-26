@@ -110,7 +110,26 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         if (gate=="none") node.gate=TypeGate::none;
         else if (gate=="exact") node.gate=TypeGate::exact;
         else if (gate=="ancestor") node.gate=TypeGate::ancestor;
+        else if (gate=="class_set") node.gate=TypeGate::class_set;
         else throw std::runtime_error("invalid capture projection type gate");
+        if (node.gate == TypeGate::class_set) {
+            if (value.contains("expected_class") || value.contains("ancestry_depth"))
+                throw std::runtime_error("class set cannot declare another type gate");
+            const auto& classes=value.at("expected_classes");
+            if (!classes.is_array() || classes.empty() || classes.size() > max_class_set_entries - result.plan->class_set_entries.size())
+                throw std::runtime_error("invalid capture class set bound");
+            node.class_set_begin=static_cast<std::uint32_t>(result.plan->class_set_entries.size());
+            for (const auto& entry:classes) {
+                const auto address=plan_address(entry);
+                if (!address) throw std::runtime_error("null capture class set entry");
+                result.plan->class_set_entries.push_back(address);
+            }
+            auto first=result.plan->class_set_entries.begin()+node.class_set_begin;
+            std::sort(first,result.plan->class_set_entries.end());
+            if (std::adjacent_find(first,result.plan->class_set_entries.end()) != result.plan->class_set_entries.end())
+                throw std::runtime_error("duplicate capture class set entry");
+            node.class_set_count=static_cast<std::uint32_t>(classes.size());
+        } else if (value.contains("expected_classes")) throw std::runtime_error("class set on incompatible gate");
         if (value.contains("expected_class")) node.expected_class=plan_address(value.at("expected_class"));
         node.ancestry_depth=plan_uint(value.value("ancestry_depth",nlohmann::json(0)),10);
         if (value.contains("allow_null")) {

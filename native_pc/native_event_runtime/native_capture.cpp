@@ -1,4 +1,5 @@
 #include "native_capture.h"
+#include <algorithm>
 #include <cstring>
 #include <limits>
 
@@ -209,6 +210,10 @@ Error projection_body(const HookCapturePlan& plan, const Field& field, std::uint
         std::uintptr_t klass = 0;
         if ((error = own(address, &klass, 8)) != Error::ok) return finish(error);
         bool matched = klass == node.expected_class;
+        if (node.gate == TypeGate::class_set) {
+            const auto first = plan.class_set_entries.begin() + node.class_set_begin;
+            matched = std::binary_search(first, first + node.class_set_count, klass);
+        }
         for (std::size_t i = 1; !matched && klass && node.gate == TypeGate::ancestor && i < node.ancestry_depth; ++i) {
             std::uintptr_t parent = 0;
             if (!address_add(klass, 0x58, parent)) return finish(Error::bounds);
@@ -303,16 +308,27 @@ Error projection_budget(const HookCapturePlan& plan, std::uint16_t index, std::s
     const auto& node = plan.projections[index];
     if (node.depth > max_depth || !node.max_visits || node.max_visits > max_projection_visits
         || node.child_begin > plan.projection_count || node.child_count > plan.projection_count - node.child_begin
-        || (node.gate != TypeGate::none && node.gate != TypeGate::exact && node.gate != TypeGate::ancestor)
-        || (node.gate != TypeGate::none && !node.expected_class)
+        || (node.gate != TypeGate::none && node.gate != TypeGate::exact && node.gate != TypeGate::ancestor && node.gate != TypeGate::class_set)
+        || ((node.gate == TypeGate::exact || node.gate == TypeGate::ancestor) && !node.expected_class)
+        || (node.gate == TypeGate::class_set && (!node.class_set_count || node.expected_class || node.ancestry_depth
+            || plan.class_set_entries.size() > max_class_set_entries
+            || node.class_set_begin > plan.class_set_entries.size()
+            || node.class_set_count > plan.class_set_entries.size() - node.class_set_begin))
+        || (node.gate != TypeGate::class_set && (node.class_set_begin || node.class_set_count))
         || (node.gate == TypeGate::ancestor && (!node.ancestry_depth || node.ancestry_depth > 10))
         || node.parent_byte_offset < -1
         || node.skip_negative_i32_offset < -1
         || (node.skip_negative_i32_offset >= 0 && (node.kind != ProjectionKind::array
             || static_cast<std::size_t>(node.skip_negative_i32_offset) + 4 > node.element_bytes))) return Error::invalid_plan;
+    if (node.gate == TypeGate::class_set) {
+        const auto end = node.class_set_begin + node.class_set_count;
+        for (auto i = node.class_set_begin; i < end; ++i)
+            if (!plan.class_set_entries[i] || (i > node.class_set_begin && plan.class_set_entries[i-1] >= plan.class_set_entries[i]))
+                return Error::invalid_plan;
+    }
     visits = visits < node.max_visits ? visits : node.max_visits;
     if (node.local_fail_boundary) budget.fields += visits;
-    const std::size_t gate = node.gate == TypeGate::none ? 0 : node.gate == TypeGate::exact ? 1 : node.ancestry_depth;
+    const std::size_t gate = node.gate == TypeGate::none ? 0 : node.gate == TypeGate::ancestor ? node.ancestry_depth : 1;
     std::size_t local_bytes = (node.depth + gate) * 8 + (node.parent_byte_offset >= 0 ? 1 : 0);
     std::size_t local_reads = node.depth + gate + (node.parent_byte_offset >= 0 ? 1 : 0);
     std::size_t local_segments = local_reads, children_visits = visits;
