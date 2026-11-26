@@ -1,0 +1,440 @@
+{
+  "scope": "Real DLL direct HP proof plus publication/parent fallback in owned children.",
+  "binary_sha256": "a1bc80babbd84232a1e624eb4af65cb5ec9464697037085e40727d5233749b4e",
+  "test_sha256": "32143900db900934eda557849be1bcccd7025ebb4feb2dc59b239cff48fc2050",
+  "cases": [
+    {
+      "case": "normal",
+      "rejected": false,
+      "reply": {
+        "active": 0,
+        "active_hooks": [],
+        "argsProxies": 0,
+        "directEntries": 2,
+        "directLeaves": 1,
+        "entries": 2,
+        "epoch": 2,
+        "error": null,
+        "frame": 2,
+        "game_time": 0.06666666666666667,
+        "leaves": 2,
+        "mode_epoch": 0,
+        "native_async_capture": {
+          "active": 0,
+          "activity_generation": 4,
+          "batch_barriers": 1,
+          "batch_calls": 1,
+          "batch_fallback_reasons": {
+            "argument_contract": 0,
+            "cold_or_publication": 1,
+            "concurrent": 0,
+            "methods_unavailable": 0,
+            "missing_root": 0,
+            "parent_or_nested": 0,
+            "unsupported_plan": 0
+          },
+          "batch_finalized": 3,
+          "batch_issued": 3,
+          "batch_public_record_materializations": 3,
+          "callback_timing": {
+            "enabled": false,
+            "includes_first_touch": false,
+            "includes_identity_lookup": true,
+            "includes_metrics_recording": false,
+            "includes_original_function": false,
+            "qpc_frequency": 10000000,
+            "sample_sums_are_not_extrapolated": true,
+            "samples": [],
+            "scope": "after_sampling_decision_through_capture_enqueue",
+            "selection": "xorshift_approximately_1_in_128"
+          },
+          "captured_prefix_lag_records": 0,
+          "closed_ticket": 4,
+          "delivered_event_sequence": 0,
+          "desired_mode_epoch": 0,
+          "failure_code": 0,
+          "lane_metrics": [
+            {
+              "age_sample_count": 0,
+              "capture_uncertain_records": 0,
+              "captured_bytes": 3542,
+              "captured_records": 4,
+              "consumed_bytes": 3542,
+              "consumed_records": 4,
+              "counter_snapshot_consistent": true,
+              "lane": 0,
+              "lane_generation": 0,
+              "last_capture_to_replay_qpc": null,
+              "maximum_capture_to_replay_qpc": null,
+              "observed_pending_age_lower_bound_qpc": null,
+              "peak_resident_bytes": 2647,
+              "peak_resident_records": 3,
+              "queue_age_available": false,
+              "resident_bytes_approx": 0,
+              "resident_records_approx": 0,
+              "thread_birth": "134402029117240617",
+              "thread_id": 20896
+            }
+          ],
+          "maximum_batch_edges": 3,
+          "processed_ticket": 4,
+          "publication_lag_records": 0,
+          "publication_ready": true,
+          "published_event_sequence": 0,
+          "published_mode_epoch": 0,
+          "published_ticket": 4,
+          "queue_age_available": false,
+          "queue_age_qpc_frequency": 10000000,
+          "read_prefix_lag_events": 0,
+          "reserved_ticket": 4,
+          "single_replayed": 1,
+          "version": 1
+        },
+        "native_capture_scope_mode_epoch": 0,
+        "native_publication": {
+          "activity_begin": "3",
+          "activity_end": "4",
+          "closed_ticket": "4",
+          "epoch": 2,
+          "sequence": 0,
+          "terminal_verified": false,
+          "token": "4:1",
+          "version": 1
+        },
+        "parentEntries": 0,
+        "parentLeaves": 0,
+        "records": [
+          {
+            "checkpoint": 0,
+            "edge": "entry",
+            "hp": "429496729600",
+            "id": "enemy_owned",
+            "mode": 0,
+            "route": "direct",
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "leave",
+            "hp": "429496729600",
+            "mode": 0,
+            "route": "direct",
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "entry",
+            "hp": "429496729600",
+            "id": "enemy_owned",
+            "mode": 0,
+            "route": "direct",
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "leave",
+            "hp": "429496729600",
+            "mode": 0,
+            "route": "fallback",
+            "uid": 12
+          }
+        ],
+        "sequence": 0,
+        "stopped": false
+      },
+      "warm": {
+        "count": 1,
+        "nested": false,
+        "results": [
+          1998044883865
+        ],
+        "expected": 1998044883865
+      },
+      "calls": [
+        {
+          "count": 1,
+          "nested": false,
+          "results": [
+            1998044883865
+          ],
+          "expected": 1998044883865
+        }
+      ],
+      "original_abi_preserved": true,
+      "source_sha256": "25a19e1826d7ce1a1dcfd0ce000f3ea886744f5c88c5388ec9959cd47faceffc",
+      "plan_sha256": "9af6eb438e56a9ca723627d03d3bbc05f71b6b9f9b65317355e38c78fa793961"
+    },
+    {
+      "case": "parent",
+      "rejected": false,
+      "reply": {
+        "active": 0,
+        "active_hooks": [],
+        "argsProxies": 2,
+        "directEntries": 1,
+        "directLeaves": 0,
+        "entries": 2,
+        "epoch": 2,
+        "error": null,
+        "frame": 2,
+        "game_time": 0.06666666666666667,
+        "leaves": 2,
+        "mode_epoch": 0,
+        "native_async_capture": {
+          "active": 0,
+          "activity_generation": 6,
+          "batch_barriers": 1,
+          "batch_calls": 1,
+          "batch_fallback_reasons": {
+            "argument_contract": 0,
+            "cold_or_publication": 1,
+            "concurrent": 0,
+            "methods_unavailable": 0,
+            "missing_root": 0,
+            "parent_or_nested": 2,
+            "unsupported_plan": 2
+          },
+          "batch_finalized": 1,
+          "batch_issued": 1,
+          "batch_public_record_materializations": 1,
+          "callback_timing": {
+            "enabled": false,
+            "includes_first_touch": false,
+            "includes_identity_lookup": true,
+            "includes_metrics_recording": false,
+            "includes_original_function": false,
+            "qpc_frequency": 10000000,
+            "sample_sums_are_not_extrapolated": true,
+            "samples": [],
+            "scope": "after_sampling_decision_through_capture_enqueue",
+            "selection": "xorshift_approximately_1_in_128"
+          },
+          "captured_prefix_lag_records": 0,
+          "closed_ticket": 6,
+          "delivered_event_sequence": 0,
+          "desired_mode_epoch": 0,
+          "failure_code": 0,
+          "lane_metrics": [
+            {
+              "age_sample_count": 0,
+              "capture_uncertain_records": 0,
+              "captured_bytes": 4454,
+              "captured_records": 6,
+              "consumed_bytes": 4454,
+              "consumed_records": 6,
+              "counter_snapshot_consistent": true,
+              "lane": 0,
+              "lane_generation": 0,
+              "last_capture_to_replay_qpc": null,
+              "maximum_capture_to_replay_qpc": null,
+              "observed_pending_age_lower_bound_qpc": null,
+              "peak_resident_bytes": 3998,
+              "peak_resident_records": 5,
+              "queue_age_available": false,
+              "resident_bytes_approx": 0,
+              "resident_records_approx": 0,
+              "thread_birth": "134402029122187160",
+              "thread_id": 24876
+            }
+          ],
+          "maximum_batch_edges": 1,
+          "processed_ticket": 6,
+          "publication_lag_records": 0,
+          "publication_ready": true,
+          "published_event_sequence": 0,
+          "published_mode_epoch": 0,
+          "published_ticket": 6,
+          "queue_age_available": false,
+          "queue_age_qpc_frequency": 10000000,
+          "read_prefix_lag_events": 0,
+          "reserved_ticket": 6,
+          "single_replayed": 5,
+          "version": 1
+        },
+        "native_capture_scope_mode_epoch": 0,
+        "native_publication": {
+          "activity_begin": "5",
+          "activity_end": "6",
+          "closed_ticket": "6",
+          "epoch": 2,
+          "sequence": 0,
+          "terminal_verified": false,
+          "token": "6:1",
+          "version": 1
+        },
+        "parentEntries": 1,
+        "parentLeaves": 1,
+        "records": [
+          {
+            "checkpoint": 0,
+            "edge": "entry",
+            "hp": "429496729600",
+            "id": "enemy_owned",
+            "mode": 0,
+            "route": "fallback",
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "leave",
+            "hp": "429496729600",
+            "mode": 0,
+            "route": "fallback",
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "entry",
+            "hp": "429496729600",
+            "id": "enemy_owned",
+            "mode": 0,
+            "route": "direct",
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "leave",
+            "hp": "429496729600",
+            "mode": 0,
+            "route": "fallback",
+            "uid": 12
+          }
+        ],
+        "sequence": 0,
+        "stopped": false
+      },
+      "warm": {
+        "count": 1,
+        "nested": true,
+        "results": [
+          5567436536617
+        ],
+        "expected": 5567436536617
+      },
+      "calls": [
+        {
+          "count": 1,
+          "nested": false,
+          "results": [
+            2783718268633
+          ],
+          "expected": 2783718268633
+        }
+      ],
+      "original_abi_preserved": true,
+      "source_sha256": "fa5667ec6ea46df1c99e3175713f611fad1cd65e4bae21ca2463b3f02796b6e7",
+      "plan_sha256": "4371dc027a4d3b1dbdf3880b3483678a61e534cf634329bcb95933ac92d610d8"
+    },
+    {
+      "case": "root",
+      "rejected": true,
+      "error": "native runtime mark failed; error_type=InternalError; native capture failed: code=6",
+      "warm": {
+        "count": 1,
+        "nested": false,
+        "results": [
+          2030963610185
+        ],
+        "expected": 2030963610185
+      },
+      "calls": [
+        {
+          "count": 1,
+          "nested": false,
+          "results": [
+            2030963610185
+          ],
+          "expected": 2030963610185
+        }
+      ],
+      "original_abi_preserved": true,
+      "source_sha256": "fad54df4f4d6d6e1cb6debba43844147581ae5e84ef3b7e0f85b9f50eea177b5"
+    },
+    {
+      "case": "phase",
+      "rejected": true,
+      "error": "native runtime mark failed; error_type=InternalError; native capture failed: code=6",
+      "warm": {
+        "count": 1,
+        "nested": false,
+        "results": [
+          1659801118697
+        ],
+        "expected": 1659801118697
+      },
+      "calls": [
+        {
+          "count": 1,
+          "nested": false,
+          "results": [
+            1659801118697
+          ],
+          "expected": 1659801118697
+        }
+      ],
+      "original_abi_preserved": true,
+      "source_sha256": "41dedf50093dd638f77b42cd9981c01f45643f9653b21649226c9a94dce695e8"
+    }
+  ],
+  "source_root_head": "5d1e179eba992869320d54c92d2aa3f6a08ca27c",
+  "build_metadata_sha256": "6abc75b6ba4fa3f4e8af4d8c383c9a426914d11fd4f234987258e79df4444afe",
+  "build_metadata": {
+    "protocol": 1,
+    "provider": "arkdps-native-hooks",
+    "sha256": "a1bc80babbd84232a1e624eb4af65cb5ec9464697037085e40727d5233749b4e",
+    "dependencies": [
+      {
+        "file": "quickjs-2025-09-13.tar.xz",
+        "url": "https://bellard.org/quickjs/quickjs-2025-09-13.tar.xz",
+        "sha256": "6f1f322aea3bb3a90858db85c9fe717013fde4df7dfcafe2f57e78f5bb4b4a0c"
+      },
+      {
+        "file": "minhook-1.3.4.tar.gz",
+        "url": "https://codeload.github.com/TsudaKageyu/minhook/tar.gz/refs/tags/v1.3.4",
+        "sha256": "1aebeae4ca898330c507860acc2fca2eb335fe446a3a2b8444c3bf8b2660a14e"
+      },
+      {
+        "file": "json.hpp",
+        "url": "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp",
+        "sha256": "9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6"
+      },
+      {
+        "file": "nlohmann-json-LICENSE.MIT",
+        "url": "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/LICENSE.MIT",
+        "sha256": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14"
+      }
+    ],
+    "licenses": {
+      "quickjs-LICENSE": "598fd7fc928e4350abce36e337ba5a1346923c5c692f5be92c3d8e29ddd7c18d",
+      "minhook-LICENSE.txt": "d5c2224982b0b95a16b098a561335fa93f3eaf4d0aa964b7843edb986df78dc8",
+      "nlohmann-json-LICENSE.MIT": "86b998c792894ccb911a1cb7994f7a9652894e7a094c0b5e45be2f553f45cf14"
+    },
+    "sources": {
+      "engine.cpp": "ca1c0186638e77b91244d0385d0b9d1230841c89e04445cb62d7c8cdef39f684",
+      "engine.h": "faf029c9e14b76075678dc4ad558e8d2a7489f1e3ca901ee69d717bdb5ba056a",
+      "engine_worker.h": "648cd3b9c3071b7211ad7a30f2f5867eefc2223338603c8fcd01a6f1b468aedd",
+      "engine_capture_lane.h": "d0f68f0733c3456cf9ca7090c5ffc43c9fa959fdf2283fd4e6e7642f1b0ba9a3",
+      "engine_capture_plan.h": "e70280594cb541e8e5aa529a57aaed14391c03ee7aa1faf491704e699df9fe67",
+      "engine_capture_config.h": "865f43a477d356bb31565daee8c241f092269240744593d0290df1ec6ce1379c",
+      "engine_capture_pipeline.h": "fedc71be3a1ed10fa818d4e9f4d01dcf14c5c8effe773c49a586b9e939e9b891",
+      "engine_terminal_fence.h": "a20ea172703f0483a73d065d417f40684e6ad809a2e4e4d07565317fbc8296d3",
+      "engine_capture_timing.h": "7bf5360fa15ea46c148aaf94dcf3058ee7287ca802f99480e872bd4f51fc73a1",
+      "capture_queue.h": "03b7bd11dfadd15976065ee109c70d26d71d9d8ee99811e488cd08c56f601fb2",
+      "capture_spill_pool.h": "be99e87c159fe7dcd382b8f6fa020e614687e3b56901f47a110d8bada3b177e4",
+      "native_capture.cpp": "c714fb232d5a3661ac6a5b587d31c0d2870f7fb39fe540afff92167a3b179b2a",
+      "native_capture.h": "d787bda15d26afea7ef605def24fbc6bcad0e2c04391fbaccf65570cd0d9db2a",
+      "owned_replay_view.h": "13f993309f0d1c3890d69683a18ea6537c5142f256703ce26fa23a73b1b5df59",
+      "owned_replay_js.h": "050244e99e47f3e3d5f8d1a3d8d7e6b6fcbffdf3f627af7775e9e50a5ae39e12",
+      "owned_role_index.h": "507ed4e8fd1fb8d5eaa4ba8ac9bb7143405df7240f6eda577e6fc8081ea49fd4",
+      "server.cpp": "7184d6a196779a481ee86fc144dd7cd5722f07d1f8109ac8c20355829c02e912",
+      "hooks.S": "52ab92dc1ee071ba30de591f467aba19a6ea35c3325c2ceda877ea8540b34690",
+      "bridge.js": "03b49a479644fabd3558f00bd5c3ea2df26963edbfff7cb2c04aef9bd0084b0c",
+      "publication.js": "65c27e8a8d9197c686c3f97322b06d2923fb7172c2328d4d3f1153d42787cb29",
+      "cold_plan.js": "b9819936b72aa4fa422e477486a642220acf165cd3676fd2e42aa3979b87991c",
+      "build.py": "59afa0e78989b1524557e5bde041515a552f831f5e9f58517c2f26fa06c14779"
+    }
+  },
+  "result": "FAIL",
+  "error_type": "AssertionError",
+  "error": "native runtime mark failed; error_type=InternalError"
+}
