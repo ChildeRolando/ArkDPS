@@ -1,0 +1,149 @@
+{
+  "scripts": {
+    "candidate-no-cycle.js": {
+      "matching_source_refs": [
+        "eb16ccbb"
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "a0ac95c98e69dec79da9abd7d6a4bfa9c0af1ce79b181c26e380dd67bc6fba44",
+        "event_probe_runtime.js": "a3eabbc047cd0555880fa0b92185badf3beb8c33c29b76707177ca58909c6ffd",
+        "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+      },
+      "script_sha256": "9576d3ce3d5e7341af3fcf87df916d80d471670c69391fcd53cc2b7c3d3f95fc",
+      "hook_counts": {
+        "input_only_baseline": 0,
+        "unchanged": 4000,
+        "changed_damage": 4000,
+        "heal_coalesced": 4000,
+        "maxhp_dirty": 4000
+      },
+      "cold_prefix_normalization": "fullscope source prepends exact cold_plan.js plus newline; removed only that verified prefix for comparing original AutoChess file"
+    },
+    "candidate.js": {
+      "matching_source_refs": [
+        "eb16ccbb"
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "a0ac95c98e69dec79da9abd7d6a4bfa9c0af1ce79b181c26e380dd67bc6fba44",
+        "event_probe_runtime.js": "a3eabbc047cd0555880fa0b92185badf3beb8c33c29b76707177ca58909c6ffd",
+        "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+      },
+      "script_sha256": "4a0f562d9660fa36917a4fa7bc30826cfd865d97e857820d069a46384d635954",
+      "hook_counts": {
+        "input_only_baseline": 0,
+        "unchanged": 4000,
+        "changed_damage": 4000,
+        "heal_coalesced": 4000,
+        "maxhp_dirty": 4000
+      },
+      "cold_prefix_normalization": "fullscope source prepends exact cold_plan.js plus newline; removed only that verified prefix for comparing original AutoChess file"
+    },
+    "control.js": {
+      "matching_source_refs": [
+        "4c6deda"
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "7288b5712baea428edb8edeefc1e78a1f1a8e22ffedb945edd451cd3dbb23ea5",
+        "event_probe_runtime.js": "14e9df70fce1c3ccb8c6d90127caf59d541e0bcb188d43480bc392b8540924c5",
+        "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+      },
+      "script_sha256": "c52b453216012319dc6704d7c62da13a7e8e2244206e15f98d00f7f41ee44b08",
+      "hook_counts": {
+        "input_only_baseline": 0,
+        "unchanged": 0,
+        "changed_damage": 0,
+        "heal_coalesced": 0,
+        "maxhp_dirty": 0
+      },
+      "cold_prefix_normalization": "fullscope source prepends exact cold_plan.js plus newline; removed only that verified prefix for comparing original AutoChess file"
+    },
+    "fifo-0.js": {
+      "matching_source_refs": [
+        "eb16ccbb"
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "a0ac95c98e69dec79da9abd7d6a4bfa9c0af1ce79b181c26e380dd67bc6fba44",
+        "event_probe_runtime.js": "a3eabbc047cd0555880fa0b92185badf3beb8c33c29b76707177ca58909c6ffd",
+        "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+      },
+      "script_sha256": "539b6bcefca27236f451007ed2e8039d2052f74aab4d1762b2c9cb299f931d8c",
+      "hook_counts": {},
+      "cold_prefix_normalization": "fullscope source prepends exact cold_plan.js plus newline; removed only that verified prefix for comparing original AutoChess file"
+    },
+    "fifo-300.js": {
+      "matching_source_refs": [
+        "eb16ccbb"
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "a0ac95c98e69dec79da9abd7d6a4bfa9c0af1ce79b181c26e380dd67bc6fba44",
+        "event_probe_runtime.js": "a3eabbc047cd0555880fa0b92185badf3beb8c33c29b76707177ca58909c6ffd",
+        "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+      },
+      "script_sha256": "b72ddeec012c608ccb59e7a0f4324abbadd6e0905635472d72a488e9057acf9e",
+      "hook_counts": {},
+      "cold_prefix_normalization": "fullscope source prepends exact cold_plan.js plus newline; removed only that verified prefix for comparing original AutoChess file"
+    },
+    "fifo-500.js": {
+      "matching_source_refs": [
+        "eb16ccbb"
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "a0ac95c98e69dec79da9abd7d6a4bfa9c0af1ce79b181c26e380dd67bc6fba44",
+        "event_probe_runtime.js": "a3eabbc047cd0555880fa0b92185badf3beb8c33c29b76707177ca58909c6ffd",
+        "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+      },
+      "script_sha256": "1dcc89615e17ad644296088968a8b35552108afd2cb6f967f9f00801b78a414d",
+      "hook_counts": {},
+      "cold_prefix_normalization": "fullscope source prepends exact cold_plan.js plus newline; removed only that verified prefix for comparing original AutoChess file"
+    },
+    "fifo-no-cycle.js": {
+      "matching_source_refs": [
+        "eb16ccbb"
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "a0ac95c98e69dec79da9abd7d6a4bfa9c0af1ce79b181c26e380dd67bc6fba44",
+        "event_probe_runtime.js": "a3eabbc047cd0555880fa0b92185badf3beb8c33c29b76707177ca58909c6ffd",
+        "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+      },
+      "script_sha256": "835f89c4658e439a685fb3d9530972ab09ee72dc967039b2316ac0579cd15cd4",
+      "hook_counts": {},
+      "cold_prefix_normalization": "fullscope source prepends exact cold_plan.js plus newline; removed only that verified prefix for comparing original AutoChess file"
+    },
+    "production-hp.js": {
+      "matching_source_refs": [
+        "eb16ccbb"
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "a0ac95c98e69dec79da9abd7d6a4bfa9c0af1ce79b181c26e380dd67bc6fba44",
+        "event_probe_runtime.js": "a3eabbc047cd0555880fa0b92185badf3beb8c33c29b76707177ca58909c6ffd",
+        "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+      },
+      "script_sha256": "2036be5af8d030535f2233de797629d2b531baee3983d30a41d0bfc052c15b44",
+      "hook_counts": null,
+      "cold_prefix_normalization": "fullscope source prepends exact cold_plan.js plus newline; removed only that verified prefix for comparing original AutoChess file"
+    }
+  },
+  "reference_hashes": {
+    "eb16ccbb": {
+      "event_probe_native_pc.js": "a0ac95c98e69dec79da9abd7d6a4bfa9c0af1ce79b181c26e380dd67bc6fba44",
+      "event_probe_runtime.js": "a3eabbc047cd0555880fa0b92185badf3beb8c33c29b76707177ca58909c6ffd",
+      "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+    },
+    "6e934a4": {
+      "event_probe_native_pc.js": "3a09df6061a72b3147dd25aeae1e52d7556f546642a3f5b40662cf91a27380c3",
+      "event_probe_runtime.js": "14e9df70fce1c3ccb8c6d90127caf59d541e0bcb188d43480bc392b8540924c5",
+      "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+    },
+    "4c6deda": {
+      "event_probe_native_pc.js": "7288b5712baea428edb8edeefc1e78a1f1a8e22ffedb945edd451cd3dbb23ea5",
+      "event_probe_runtime.js": "14e9df70fce1c3ccb8c6d90127caf59d541e0bcb188d43480bc392b8540924c5",
+      "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+    },
+    "2f3cc83": {
+      "event_probe_native_pc.js": "a8e3867e05414cb7b6c5bc11f999d12f6321084fb29492725411bfd548760466",
+      "event_probe_runtime.js": "b30931f8633ffc01d3d9170e28638b85f5129825b9ee6ff0ff604fe88a249810",
+      "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc"
+    }
+  },
+  "correction": "run_sampling.py wrote six6e files to another worktree AFTER these HookPoint scripts were generated; this audit compares embedded script sources, not current worktree. Initial claim that wrapper caused zeroHookPoint is withdrawn. No performance acceptance was claimed."
+}

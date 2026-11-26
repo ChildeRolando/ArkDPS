@@ -1,0 +1,336 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "scope_segments": {
+        "calls": 0,
+        "samples": 0,
+        "us": {}
+      },
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 0,
+        "registered_plans": 0,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 8.20609998703003,
+      "setters_per_second": 609302.8366584175,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "scope_segments": {
+        "calls": 1,
+        "samples": 1,
+        "us": {
+          "head_revision_chunks": 3.1000077724456787,
+          "graph_proof": 113.09999227523804,
+          "compiled_geometry": 381.3999891281128,
+          "dynamic_field_loop": 54.60000038146973,
+          "phase_state_validation": 2.2999942302703857,
+          "tail_clock_fixed": 7.600009441375732,
+          "auto_scope": 4.400014877319336,
+          "collection_mode": 5.499988794326782
+        }
+      },
+      "js_profile": {
+        "scope_ms": 0.5740000009536743,
+        "scope_inside_pub_ms": 0.5740000009536743,
+        "prefix_ms": 5.662099987268448,
+        "journal_ms": 0.6118000149726868
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 25002,
+        "capture_ms": 4.869400000000304,
+        "capture_read_bytes": 1281886,
+        "capture_read_count": 77238,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 2,
+        "graph_check_timing": {
+          "calls": 2,
+          "max_us": 144.5,
+          "sampled_us": 144.5,
+          "samples": 1
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 20007,
+        "registered_plans": 0,
+        "scalar_calls": 30005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 2.1907999999998293
+      },
+      "branch": "unchanged",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 381.91110000014305,
+      "setters_per_second": 13092.052050851958,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "scope_segments": {
+        "calls": 5001,
+        "samples": 40,
+        "us": {
+          "head_revision_chunks": 87.50000596046448,
+          "graph_proof": 368.7000572681427,
+          "compiled_geometry": 22.199958562850952,
+          "dynamic_field_loop": 1940.4000639915466,
+          "phase_state_validation": 81.19991421699524,
+          "tail_clock_fixed": 210.80002188682556,
+          "auto_scope": 96.00004553794861,
+          "collection_mode": 148.10001850128174
+        }
+      },
+      "js_profile": {
+        "scope_ms": 381.667900711298,
+        "scope_inside_pub_ms": 0.08840000629425049,
+        "prefix_ms": 119.55529999732971,
+        "journal_ms": 89.14830002188683
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 30002,
+        "capture_ms": 19.791599999998873,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 5002,
+        "graph_check_timing": {
+          "calls": 5002,
+          "max_us": 6.3,
+          "sampled_us": 122.1,
+          "samples": 40
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 25007,
+        "registered_plans": 0,
+        "scalar_calls": 50005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 16.68369999999938
+      },
+      "branch": "changed_damage",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 1174.355899989605,
+      "setters_per_second": 4257.653067561766,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 5000,
+      "event_kinds": {
+        "enemy_hp": 5000
+      }
+    },
+    {
+      "scope_segments": {
+        "calls": 5001,
+        "samples": 40,
+        "us": {
+          "head_revision_chunks": 82.1000337600708,
+          "graph_proof": 341.8000340461731,
+          "compiled_geometry": 21.899938583374023,
+          "dynamic_field_loop": 1823.5001266002655,
+          "phase_state_validation": 70.59985399246216,
+          "tail_clock_fixed": 190.89999794960022,
+          "auto_scope": 89.3000066280365,
+          "collection_mode": 143.0000364780426
+        }
+      },
+      "js_profile": {
+        "scope_ms": 335.3828004896641,
+        "scope_inside_pub_ms": 0.07259997725486755,
+        "prefix_ms": 5.084100008010864,
+        "journal_ms": 0.7048999965190887
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 30002,
+        "capture_ms": 16.278200000001476,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 5002,
+        "graph_check_timing": {
+          "calls": 5002,
+          "max_us": 8.1,
+          "sampled_us": 109.3,
+          "samples": 40
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 25007,
+        "registered_plans": 0,
+        "scalar_calls": 50005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 14.41859999999977
+      },
+      "branch": "heal_coalesced",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 847.3569999933243,
+      "setters_per_second": 5900.700649241573,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "scope_segments": {
+        "calls": 5001,
+        "samples": 40,
+        "us": {
+          "head_revision_chunks": 86.60009503364563,
+          "graph_proof": 375.5999803543091,
+          "compiled_geometry": 22.40005135536194,
+          "dynamic_field_loop": 1965.3000235557556,
+          "phase_state_validation": 81.7999541759491,
+          "tail_clock_fixed": 239.39993977546692,
+          "auto_scope": 101.70000791549683,
+          "collection_mode": 166.0999357700348
+        }
+      },
+      "js_profile": {
+        "scope_ms": 383.3639009296894,
+        "scope_inside_pub_ms": 0.08190000057220459,
+        "prefix_ms": 7.1128000020980835,
+        "journal_ms": 2.2451000213623047
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 30002,
+        "capture_ms": 18.680299999999175,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 5002,
+        "graph_check_timing": {
+          "calls": 5002,
+          "max_us": 9.7,
+          "sampled_us": 121.89999999999998,
+          "samples": 40
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 25007,
+        "registered_plans": 0,
+        "scalar_calls": 50005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 16.04399999999963
+      },
+      "branch": "maxhp_dirty",
+      "setters": 5000,
+      "dirty": 50,
+      "elapsed_ms": 938.4155000150204,
+      "setters_per_second": 5328.130236467716,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 101,
+      "event_kinds": {
+        "enemy_hp": 101
+      }
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+[
+  {
+    "role": "scope.clock_open",
+    "kind": 1,
+    "bytes": 12
+  },
+  {
+    "role": "scope.open.3",
+    "kind": 3,
+    "bytes": 4
+  },
+  {
+    "role": "scope.open.4",
+    "kind": 3,
+    "bytes": 4
+  },
+  {
+    "role": "scope.controller.state.open",
+    "kind": 3,
+    "bytes": 4
+  },
+  {
+    "role": "scope.logger.class.open",
+    "kind": 4,
+    "bytes": 8
+  },
+  {
+    "role": "scope.stats.class.open",
+    "kind": 4,
+    "bytes": 8
+  },
+  {
+    "role": "scope.close.3",
+    "kind": 3,
+    "bytes": 4
+  },
+  {
+    "role": "scope.close.4",
+    "kind": 3,
+    "bytes": 4
+  },
+  {
+    "role": "scope.controller.state.close",
+    "kind": 3,
+    "bytes": 4
+  },
+  {
+    "role": "scope.logger.class.close",
+    "kind": 4,
+    "bytes": 8
+  },
+  {
+    "role": "scope.stats.class.close",
+    "kind": 4,
+    "bytes": 8
+  },
+  {
+    "role": "scope.clock_close",
+    "kind": 1,
+    "bytes": 12
+  }
+]

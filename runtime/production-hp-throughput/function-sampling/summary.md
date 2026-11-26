@@ -31,3 +31,23 @@ files byte-identical, no patches. Build script uses O2/fwrapv and no DEBUG macro
 object0 has no debug sections. Historical exact compiler flags cannot be inferred
 from object bytes alone. SystemGlobalFlag0; executable IFEO key absent; no detected
 PAGEHEAP/DEBUG environment override. Five object hashes are recorded.
+
+## Scope internal segmented sampling
+
+One sample per128 scope calls, not one timer per field. Heal5001calls/40samples:
+head+revision+chunks2.05us; branded native proof8.55us; cached compiledgeometry
+0.55us; whole dynamicfieldloop45.59us; phase/state1.76us; tailclockFixed4.77us;
+autoScope2.23us; collectionMode3.58us. Segments total69.08us. Twelve projections:
+2clock12B,6integer4B,4classpointer8B. No projected strings; no per-slot QPC.
+The fieldloop includes slot descriptor decode, checkpoints, dynamic comparisons
+and class checks. CPPcheck3¨C4us is nested within branded proof, not additional.
+
+## Reproduction safety correction
+
+The first run_sampling.py version accidentally wrote six6e files into another
+agent worktree. This was reported immediately on discovery. It now writes only
+its own resolved runtime/source-6e934a4 and asserts containment. No reset was
+performed by this agent. That overwrite explains initial zeroHookPoint counts;
+the earlier suggestion that sampling wrappers caused fallback is withdrawn.
+HookPoint earlier scripts independently audit to eb16 and control4c6deda; see
+../hookpoint-active/source-audit-correction.json. Old receipts are retained.

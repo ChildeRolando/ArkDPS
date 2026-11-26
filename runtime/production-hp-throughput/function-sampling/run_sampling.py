@@ -1,9 +1,13 @@
 import sys,subprocess,json
 from pathlib import Path
-sys.path.insert(0,'tests');from production_hp_quickjs_bundle import bundle
-s=Path('E:/文档/ChatGPT/ArkDPS/arkdps-graph-predicate-source');b=Path('E:/文档/ChatGPT/ArkDPS/arkdps-native-queue-throughput');o=Path('runtime/production-hp-throughput/function-sampling')
+ROOT=Path(__file__).resolve().parents[3]
+sys.path.insert(0,str(ROOT/'tests'));from production_hp_quickjs_bundle import bundle
+o=Path(__file__).resolve().parent
+s=o/'source-6e934a4'
+b=ROOT.parent/'arkdps-native-queue-throughput'
+assert s.resolve().is_relative_to(ROOT/'runtime')
 for name in ['event_probe_native_pc.js','event_probe_runtime.js','event_probe_autochess.js','native_pc/native_event_runtime/cold_plan.js','native_pc/native_event_runtime/publication.js','native_pc/native_event_runtime/bridge.js']:
- target=s/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(subprocess.check_output(['git','show','6e934a4:'+name]))
+ target=s/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(subprocess.check_output(['git','show','6e934a4:'+name],cwd=ROOT))
 js=bundle(5000,True,s,b,True,8571)
 setup=r'''
 let sampledFunctions={};
