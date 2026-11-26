@@ -7,6 +7,7 @@ extern "C" {
 }
 #include "bridge_source.h"
 #include "json.hpp"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -49,6 +50,11 @@ struct Runtime {
     std::atomic<unsigned> active{0};
     std::atomic<std::uint64_t> activity_generation{0};
     std::atomic<bool> stopping{false};
+    std::atomic<bool> capture_paused{false};
+    bool capture_hooks_disabled = false;
+    std::uint64_t capture_revision = 0;
+    std::uint64_t pending_pause_revision = 0;
+    bool capture_target_paused = false;
     std::string ready;
     std::string fatal;
     bool initialized = false;
@@ -268,7 +274,8 @@ JSValue js_attach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] {
         if (count != 2 || !JS_IsObject(args[1])) throw std::runtime_error("hook requires address and callbacks");
         auto& runtime = state();
-        if (runtime.hooks.size() >= 512 || runtime.initialized) throw std::runtime_error("hooks may only be registered during initialization");
+        if (runtime.hooks.size() >= 512 || runtime.stopping.load() || !runtime.fatal.empty())
+            throw std::runtime_error("native hook registration is unavailable");
         auto hook = std::make_unique<Hook>();
         hook->address = reinterpret_cast<void*>(integer(c, args[0]));
         hook->callbacks = JS_DupValue(c, args[1]);
@@ -290,6 +297,12 @@ JSValue js_attach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
         if (status != MH_OK) throw std::runtime_error(std::string("native hook creation failed: ") + MH_StatusToString(status));
         const auto id = runtime.hooks.size();
         runtime.hooks.push_back(std::move(hook));
+        if (runtime.initialized && !runtime.capture_paused.load()
+                && MH_QueueEnableHook(runtime.hooks.back()->address) != MH_OK) {
+            runtime.hooks.back()->detached = true;
+            MH_QueueDisableHook(runtime.hooks.back()->address);
+            throw std::runtime_error("could not queue a new native capture hook");
+        }
         return JS_NewUint32(c, static_cast<std::uint32_t>(id));
     });
 }
@@ -329,6 +342,142 @@ void callback(JSContext* c, Hook* hook, const char* name, JSValueConst receiver,
     }
     JS_FreeValue(c, method);
 }
+
+// The caller owns the JS lock. MinHook changes must be applied after releasing it.
+std::string dispatch_request(Runtime& runtime, const std::string& json) {
+    if (!runtime.context) throw std::runtime_error("native runtime has no JavaScript context");
+    JS_UpdateStackTop(runtime.runtime);
+    auto argument = JS_NewStringLen(runtime.context, json.data(), json.size());
+    auto value = JS_Call(runtime.context, runtime.dispatch, JS_UNDEFINED, 1, &argument);
+    JS_FreeValue(runtime.context, argument);
+    if (JS_IsException(value)) throw std::runtime_error(exception(runtime.context));
+    auto result = string(runtime.context, value);
+    JS_FreeValue(runtime.context, value);
+    return result;
+}
+
+void queue_capture_hooks(Runtime& runtime, bool paused) {
+    for (const auto& hook : runtime.hooks) {
+        // A listener detached by the probe is never resurrected by resume.
+        if (hook->detached) continue;
+        const auto status = paused ? MH_QueueDisableHook(hook->address) : MH_QueueEnableHook(hook->address);
+        if (status != MH_OK) throw std::runtime_error("could not queue native capture hook changes");
+    }
+}
+
+bool capture_quiet(Runtime& runtime, std::uint64_t& generation) {
+    using Clock = std::chrono::steady_clock;
+    const auto deadline = Clock::now() + std::chrono::milliseconds(250);
+    auto quiet_since = Clock::now();
+    generation = runtime.activity_generation.load();
+    for (;;) {
+        const auto current = runtime.activity_generation.load();
+        const auto active = runtime.active.load();
+        const auto now = Clock::now();
+        if (active || current != generation) { quiet_since = now; generation = current; }
+        if (!active && now - quiet_since >= std::chrono::milliseconds(25)) return true;
+        if (now >= deadline) return false;
+        Sleep(1); // In-flight onLeave must retain access to the JS mutex.
+    }
+}
+
+std::string capture_control(Runtime& runtime, const nlohmann::json& command) {
+    using Json = nlohmann::json;
+    const bool valid = command.contains("paused") && command["paused"].is_boolean()
+        && command.contains("revision") && command["revision"].is_number_unsigned()
+        && command["revision"].get<std::uint64_t>() > 0
+        && command["revision"].get<std::uint64_t>() <= 2147483647;
+    const auto revision = valid ? command["revision"].get<std::uint64_t>() : 0;
+    const bool target = valid && command["paused"].get<bool>();
+    Json status;
+    auto snapshot = [&] {
+        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
+        if (!runtime.initialized || !runtime.fatal.empty() || runtime.stopping.load())
+            throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
+        return Json::parse(dispatch_request(runtime, "{\"operation\":\"capture_status\"}"));
+    };
+    auto reply = [&](bool quiet, bool retry, const std::string& error = std::string()) {
+        if (!status.is_object()) status = Json{{"capture_pause_version", 1}, {"capture_generation", 0},
+            {"sequence", 0}, {"epoch", 0}, {"active", 0}, {"active_hooks", Json::array()}, {"error", nullptr}};
+        status["applied_revision"] = status.value("revision", Json(0));
+        status["revision"] = revision;
+        status["target_paused"] = target;
+        status["paused"] = runtime.capture_paused.load();
+        status["native_paused"] = runtime.capture_paused.load();
+        status["native_quiet"] = quiet;
+        status["retry"] = retry;
+        if (!quiet) status["active"] = std::max(status.value("active", 0u), runtime.active.load());
+        if (!error.empty()) status["error"] = error;
+        return status.dump();
+    };
+    try {
+        if (!valid) return reply(false, false, "invalid capture control request");
+        if (revision < runtime.capture_revision || (revision == runtime.capture_revision
+                && target != runtime.capture_target_paused)) {
+            status = snapshot();
+            return reply(false, false, "stale capture control revision");
+        }
+        runtime.capture_revision = revision;
+        runtime.capture_target_paused = target;
+        if (target) {
+            // Gate entrants before waiting for the VM lock. Existing onLeave
+            // work is still admitted and must drain before the JS transition.
+            runtime.capture_paused.store(true);
+            runtime.pending_pause_revision = revision;
+        }
+        status = snapshot();
+        if (!status.value("error", Json()).is_null()) return reply(false, false);
+        if (!target && !runtime.capture_paused.load() && !runtime.capture_hooks_disabled) {
+            // An already-running request must not introduce a silent pause or
+            // transient state reset just to acknowledge a newer no-op revision.
+            return reply(false, false);
+        }
+        runtime.capture_paused.store(true);
+        {
+            std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
+            queue_capture_hooks(runtime, true);
+        }
+        if (MH_ApplyQueued() != MH_OK) throw std::runtime_error("could not disable native capture hooks");
+        runtime.capture_hooks_disabled = true;
+        std::uint64_t generation = 0;
+        if (!capture_quiet(runtime, generation)) {
+            status = snapshot();
+            return reply(false, true);
+        }
+        {
+            std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
+            if (runtime.active.load() || runtime.activity_generation.load() != generation) {
+                status = Json::parse(dispatch_request(runtime, "{\"operation\":\"capture_status\"}"));
+                return reply(false, true);
+            }
+            auto transition = [&](bool paused, std::uint64_t applied_revision) {
+                return Json::parse(dispatch_request(runtime, Json{{"operation", "capture_control"},
+                    {"paused", paused}, {"revision", applied_revision}}.dump()));
+            };
+            // A superseding resume must still expose a gap if native hooks
+            // stopped before a busy pause could commit its JS transition.
+            if (!target && !status.value("paused", false) && runtime.pending_pause_revision) {
+                status = transition(true, runtime.pending_pause_revision);
+                if (status.value("retry", false) || !status.value("error", Json()).is_null()) return reply(true, status.value("retry", false));
+            }
+            status = transition(target, revision);
+            if (status.value("retry", false) || !status.value("error", Json()).is_null()) return reply(true, status.value("retry", false));
+            runtime.pending_pause_revision = 0;
+            if (!target) queue_capture_hooks(runtime, false);
+        }
+        if (!target) {
+            // Never enable while holding the JS lock: MinHook suspends threads.
+            if (MH_ApplyQueued() != MH_OK) throw std::runtime_error("could not enable native capture hooks");
+            runtime.capture_hooks_disabled = false;
+            runtime.capture_paused.store(false);
+        }
+        return reply(true, false);
+    } catch (const std::exception& error) {
+        // Control errors are typed replies, not a transport disconnect. Keep the
+        // owner and pause gate so an incomplete transition is never a false resume.
+        return reply(false, false, error.what());
+    }
+}
 }
 
 extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
@@ -349,7 +498,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     frame->return_target = 1;
     try {
         std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-        if (!runtime.fatal.empty() || runtime.stopping.load()) return hook->original;
+        if (!runtime.fatal.empty() || runtime.stopping.load() || runtime.capture_paused.load()) return hook->original;
         auto* c = runtime.context;
         JS_UpdateStackTop(runtime.runtime);
         invocation.receiver = JS_NewObject(c);
@@ -463,16 +612,18 @@ std::string readiness() {
 }
 std::string request(const std::string& json) {
     auto& runtime = state();
+    if (json.size() > 8 * max_read) throw std::runtime_error("request is too large");
+    const auto command = nlohmann::json::parse(json, [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
+        if (depth > 64) throw std::runtime_error("request nesting exceeds limit");
+        return true;
+    });
+    if (command.is_object() && command.value("operation", nlohmann::json()) == "capture_control")
+        return capture_control(runtime, command);
     std::string result;
     std::exception_ptr failure;
     bool stopping = false;
     try {
         std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-        if (json.size() > 8 * max_read) throw std::runtime_error("request is too large");
-        const auto command = nlohmann::json::parse(json, [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
-            if (depth > 64) throw std::runtime_error("request nesting exceeds limit");
-            return true;
-        });
         stopping = command.is_object() && command.value("operation", nlohmann::json()) == "stop";
         if (stopping) {
             // This path is available even after a fatal callback. Do not leave
@@ -488,14 +639,7 @@ std::string request(const std::string& json) {
             if (!stopping) throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
             result = "{\"active\":0}";
         } else {
-            if (!runtime.context) throw std::runtime_error("native runtime has no JavaScript context");
-            JS_UpdateStackTop(runtime.runtime);
-            auto argument = JS_NewStringLen(runtime.context, json.data(), json.size());
-            auto value = JS_Call(runtime.context, runtime.dispatch, JS_UNDEFINED, 1, &argument);
-            JS_FreeValue(runtime.context, argument);
-            if (JS_IsException(value)) throw std::runtime_error(exception(runtime.context));
-            result = string(runtime.context, value);
-            JS_FreeValue(runtime.context, value);
+            result = dispatch_request(runtime, json);
         }
     } catch (...) { failure = std::current_exception(); }
     // No QuickJS lock while MinHook suspends threads: a game thread can be
