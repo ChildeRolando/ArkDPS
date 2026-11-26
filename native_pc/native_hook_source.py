@@ -73,15 +73,32 @@ NATIVE_HOOK_REQUIRED_SOURCES = (
 _SHA256 = re.compile(r'[0-9a-f]{64}')
 
 
+def _bounded_file_bytes(path, *, limit=64 * 1024 * 1024):
+    # BufferedReader.read(limit + 1) can allocate the entire allowance even for
+    # tiny files. Read through EOF in small blocks without trusting a stat size;
+    # short reads and files growing during the read still obey the same limit.
+    if limit < 0:
+        raise ValueError('native hook payload exceeds limit')
+    chunks, size = [], 0
+    with path.open('rb') as stream:
+        while True:
+            chunk = stream.read(min(64 * 1024, limit - size + 1))
+            if not chunk:
+                return b''.join(chunks)
+            size += len(chunk)
+            if size > limit:
+                raise ValueError('native hook payload exceeds limit')
+            chunks.append(chunk)
+
+
 def _portable_bytes(package, name, *, limit=64 * 1024 * 1024):
     path = package.joinpath(*PurePosixPath(name).parts)
     if not path.resolve().is_relative_to(package) or not path.is_file():
         raise RuntimeError('ArkPie PC 组件缺件或路径越界。')
-    with path.open('rb') as stream:
-        data = stream.read(limit + 1)
-    if len(data) > limit:
-        raise RuntimeError('ArkPie PC 组件文件超出大小限制。')
-    return data
+    try:
+        return _bounded_file_bytes(path, limit=limit)
+    except ValueError:
+        raise RuntimeError('ArkPie PC 组件文件超出大小限制。') from None
 
 
 def _portable_json(data):
@@ -106,11 +123,7 @@ def validate_native_hook_payload(binary, *, source_dir, license_dir=None, build_
     def read(path):
         if read_file is not None:
             return read_file(path)
-        with path.open('rb') as stream:
-            data = stream.read(64 * 1024 * 1024 + 1)
-        if len(data) > 64 * 1024 * 1024:
-            raise ValueError('native hook payload exceeds limit')
-        return data
+        return _bounded_file_bytes(path)
 
     try:
         manifest_bytes = read(manifest_path)
@@ -400,10 +413,7 @@ def native_hook_binary(root, *, _read_capture=None):
     if not binary.is_file() or not manifest_path.is_file():
         raise RuntimeError('请先构建 ArkPie 实时组件：python native_pc/native_event_runtime/build.py')
     def read(path):
-        with Path(path).open('rb') as stream:
-            data = stream.read(64 * 1024 * 1024 + 1)
-        if len(data) > 64 * 1024 * 1024:
-            raise ValueError('native hook payload exceeds limit')
+        data = _bounded_file_bytes(Path(path))
         _capture_material_bytes(_read_capture, path, data)
         return data
     validate_native_hook_payload(binary, source_dir=root / 'native_pc/native_event_runtime',
