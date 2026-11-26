@@ -2,22 +2,23 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const {fixture}=require('./native_pc_frida_probe_fixture.js'),{ownedFields}=require('./native_pc_owned_field_fixture.js');
 function run(owned){
- const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),settlement:true,enemyHpState:true});
+ const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),settlement:true,enemyHpState:true,characterLifecycle:true,skillCastState:true});
  f.installSyntheticMitigation({factories:2,noEvent:true});
  f.write(f.character.add(0x58),f.unitClass);f.write(f.unitClass.add(0x58),f.entity);f.write(f.entity.add(0x58),f.bObject);f.write(f.bObject.add(0x58),f.ptr(0));f.write(f.enemyClass.add(0x58),f.entity);
+ f.write(f.castSkillClass.add(0x58),f.basicSkill);f.write(f.basicSkill.add(0x58),f.ptr(0));
  f.context.rpc.exports.mark();f.clock(30,4294967296n);
  const source=f.unit('char_147_shining',10),target=f.unit('enemy_test',12),mod=f.modifier(source,target,40,-40,1);
  f.write(target.add(0x40),50n*4294967296n);
- const apply=f.callback('ApplyModifier',f.entity),take=f.callback('OnTakeDamage',f.unitClass),hooks=[apply,take,f.callback('OnSkillStart',f.character),f.callback('OnSkillFinish',f.character),f.callback('OnTakeDamage',f.buffClass),f.callback('_AssignDynamicVar',f.blockDamage),f.callback('Born',f.bObject),f.callback('DoFakeDeath',f.enemyClass),f.callback('DoReborn',f.enemyClass),f.hookAt(f.context.syntheticMitigationPlan.outer),f.hookAt(f.context.syntheticMitigationPlan.internal),f.hookAt(f.context.syntheticMitigationPlan.final),f.hookAt(f.context.syntheticMitigationPlan.noEvent),...f.context.syntheticMitigationPlan.factories.map(p=>f.hookAt(p))];
+ const apply=f.callback('ApplyModifier',f.entity),take=f.callback('OnTakeDamage',f.unitClass),hooks=[apply,take,f.callback('OnSkillStart',f.character),f.callback('OnSkillFinish',f.character),f.callback('OnTakeDamage',f.buffClass),f.callback('_AssignDynamicVar',f.blockDamage),f.callback('Born',f.bObject),f.callback('DoFakeDeath',f.enemyClass),f.callback('DoReborn',f.enemyClass),f.hookAt(f.context.syntheticMitigationPlan.outer),f.hookAt(f.context.syntheticMitigationPlan.internal),f.hookAt(f.context.syntheticMitigationPlan.final),f.hookAt(f.context.syntheticMitigationPlan.noEvent),...f.context.syntheticMitigationPlan.factories.map(p=>f.hookAt(p)),f.callback('Born',f.character),f.callback('OnCastFinish',f.basicSkill),f.callback('OnAfterSkill',f.character),f.callback('OnCharacterFinished',f.controllerClass),f.callback('SwitchToSkillState',f.character),f.callback('OnSkillCastSucceed',f.character)];
  const stringClass=f.alloc();for(const actor of [source,target])f.write(actor.add(0x148).readPointer(),stringClass);f.write(f.level.add(0x18).readPointer(),stringClass);let harness,meta,scope,plans;
  if(owned){
-  meta={clock:vm.runInContext('clock',f.context),string_class:stringClass.toString(),skill_offsets:vm.runInContext('({...skillF})',f.context),skill_wait:null,attack_type_offset:f.context.syntheticMitigationPlan.damageType,factory_addresses:f.context.syntheticMitigationPlan.factories.map(p=>p.toString()),immutable_class_parents:true,classes:{Character:f.character.toString(),BObject:f.bObject.toString(),Enemy:f.enemyClass.toString(),BattleController:f.controllerClass.toString(),LevelData:f.level.readPointer().toString()}};
+  meta={clock:vm.runInContext('clock',f.context),string_class:stringClass.toString(),skill_offsets:vm.runInContext('({...skillF})',f.context),skill_wait:0x98,attack_type_offset:f.context.syntheticMitigationPlan.damageType,factory_addresses:f.context.syntheticMitigationPlan.factories.map(p=>p.toString()),immutable_class_parents:true,classes:{BasicSkill:f.basicSkill.toString(),CastSkill:f.castSkillClass.toString(),Character:f.character.toString(),BObject:f.bObject.toString(),Enemy:f.enemyClass.toString(),BattleController:f.controllerClass.toString(),LevelData:f.level.readPointer().toString()}};
   harness=ownedFields(f,meta);
   const baseline=f.context.rpc.exports.mark(),roots=Object.values(baseline.native_identity).join(':');
   f.context.scopeCache={autochess:false,identity:baseline.native_identity,roots,scopeGuards:[],addresses:{}};
   scope=JSON.parse(vm.runInContext('JSON.stringify(nativeCaptureScopeGraph(scopeCache,nativeAutoStage,clock,1))',f.context));
   f.context.scopeGraph=scope;vm.runInContext('nativeCaptureScopes.set(1,scopeGraph);',f.context);
-  plans=['Entity.ApplyModifier','Unit.OnTakeDamage','Character.OnSkillStart','Character.OnSkillFinish','Buff.OnTakeDamage','BlockDamage._AssignDynamicVar','enemy entry Born','Enemy.DoFakeDeath','Enemy.DoReborn','BattleFormula.CalculateDamage','BattleFormula.CalculateDamageInternal','AttackInfo.GetFinalAtk','BattleFormula.CalculateDamageNoEvent','Modifier.NewDamageModifierAfterCalculate','Modifier.NewDamageModifierAfterCalculate'].map((name,index)=>{f.context.hookName=name;f.context.hookAddress=index>=13?f.context.syntheticMitigationPlan.factories[index-13]:f.ptr(1);return vm.runInContext('nativeCapturePlan(hookName,hookAddress,nativeCaptureMetadata)',f.context);});
+  plans=['Entity.ApplyModifier','Unit.OnTakeDamage','Character.OnSkillStart','Character.OnSkillFinish','Buff.OnTakeDamage','BlockDamage._AssignDynamicVar','enemy entry Born','Enemy.DoFakeDeath','Enemy.DoReborn','BattleFormula.CalculateDamage','BattleFormula.CalculateDamageInternal','AttackInfo.GetFinalAtk','BattleFormula.CalculateDamageNoEvent','Modifier.NewDamageModifierAfterCalculate','Modifier.NewDamageModifierAfterCalculate','Character.Born','BasicSkill.OnCastFinish','Character.OnAfterSkill','BattleController.OnCharacterFinished','Character.SwitchToSkillState','Character.OnSkillCastSucceed'].map((name,index)=>{f.context.hookName=name;f.context.hookAddress=index>=13&&index<=14?f.context.syntheticMitigationPlan.factories[index-13]:f.ptr(1);return vm.runInContext('nativeCapturePlan(hookName,hookAddress,nativeCaptureMetadata)',f.context);});
  }
  const outer={threadId:1,nativeCaptureInvocation:'1'},inner={threadId:1,nativeCaptureInvocation:'2'};
  function invoke(index,edge,call,args,parents=[],refs=[],result=null){
@@ -65,9 +66,14 @@ function run(owned){
   const factory={threadId:7,nativeCaptureInvocation:String(52+overload*3)};invoke(13+overload,'entry',factory,args);assert(factory.factory,'real factory must consume the raw formula');invoke(13+overload,'leave',factory,args);
  }
  assert.equal(vm.runInContext('mitigationCounts.factory_candidates',f.context),2);
+ f.write(source.add(0x25),0);f.write(source.add(0x26),0);const cb={threadId:1,nativeCaptureInvocation:'70'};invoke(15,'entry',cb,[source]);f.write(source.add(0x25),1);invoke(15,'leave',cb,[source]);
+ f.write(skill,f.castSkillClass);f.write(skill.add(0x98),0);const ability=f.alloc();f.write(ability,f.abilityClass);
+ const cast={threadId:1,nativeCaptureInvocation:'71'},after={threadId:1,nativeCaptureInvocation:'72'};invoke(16,'entry',cast,[skill,ability,f.ptr(1)]);invoke(17,'entry',after,[source,skill,f.ptr(1)]);invoke(17,'leave',after,[source,skill,f.ptr(1)]);f.write(skill.add(0x98),1);invoke(16,'leave',cast,[skill,ability,f.ptr(1)]);
+ for(const index of [19,20]){const call={threadId:1,nativeCaptureInvocation:String(73+index)};invoke(index,'entry',call,[source]);invoke(index,'leave',call,[source]);}
+ const finish={threadId:1,nativeCaptureInvocation:'99'};invoke(18,'entry',finish,[f.controller,source,f.ptr(1)]);invoke(18,'leave',finish,[f.controller,source,f.ptr(1)]);
  const events=JSON.parse(vm.runInContext('JSON.stringify(queue)',f.context));
  if(owned){assert.equal(harness.late(),0);harness.restore();}
  return events;
 }
-const expected=run(false),actual=run(true);assert.deepEqual(actual,expected);assert(actual.some(e=>e.kind==='damage_settlement'));assert(actual.some(e=>e.mitigation_before===80&&e.mitigation_after===40));
+const expected=run(false),actual=run(true);assert.deepEqual(actual,expected);assert(actual.some(e=>e.kind==='damage_settlement'));assert(actual.some(e=>e.mitigation_before===80&&e.mitigation_after===40));assert(actual.some(e=>e.kind==='character_born'&&e.actor_lifecycle?.state==='born'));assert(actual.some(e=>e.proof?.method==='BasicSkill.OnCastFinish'&&e.skill_wait_for_end===true));assert(actual.some(e=>e.actor_lifecycle?.state==='finish'));
 console.log(JSON.stringify({status:'PASS_MODIFIER_SOURCE_REPLAY',events:actual.length,kinds:actual.map(e=>e.kind),late_reads:0}));
