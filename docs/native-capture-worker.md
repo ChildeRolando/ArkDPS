@@ -374,9 +374,11 @@ them cannot redirect the sealed owner.
 ReplayBegin first validates all own descriptors, the required API set and
 optional paired capabilities, then retains that immutable function owner.
 Subsequent records avoid rescanning mutable globals. Record version/shape,
-checkpoint, decimal ticket and native lease checks still run on every Begin;
-End still validates the same pinned lease and status. No live data or record
-facts are cached by this optimization. An absent bundle follows the original
+checkpoint and decimal ticket remain checked for each item. Legacy dispatch
+checks the native lease and status at Begin/End. Controlled batches consolidate
+those native checks into their independently validated native finish before
+advancing processed/closed; the private permit cannot be created by a callback.
+No live data or record facts are cached by this optimization. An absent bundle follows the original
 global-by-global provider pin path.
 
 The internal C++ install argument `sealed=false` exists only for a self-owned
@@ -389,16 +391,17 @@ benchmark stub; deleting old globals cannot disable a sealed capability.
 ### 当前实施清单：事实直达、批量派发与作用域处理
 
 2026-11-27 按用户认可的方向调整，承接本分支实际实现，不回退到咨询案的旧源码。
-本次清单更新以 `0dbc5ba` 为代码基线，B 的实际功能回执另固定在 `4f33715`；
-D 的原生投影与共享校验器已集成。以下“完成”只说明对应离线边界，
+本次清单更新以 `4919cfb` 为代码基线，B 的实际功能回执另固定在 `4f33715`；
+C 的受控原生完成校验、D 的精确认领及当前 item 的关闭时钟复用已集成。
+以下“完成”只说明对应离线边界，
 不代表持续吞吐或游戏 FPS 已验收。
 
 | 阶段 | 状态 | 已有实现及实际剩余工作 |
 | --- | --- | --- |
 | A：事实合同与唯一业务所有者 | HP 边界已完成，继续做整体验收 | 所有端共用 `applyHpEntry/Leave`；原生从同一 CompiledPlan/OwnedReplayView 提供原始值，符号、Q32、XOR、身份、生命周期及结算仍由共享 JS 解释。无权威 C++ 业务副本。 |
 | B：无预合并事实直达 | 已接入，功能通过，吞吐未达标 | 普通单层 HP 使用原生签发的原始 packet，调用同一 `applyHpEntry/Leave`，不创建 Arguments Proxy；嵌套、发布等保完整原路径。实际 DLL 覆盖父调用、发布回退、错根/错阶段和普通构造 IO 拒收。没有删掉任何原始 E/L。 |
-| C：有界批量跨界 | 在做，尚未启用 | 批次仅改变派发单位。按记录数、字节数和墙钟预算限制，保逐项事实及独立租约；中途故障不能确认尾部。无事件、暂停及终局也必须及时发布。公开 record 不得随下一项改写。 |
-| D：后台 scope 重复工作 | 原生 primitive 投影已接入，待全链计量 | 同一 GraphCheck 验证所有静态字段，再返回动态原始整数；同一 JS decoder 保时钟、阶段、回合、状态及 className 判断。构造器无签发权限，错配置/模式/检查点仍拒收。旧 helper 或不支持布局走完整旧路径，执行失败不得回退。 |
+| C：有界批量跨界 | 功能及真实引擎小负载通过，吞吐仍未达标 | 每批至多 32 edges、原 2ms 协作预算；单条/批量共用 prepare/finalize。每项独立租约，公开 record 按需复制，barrier 保留原字节和 ticket。完成数严格等于签发数及返回数，故障不确认尾部。受控 finish 独立核验租约/状态/健康，不能靠 JS 布尔值确认。 |
+| D：后台 scope 重复工作 | 精确 native packet 认领已接入，继续量化 | 同一 GraphCheck 保全部字段/guard/predicate。format2 只认当前 ctx/ticket/config/program/revision/mode/checkpoint 下实际发行的同一 JSValue；布局完整字符串另核原 index、bytes 和 codecs。通过后省重复 JS 类型检查，不省底层验证或源 canonical 解释。旧 helper 保原严路径，执行失败不回退。 |
 | E：叶子配对、无变化压实、回血预合并 | 暂缓，未启用 | 先完成无预合并的直达与批量版本。不得丢无变化 HP：finishModifierHpWriter 必须先于 unchanged 返回。每项压缩须独立开关与关闭版对照；不能证明等价的区间保持逐笔。 |
 | 游戏线程 guard 差分扫描、多 VM | 暂缓 | 不在游戏线程额外扫描 64/785 个 fixture 字段；不以布局、同帧或没有通知代替现场证据；不增加并行权威状态机。 |
 | 真实 DLL 与私有测试包 | 在做，未交付 | 原始 provider/模式绑定的新自有进程夹具已准备；完整引擎验收和压力验收后再打包。实机结果独立登记。 |
@@ -423,6 +426,19 @@ D 的原生投影与共享校验器已集成。以下“完成”只说明对应
   2000 次 setter、完整作用域、真实发布图；两轮回血 ordinary 为 5736/5843 次每秒，
   direct 为 5886/6191。每轮 direct 进入 2000、退出 1998、签发/认领 3998，
   发布回退 2、Arguments Proxy 0。直达已实际启用，但不构成 30000/s 验收。
+- `tests/production_hp_actual_engine.cpp` 已接真实引擎内核；旧 isolated FIFO
+  仍走普通 callback，不能拿它证明新批量版本。当前预填充小样本的完整事件 JSON、
+  HP/MaxHP、未知状态、读取数/字节数及闭合/发布水位均相等，但约 6.5k/s 仍未达标。
+  实际冻结的 publication 图为 1604 fields / 802 guard pairs，不能删字段凑旧 785 口径。
+- `runtime/graph-typed-adoption/` 的同 binary 源对照确认实际认领 5005 次；
+  两对性能差异为约 +2.1%/+20.7%，波动较大，不能仅凭均值宣布收益通过。
+- `runtime/qjs-immutable-numeric/` 与 `runtime/binary-view-validation/` 是停止采用的
+  实验。数组确会转普通属性表，但替代容器只省约 2.6–2.8us/packet；二进制 view
+  没有显示收益。它们的生产实现未合入，不能列成已解决队列耗尽。
+- 关闭时钟复用只在 changed HP 确实要 stamp scope 前登记；entry/unchanged 不登记。
+  原 clock_close 已持有完整 12B，额外 i64 投影不增加 Game read，并额外核对 opening
+  与 closing fixed 相等。样本与本次 Begin 的唯一身份绑定，跨 record 走原读取；
+  scope 的新鲜双时钟、身份、阶段、回合和 guard 仍全部验证。
 
 冻结验收口径：
 

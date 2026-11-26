@@ -1,0 +1,392 @@
+{
+  "scope": "actual engine binary, same full-scope world; no Game/IPC/paced FIFO",
+  "binary_sha256": "1d0ee3d6f78e89974f74fd68b6fb7daa71c28961d0aca1b882a39b3b7adbefec",
+  "arms": {
+    "control": {
+      "revision": "99a42a2",
+      "source_sha256": {
+        "event_probe_runtime.js": "4b56a619a2e7807f7016df3c4a333543c21c8bab7dd47bff2c0ad94df42050eb",
+        "event_probe_autochess.js": "3f1367cdcac588aa798c750e48e251d47ec8e054d0bb7531177d4f524779e57f",
+        "event_probe_native_pc.js": "a5650ed18b9869538128670e545ced6b1c5c8fd5208099a80d334c85aad3f0e7",
+        "native_pc/native_event_runtime/bridge.js": "9f9a4117ee557706c3eced22b65003600ed06468d22b1cf8da12d0b2c342e3f9",
+        "native_pc/native_event_runtime/cold_plan.js": "4b9e7615b5dfc5e9dbc6030323cb56ba6b789aa682116114bc77ffd3634dce33",
+        "native_pc/native_event_runtime/publication.js": "5a83506f7f1ba64afbcd8592522d8f9b84f71a60ab7596ce1f718932ba545577"
+      },
+      "rows": [
+        {
+          "kind": "actual_engine_production_hp_self_owned",
+          "branch": "unchanged",
+          "count": 2000,
+          "batch": true,
+          "scope_fields": 64,
+          "publication_fields": 1604,
+          "report": {
+            "batch_barriers": 2,
+            "batch_calls": 137,
+            "batch_finalized": 3998,
+            "batch_issued": 3998,
+            "capture_read_bytes": 539772,
+            "capture_reads": 34476,
+            "closed_ticket": 4000,
+            "consume_ms": 150.7056,
+            "failure_code": 0,
+            "last_hp_raw": "429496729600000",
+            "max_hp_raw": "4294967296000000",
+            "maximum_batch_edges": 32,
+            "payload_bytes": 3241004,
+            "payload_max": [
+              917,
+              128078
+            ],
+            "processed_ticket": 4000,
+            "produce_ms": 1.5965,
+            "published_sequence": 1,
+            "published_ticket": 4000,
+            "raw_entry_count": 2000,
+            "raw_leave_count": 2000,
+            "single_replayed": 2
+          },
+          "unknown": false,
+          "dispatch_counters": {
+            "graph_format0": 2,
+            "graph_format1": 2,
+            "args_proxy": 0,
+            "direct_entry": 2000,
+            "direct_leave": 1998,
+            "hp_adopt_requests": 3998,
+            "hp_ordinary_requests": 2,
+            "fallback_reasons": {}
+          },
+          "native_requests": {
+            "__nativeOwnedHpObservation": 4000,
+            "__nativeOwnedGraphCheck": 4,
+            "__nativeOwnedPoint": 14,
+            "__nativeOwnedRead": 4,
+            "__nativeOwnedScalar": 10
+          },
+          "excluded": [
+            "detours",
+            "assembly ingress",
+            "IPC",
+            "Game FPS"
+          ],
+          "event_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "executed_script_sha256": "2e2893ac58327056e2cfee3440290b3300acf4a292c18c9af4b9f5b51c04a6f0"
+        },
+        {
+          "kind": "actual_engine_production_hp_self_owned",
+          "branch": "heal_coalesced",
+          "count": 2000,
+          "batch": true,
+          "scope_fields": 64,
+          "publication_fields": 1604,
+          "report": {
+            "batch_barriers": 2,
+            "batch_calls": 178,
+            "batch_finalized": 3998,
+            "batch_issued": 3998,
+            "capture_read_bytes": 3017292,
+            "capture_reads": 202308,
+            "closed_ticket": 4000,
+            "consume_ms": 386.6647,
+            "failure_code": 0,
+            "last_hp_raw": "438086664192000",
+            "max_hp_raw": "4294967296000000",
+            "maximum_batch_edges": 28,
+            "payload_bytes": 14493740,
+            "payload_max": [
+              917,
+              128078
+            ],
+            "processed_ticket": 4000,
+            "produce_ms": 6.4797,
+            "published_sequence": 4,
+            "published_ticket": 4000,
+            "raw_entry_count": 2000,
+            "raw_leave_count": 2000,
+            "single_replayed": 2
+          },
+          "unknown": false,
+          "dispatch_counters": {
+            "graph_format0": 2,
+            "graph_format1": 2002,
+            "args_proxy": 0,
+            "direct_entry": 2000,
+            "direct_leave": 1998,
+            "hp_adopt_requests": 3998,
+            "hp_ordinary_requests": 2,
+            "fallback_reasons": {}
+          },
+          "native_requests": {
+            "__nativeOwnedHpObservation": 4000,
+            "__nativeOwnedGraphCheck": 2004,
+            "__nativeOwnedPoint": 2014,
+            "__nativeOwnedScalar": 2010,
+            "__nativeOwnedRead": 4
+          },
+          "excluded": [
+            "detours",
+            "assembly ingress",
+            "IPC",
+            "Game FPS"
+          ],
+          "event_sha256": "002ed0084056b095afc50e800f0508c06e33881406311eab9892676fa2199765",
+          "executed_script_sha256": "75046a5606a6810ea10c015890be57f3e34a9c3f9abb4dd21a018733b937552d"
+        },
+        {
+          "kind": "actual_engine_production_hp_self_owned",
+          "branch": "changed_damage",
+          "count": 2000,
+          "batch": true,
+          "scope_fields": 64,
+          "publication_fields": 1604,
+          "report": {
+            "batch_barriers": 2,
+            "batch_calls": 163,
+            "batch_finalized": 3998,
+            "batch_issued": 3998,
+            "capture_read_bytes": 3017292,
+            "capture_reads": 202308,
+            "closed_ticket": 4000,
+            "consume_ms": 457.5912,
+            "failure_code": 0,
+            "last_hp_raw": "420906795008000",
+            "max_hp_raw": "4294967296000000",
+            "maximum_batch_edges": 28,
+            "payload_bytes": 14493740,
+            "payload_max": [
+              917,
+              128078
+            ],
+            "processed_ticket": 4000,
+            "produce_ms": 5.8715,
+            "published_sequence": 2001,
+            "published_ticket": 4000,
+            "raw_entry_count": 2000,
+            "raw_leave_count": 2000,
+            "single_replayed": 2
+          },
+          "unknown": false,
+          "dispatch_counters": {
+            "graph_format0": 2,
+            "graph_format1": 2002,
+            "args_proxy": 0,
+            "direct_entry": 2000,
+            "direct_leave": 1998,
+            "hp_adopt_requests": 3998,
+            "hp_ordinary_requests": 2,
+            "fallback_reasons": {}
+          },
+          "native_requests": {
+            "__nativeOwnedHpObservation": 4000,
+            "__nativeOwnedGraphCheck": 2004,
+            "__nativeOwnedPoint": 2014,
+            "__nativeOwnedScalar": 2010,
+            "__nativeOwnedRead": 4
+          },
+          "excluded": [
+            "detours",
+            "assembly ingress",
+            "IPC",
+            "Game FPS"
+          ],
+          "event_sha256": "63d83e1884dc10b51d1f71b8568e63119df0d4c914a58ad114425af9d44901ed",
+          "executed_script_sha256": "c91952bcb0a2e700da9649f9fb06577b56ff559e7b7a55c5c1aeafb947ed788b"
+        }
+      ]
+    },
+    "reuse": {
+      "revision": "e1dde22",
+      "source_sha256": {
+        "event_probe_runtime.js": "35c32a4bacde74cace96ce93bfba2df8596ce6dd33bb5e77d42279d45dcef9c4",
+        "event_probe_autochess.js": "3f1367cdcac588aa798c750e48e251d47ec8e054d0bb7531177d4f524779e57f",
+        "event_probe_native_pc.js": "0077cfb1578dec9d0320b13b013d438f6c5d9fcec4af02f396fdb7cffd90cf05",
+        "native_pc/native_event_runtime/bridge.js": "4aacdbe9cc608b4d75992e7cc9c0077b2311b98706666808c7940b766baa542e",
+        "native_pc/native_event_runtime/cold_plan.js": "4b9e7615b5dfc5e9dbc6030323cb56ba6b789aa682116114bc77ffd3634dce33",
+        "native_pc/native_event_runtime/publication.js": "5a83506f7f1ba64afbcd8592522d8f9b84f71a60ab7596ce1f718932ba545577"
+      },
+      "rows": [
+        {
+          "kind": "actual_engine_production_hp_self_owned",
+          "branch": "unchanged",
+          "count": 2000,
+          "batch": true,
+          "scope_fields": 64,
+          "publication_fields": 1604,
+          "report": {
+            "batch_barriers": 2,
+            "batch_calls": 167,
+            "batch_finalized": 3998,
+            "batch_issued": 3998,
+            "capture_read_bytes": 539772,
+            "capture_reads": 34476,
+            "closed_ticket": 4000,
+            "consume_ms": 197.3231,
+            "failure_code": 0,
+            "last_hp_raw": "429496729600000",
+            "max_hp_raw": "4294967296000000",
+            "maximum_batch_edges": 32,
+            "payload_bytes": 3241004,
+            "payload_max": [
+              917,
+              128078
+            ],
+            "processed_ticket": 4000,
+            "produce_ms": 1.5765,
+            "published_sequence": 1,
+            "published_ticket": 4000,
+            "raw_entry_count": 2000,
+            "raw_leave_count": 2000,
+            "single_replayed": 2
+          },
+          "unknown": false,
+          "dispatch_counters": {
+            "graph_format0": 2,
+            "graph_format1": 2,
+            "args_proxy": 0,
+            "direct_entry": 2000,
+            "direct_leave": 1998,
+            "hp_adopt_requests": 3998,
+            "hp_ordinary_requests": 2,
+            "fallback_reasons": {}
+          },
+          "native_requests": {
+            "__nativeOwnedHpObservation": 4000,
+            "__nativeOwnedGraphCheck": 4,
+            "__nativeOwnedPoint": 14,
+            "__nativeOwnedRead": 4,
+            "__nativeOwnedScalar": 10
+          },
+          "excluded": [
+            "detours",
+            "assembly ingress",
+            "IPC",
+            "Game FPS"
+          ],
+          "event_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "executed_script_sha256": "607830e010328c4c99caea86cbb09cc24103caa79432479badc0238a97cefa7a"
+        },
+        {
+          "kind": "actual_engine_production_hp_self_owned",
+          "branch": "heal_coalesced",
+          "count": 2000,
+          "batch": true,
+          "scope_fields": 64,
+          "publication_fields": 1604,
+          "report": {
+            "batch_barriers": 2,
+            "batch_calls": 150,
+            "batch_finalized": 3998,
+            "batch_issued": 3998,
+            "capture_read_bytes": 3017292,
+            "capture_reads": 202308,
+            "closed_ticket": 4000,
+            "consume_ms": 327.7763,
+            "failure_code": 0,
+            "last_hp_raw": "438086664192000",
+            "max_hp_raw": "4294967296000000",
+            "maximum_batch_edges": 30,
+            "payload_bytes": 14493740,
+            "payload_max": [
+              917,
+              128078
+            ],
+            "processed_ticket": 4000,
+            "produce_ms": 5.5329,
+            "published_sequence": 4,
+            "published_ticket": 4000,
+            "raw_entry_count": 2000,
+            "raw_leave_count": 2000,
+            "single_replayed": 2
+          },
+          "unknown": false,
+          "dispatch_counters": {
+            "graph_format0": 2,
+            "graph_format1": 2002,
+            "args_proxy": 0,
+            "direct_entry": 2000,
+            "direct_leave": 1998,
+            "hp_adopt_requests": 3998,
+            "hp_ordinary_requests": 2,
+            "fallback_reasons": {}
+          },
+          "native_requests": {
+            "__nativeOwnedHpObservation": 4000,
+            "__nativeOwnedGraphCheck": 2004,
+            "__nativeOwnedPoint": 14,
+            "__nativeOwnedRead": 4,
+            "__nativeOwnedScalar": 10
+          },
+          "excluded": [
+            "detours",
+            "assembly ingress",
+            "IPC",
+            "Game FPS"
+          ],
+          "event_sha256": "002ed0084056b095afc50e800f0508c06e33881406311eab9892676fa2199765",
+          "executed_script_sha256": "4d316a07d116fcc2e750e2bccb4abbc4c1deb4f164175a28425c12f6d1ae6ba1"
+        },
+        {
+          "kind": "actual_engine_production_hp_self_owned",
+          "branch": "changed_damage",
+          "count": 2000,
+          "batch": true,
+          "scope_fields": 64,
+          "publication_fields": 1604,
+          "report": {
+            "batch_barriers": 2,
+            "batch_calls": 159,
+            "batch_finalized": 3998,
+            "batch_issued": 3998,
+            "capture_read_bytes": 3017292,
+            "capture_reads": 202308,
+            "closed_ticket": 4000,
+            "consume_ms": 449.1213,
+            "failure_code": 0,
+            "last_hp_raw": "420906795008000",
+            "max_hp_raw": "4294967296000000",
+            "maximum_batch_edges": 28,
+            "payload_bytes": 14493740,
+            "payload_max": [
+              917,
+              128078
+            ],
+            "processed_ticket": 4000,
+            "produce_ms": 6.0806,
+            "published_sequence": 2001,
+            "published_ticket": 4000,
+            "raw_entry_count": 2000,
+            "raw_leave_count": 2000,
+            "single_replayed": 2
+          },
+          "unknown": false,
+          "dispatch_counters": {
+            "graph_format0": 2,
+            "graph_format1": 2002,
+            "args_proxy": 0,
+            "direct_entry": 2000,
+            "direct_leave": 1998,
+            "hp_adopt_requests": 3998,
+            "hp_ordinary_requests": 2,
+            "fallback_reasons": {}
+          },
+          "native_requests": {
+            "__nativeOwnedHpObservation": 4000,
+            "__nativeOwnedGraphCheck": 2004,
+            "__nativeOwnedPoint": 14,
+            "__nativeOwnedRead": 4,
+            "__nativeOwnedScalar": 10
+          },
+          "excluded": [
+            "detours",
+            "assembly ingress",
+            "IPC",
+            "Game FPS"
+          ],
+          "event_sha256": "63d83e1884dc10b51d1f71b8568e63119df0d4c914a58ad114425af9d44901ed",
+          "executed_script_sha256": "e02ae5a27f44bc857b42724923ce2a38879592a923af212db2b9f17a85a44526"
+        }
+      ]
+    }
+  }
+}
