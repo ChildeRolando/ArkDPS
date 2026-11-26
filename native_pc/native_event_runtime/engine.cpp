@@ -474,7 +474,7 @@ JSValue js_native_call(JSContext* c, JSValueConst, int count, JSValueConst* args
 // Deliberately held closed while sustained worker throughput is under review.
 // Compiler support and source contracts are tested separately from readiness.
 JSValue js_capture_capabilities(JSContext* c, JSValueConst, int, JSValueConst*) {
-    const auto text=arkdps::capture::capture_capabilities(false).dump();
+    const auto text=arkdps::capture::capture_capabilities(true).dump();
     return JS_ParseJSON(c,text.data(),text.size(),"native-capture-capabilities.json");
 }
 JSValue js_publish_scope(JSContext* c, JSValueConst, int count, JSValueConst* args) {
@@ -619,6 +619,8 @@ void configure_mode(const nlohmann::json& command) {
     if (!JS_IsFunction(c,runtime.mode_install) || runtime.desired_mode<0)
         throw std::runtime_error("native immutable capture mode control unavailable");
     const auto current=runtime.capture_mode_epoch.load(std::memory_order_acquire);
+    if (current+1>=arkdps::capture::capture_mode_slots)
+        throw std::runtime_error("native capture mode epoch budget exceeded");
     if (current>=9007199254740991ULL) throw std::runtime_error("native capture mode epoch exhausted");
     auto barrier=JS_NewObject(c);
     JS_SetPropertyStr(c,barrier,"version",JS_NewInt32(c,1));
