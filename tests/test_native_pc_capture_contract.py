@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
     ('native_pc_hp_owned_replay_fixture.js', 'PASS_OWNED_HP_SOURCE_REPLAY'),
     ('native_pc_cold_binding_memo_fixture.js', 'PASS_RECORD_LOCAL_COLD_BINDING'),
     ('native_pc_cold_source_replay_fixture.js', 'PASS_COLD_SOURCE_REPLAY'),
+    ('native_pc_modifier_source_replay_fixture.js', 'PASS_MODIFIER_SOURCE_REPLAY'),
 ])
 def test_native_capture_owned_contract(script, marker):
     completed = subprocess.run(['node', str(ROOT / 'tests' / script)], cwd=ROOT,
