@@ -58,9 +58,9 @@ int main(){
  capture_scope_point(*boundary,Phase::entry,context,nullptr,reader,&reads,*snapshot,header);
  assert(snapshot->error==Error::changed_guard);
  reads.mutate=false;reads.count=0;
- plan.erase("cold_plan");plan.erase("force_full_binding");plan["profile"]="modifier";
+ plan.erase("cold_plan");plan.erase("force_full_binding");plan["profile"]="owned";
  plan["fields"].push_back(field(4,"parent.body","checkpoint","none",0));
- auto modifier=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*modifier);
+ auto modifier=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*modifier);modifier->parent_checkpoint_fields=true;
  auto lane=std::make_unique<Lane>();lane->depth=3;
  lane->calls[0].id=UINT64_MAX-10;lane->calls[0].apply_modifier=true;
  lane->calls[1].id=UINT64_MAX-5;lane->calls[1].apply_modifier=true;
@@ -72,7 +72,7 @@ int main(){
  assert(lane->parent_checkpoints[0].invocation==UINT64_MAX-10 && lane->parent_checkpoints[0].checkpoint==1);
  assert(lane->parent_checkpoints[1].invocation==UINT64_MAX-5 && lane->parent_checkpoints[1].checkpoint==2);
  assert(snapshot->fields[2].checkpoint==1 && snapshot->fields[3].checkpoint==2);
- plan["arg_count"]=2;plan["arg_mask"]=3;plan["profile"]="hp";
+ plan["arg_count"]=2;plan["arg_mask"]=3;plan["profile"]="owned";
  plan["hp_filter"]={{"receiver_arg",0},{"attribute_index_arg",1},{"max_hp_attribute",0},{"enemy_class","42"},{"normal_setter",false}};
  auto hp=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*hp);
  lane->depth=1;lane->calls[0].hp_ignored=false;context.args_valid=3;context.args[1]=1;
@@ -138,7 +138,7 @@ int main(){
  capture_scope_point(*boundary,Phase::entry,context,configs->pin(0),reader,&reads,*snapshot,header,nullptr,true);
  assert(header.cold_revision==1 && !header.scope_revision && !header.publication_revision);
  assert(snapshot->field_count==6);
- plan.erase("hp_filter");plan["name"]="BattleController.Destroy";plan["profile"]="boundary";
+ plan.erase("hp_filter");plan["name"]="BattleController.Destroy";plan["profile"]="owned";
  auto singleton=field(3,"body","leave","none",0);singleton["name"]="terminal.singleton";
  plan["fields"]=J::array({field(1,"clock_open","leave","before",1),field(2,"clock_close","leave","after",1),singleton});
  auto destroy=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*destroy);

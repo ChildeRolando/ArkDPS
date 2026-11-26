@@ -477,6 +477,12 @@ JSValue js_native_call(JSContext* c, JSValueConst, int count, JSValueConst* args
         return JS_NewBigUint64(c, result);
     });
 }
+// Deliberately held closed while sustained worker throughput is under review.
+// Compiler support and source contracts are tested separately from readiness.
+JSValue js_capture_capabilities(JSContext* c, JSValueConst, int, JSValueConst*) {
+    const auto text=arkdps::capture::capture_capabilities(false).dump();
+    return JS_ParseJSON(c,text.data(),text.size(),"native-capture-capabilities.json");
+}
 JSValue js_publish_scope(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c,[&] {
         if (count!=1) throw std::runtime_error("capture scope publication requires one graph");
@@ -1011,6 +1017,7 @@ void initialize_on_worker(const std::string& source) {
     function(c,global,"__cstring",js_cstring,1);function(c,global,"__utf16",js_utf16,2);
     function(c,global,"__moduleInfo",js_module,1);function(c,global,"__findModule",js_find_module,1);function(c,global,"__export",js_export,2);
     function(c,global,"__nativeCall",js_native_call,2);function(c,global,"__attach",js_attach,2);function(c,global,"__detach",js_detach,1);
+    function(c,global,"__nativeCaptureCapabilities",js_capture_capabilities,0);
     function(c,global,"__publishCaptureScope",js_publish_scope,1);
     function(c,global,"__publishCapturePublication",js_publish_publication,1);
     function(c,global,"__nativeReplayHealthy",js_replay_healthy,0);

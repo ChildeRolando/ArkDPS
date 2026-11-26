@@ -8,6 +8,14 @@
 #include <stdexcept>
 
 namespace arkdps::capture {
+inline constexpr std::array<const char*,6> capture_projection_names{{"live_scope_guards","same_point_class_ancestry",
+    "open_parent_checkpoint","token_host_and_character_form","full_native_binding","current_buff_and_blackboard_keys"}};
+inline nlohmann::json capture_capabilities(bool product_ready=false) {
+    nlohmann::json names=nlohmann::json::array();
+    if(product_ready)for(const auto* name:capture_projection_names)names.push_back(name);
+    return {{"version",1},{"raw_collection","all"},{"lowered_projections",std::move(names)}};
+}
+
 struct SavedEntryRoot {
     std::uint8_t slot=0, index=0;
     Root root=Root::arg;
@@ -228,11 +236,24 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
             if (f.guard_id) throw std::runtime_error("parent checkpoint guards need an independent namespace");
         }
     }
-    // No named projection is implemented by this generic read-recipe compiler.
-    // Producers must lower every operation to fields before declaring complete.
     const auto& required=source.at("required_projections");
-    if (!required.is_array() || !required.empty())
-        throw std::runtime_error("native capture projection has not been lowered to a bounded plan");
+    if (!required.is_array()) throw std::runtime_error("invalid native capture requirements");
+    unsigned required_mask=0;
+    for(const auto& value:required) {
+        if(!value.is_string())throw std::runtime_error("invalid native capture requirement name");
+        unsigned bit=0;
+        for(unsigned i=0;i<capture_projection_names.size();++i)if(value==capture_projection_names[i])bit=1u<<i;
+        if(!bit || (required_mask&bit))throw std::runtime_error("unknown or duplicate native capture requirement");
+        required_mask|=bit;
+    }
+    const auto profile=source.value("profile",std::string());
+    const bool production=profile=="modifier"||profile=="hp"||profile=="lifecycle"||profile=="skill_cast"
+        ||profile=="skill_transition"||profile=="buff"||profile=="shield"||profile=="formula"||profile=="boundary";
+    const unsigned mandatory=3u|(profile=="modifier"?12u:0u)|(profile=="boundary"?16u:0u)|(profile=="shield"?32u:0u);
+    if(production && (required_mask&mandatory)!=mandatory)
+        throw std::runtime_error("production capture requirements were removed");
+    if(required_mask && source.value("raw_collection",std::string())!="all")
+        throw std::runtime_error("named native capture projection requires raw all-player evidence");
     const auto roots=source.value("entry_roots",nlohmann::json::array());
     if (!roots.is_array() || roots.size()>max_roots) throw std::runtime_error("invalid saved entry roots");
     std::uint16_t used_slots=0, next_id=0;
@@ -275,7 +296,7 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         auto cold=source.at("cold_plan");
         if (!cold.is_object() || cold.contains("cold_plan") || plan_uint(cold.at("version"),1)!=1)
             throw std::runtime_error("invalid cold capture template");
-        cold["schema_version"]=1; cold["complete"]=true; cold["address"]="1";
+        cold["schema_version"]=1; cold["complete"]=true; cold["address"]="1";cold["profile"]="engine-cold";
         cold["abi"]="win64-gp"; cold["arg_count"]=0; cold["arg_mask"]=0;
         cold["globals"]=nlohmann::json::array(); cold["required_projections"]=nlohmann::json::array();
         for (auto& field : cold.at("fields")) {
@@ -313,6 +334,45 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
     if (source.contains("force_full_binding")) {
         if (source.at("force_full_binding").at("phase")!="entry") throw std::runtime_error("invalid full binding phase");
         result.force_full_entry=true;
+    }
+    if(required_mask) {
+        if(!result.cold || !result.cold->plan->projection_count)
+            throw std::runtime_error("named capture projection lacks a verified cold recipe");
+        const auto& cold=*result.cold->plan;
+        if(cold.fields[0].kind!=Kind::projection_tree || cold.fields[1].kind!=Kind::projection_tree
+            ||cold.fields[2].kind!=Kind::projection_tree || !cold.fields[0].required || cold.fields[1].required
+            ||!cold.fields[2].required ||cold.fields[0].projection_root!=cold.fields[2].projection_root)
+            throw std::runtime_error("cold native binding is not independently bracketed");
+        unsigned clocks=0;bool gated_class=false,parent=false,host=false,cid=false,flags=false,buff=false,keys=false;
+        for(unsigned i=0;i<source.at("fields").size();++i){
+            const auto& value=source.at("fields")[i];const auto& field=result.plan->fields[i];
+            const auto role=value.at("role").get<std::string>(),name=value.value("name",std::string());
+            if((role=="clock_open"||role=="clock_close") && (field.kind!=Kind::bytes || field.bytes!=12
+                ||field.root!=Root::global_slot||field.root_index||field.depth||field.offset||!(result.globals_valid&1u)))
+                throw std::runtime_error("callback clock is not the native twelve-byte global witness");
+            if(role=="clock_open"&&field.guard==Guard::before)clocks|=field.phase==Phase::entry?1:4;
+            if(role=="clock_close"&&field.guard==Guard::after)clocks|=field.phase==Phase::entry?2:8;
+            parent|=field.phase==Phase::checkpoint&&field.root==Root::parent_ref&&field.root_index==1;
+            host|=name=="source.data.host"&&field.kind==Kind::utf16;
+            cid|=name=="source.data.cid"&&field.kind==Kind::utf16;
+            flags|=name=="source.data.flags"&&field.bytes==2;
+            buff|=field.root==Root::parent_ref&&field.root_index==0;
+            keys|=field.kind==Kind::utf16_array&&field.stop_at_dynamic;
+        }
+        for(unsigned i=0;i<cold.projection_count;++i)gated_class|=cold.projections[i].gate!=TypeGate::none&&cold.projections[i].expected_class;
+        if((required_mask&1u)&&clocks!=15)throw std::runtime_error("live scope lacks independent entry/leave clocks");
+        if((required_mask&2u)&&!gated_class)throw std::runtime_error("class ancestry lacks immutable typed projection metadata");
+        if((required_mask&4u)&&(!result.parent_checkpoint_fields||!parent))throw std::runtime_error("open parent checkpoint recipe absent");
+        if((required_mask&8u)&&(!host||!cid||!flags))throw std::runtime_error("token/form recipe absent");
+        if((required_mask&32u)&&(!buff||!keys))throw std::runtime_error("current buff/blackboard recipe absent");
+        if(required_mask&16u) {
+            unsigned slots=0;for(unsigned i=0;i<result.entry_root_count;++i)slots|=1u<<result.entry_roots[i].slot;
+            const auto name=source.value("name",std::string());
+            const bool boundary=name=="BattleController.Destroy" ? result.force_full_entry
+                :name=="BattleController.ClearRunTimeData" ? result.force_cold_leave&&!result.force_cold_conditional
+                :name=="BattleController.set_state" &&result.force_cold_leave&&result.force_cold_conditional&&result.force_cold_arg==1&&result.force_cold_value==2;
+            if((slots&0xf00u)!=0xf00u||!boundary)throw std::runtime_error("full binding boundary/saved roots absent");
+        }
     }
     if (validate_plan(*result.plan)!=Error::ok) throw std::runtime_error("invalid native capture plan");
     return result;
