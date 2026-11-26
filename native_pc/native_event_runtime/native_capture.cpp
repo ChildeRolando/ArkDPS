@@ -14,7 +14,8 @@ bool compatible(const Field& a, const Field& b) noexcept {
     return a.kind == b.kind && a.root == b.root && a.root_index == b.root_index
         && a.absolute_address == b.absolute_address && a.depth == b.depth && a.pointer_offsets == b.pointer_offsets && a.offset == b.offset
         && a.bytes == b.bytes && a.max_units == b.max_units && a.expected_class == b.expected_class
-        && a.count_field_id == b.count_field_id && a.element_bytes == b.element_bytes && a.max_count == b.max_count;
+        && a.count_field_id == b.count_field_id && a.element_bytes == b.element_bytes && a.max_count == b.max_count
+        && a.element_pointer_offset == b.element_pointer_offset && a.stop_at_dynamic == b.stop_at_dynamic;
 }
 struct Writer {
     Snapshot& out;
@@ -49,6 +50,59 @@ struct Writer {
         return error;
     }
 };
+Error captured_count(const HookCapturePlan& plan, std::size_t index, Writer& writer, std::uint32_t& count) noexcept {
+    const auto& field = plan.fields[index];
+        const Field* count_field = nullptr;
+        for (std::size_t previous = 0; previous < index; ++previous)
+            if (plan.fields[previous].id == field.count_field_id && plan.fields[previous].phase == field.phase)
+                count_field = &plan.fields[previous];
+        if (!count_field) return Error::invalid_length;
+        const FieldState* count_state = nullptr;
+        for (std::size_t previous = 0; previous < writer.out.field_count; ++previous) {
+            const auto& state = writer.out.fields[previous];
+            if (state.id == count_field->id && state.role == count_field->role) count_state = &state;
+        }
+        if (!count_state || count_state->error != Error::ok
+            || count_state->final_segment >= writer.out.segment_count) return Error::invalid_length;
+        const auto* count_segment = &writer.out.segments[count_state->final_segment];
+        if (count_segment->field_id != count_field->id || count_segment->role != count_field->role
+            || count_segment->size != sizeof(std::uint32_t)) return Error::invalid_length;
+        writer.attempted_address = count_segment->address; writer.attempted_size = count_segment->size;
+        std::memcpy(&count, writer.out.bytes.data() + count_segment->offset, sizeof(count));
+        if (count > field.max_count) return Error::invalid_length;
+        return Error::ok;
+
+}
+Error capture_string(const Field& field, std::uintptr_t address, Writer& writer, bool* matches_dynamic = nullptr) noexcept {
+    std::uintptr_t klass = 0, length_address = 0;
+    std::int32_t length = 0;
+    if (!address_add(address, 16, length_address)) return Error::bounds;
+    auto error = writer.scalar(field, address, &klass, sizeof(klass));
+    if (error != Error::ok) return error;
+    if ((error = writer.scalar(field, length_address, &length, sizeof(length))) != Error::ok) return error;
+    if (!field.expected_class || klass != field.expected_class) return Error::class_mismatch;
+    if (length < 0 || length > field.max_units || field.max_units > max_string_units) return Error::invalid_length;
+    std::uintptr_t text;
+    if (!address_add(address, 20, text)) return Error::bounds;
+    const auto text_offset = writer.out.byte_count;
+    const auto bytes = static_cast<std::size_t>(length) * 2;
+    if ((error = writer.copy(field, text, bytes)) != Error::ok) return error;
+    // The monitor and padding are not string identity facts. Only class,
+    // length and the exact text are owned and checked again.
+    std::uintptr_t after_class = 0;
+    std::int32_t after_length = 0;
+    if ((error = writer.raw(address, &after_class, sizeof(after_class))) != Error::ok) return error;
+    if ((error = writer.raw(length_address, &after_length, sizeof(after_length))) != Error::ok) return error;
+    if (klass != after_class || length != after_length) return Error::changed_guard;
+    std::array<std::byte, max_string_units * 2> repeated{};
+    if (bytes && (error = writer.raw(text, repeated.data(), bytes)) != Error::ok) return error;
+    if (bytes && std::memcmp(writer.out.bytes.data() + text_offset, repeated.data(), bytes)) return Error::changed_guard;
+    if (matches_dynamic) {
+        constexpr char16_t key[] = u"dynamic";
+        *matches_dynamic = length == 7 && std::memcmp(writer.out.bytes.data() + text_offset, key, 14) == 0;
+    }
+    return Error::ok;
+}
 Error field_capture(const HookCapturePlan& plan, std::size_t index, const Context& context, Writer& writer) noexcept {
     const auto& field = plan.fields[index];
     if (field.root_index >= max_roots || field.depth > max_depth) return Error::invalid_plan;
@@ -77,54 +131,35 @@ Error field_capture(const HookCapturePlan& plan, std::size_t index, const Contex
     }
     if (!address || !address_add(address, field.offset, address)) return Error::missing_root;
     if (field.kind == Kind::bytes) return writer.copy(field, address, field.bytes);
-    if (field.kind == Kind::counted_bytes) {
-        const Field* count_field = nullptr;
-        for (std::size_t previous = 0; previous < index; ++previous)
-            if (plan.fields[previous].id == field.count_field_id && plan.fields[previous].phase == field.phase)
-                count_field = &plan.fields[previous];
-        if (!count_field) return Error::invalid_length;
-        const FieldState* count_state = nullptr;
-        for (std::size_t previous = 0; previous < writer.out.field_count; ++previous) {
-            const auto& state = writer.out.fields[previous];
-            if (state.id == count_field->id && state.role == count_field->role) count_state = &state;
-        }
-        if (!count_state || count_state->error != Error::ok
-            || count_state->final_segment >= writer.out.segment_count) return Error::invalid_length;
-        const auto* count_segment = &writer.out.segments[count_state->final_segment];
-        if (count_segment->field_id != count_field->id || count_segment->role != count_field->role
-            || count_segment->size != sizeof(std::uint32_t)) return Error::invalid_length;
-        writer.attempted_address = count_segment->address; writer.attempted_size = count_segment->size;
+    if (field.kind == Kind::counted_bytes || field.kind == Kind::utf16_array) {
         std::uint32_t count = 0;
-        std::memcpy(&count, writer.out.bytes.data() + count_segment->offset, sizeof(count));
-        if (count > field.max_count) return Error::invalid_length;
+        auto error = captured_count(plan, index, writer, count);
+        if (error != Error::ok) return error;
         if (!count) return writer.copy(field, address, 0);
-        return writer.copy(field, address, static_cast<std::size_t>(count) * field.element_bytes);
+        if (field.kind == Kind::counted_bytes)
+            return writer.copy(field, address, static_cast<std::size_t>(count) * field.element_bytes);
+        if (count > max_array_elements || field.element_bytes > max_element_bytes
+            || field.element_pointer_offset > field.element_bytes
+            || sizeof(std::uintptr_t) > static_cast<std::size_t>(field.element_bytes - field.element_pointer_offset))
+            return Error::invalid_plan;
+        for (std::size_t element = 0; element < count; ++element) {
+            std::uintptr_t slot = 0;
+            if (!address_add(address, element * field.element_bytes, slot)) return Error::bounds;
+            const auto slot_offset = writer.out.byte_count;
+            if ((error = writer.copy(field, slot, field.element_bytes)) != Error::ok) return error;
+            std::uintptr_t string = 0;
+            std::memcpy(&string, writer.out.bytes.data() + slot_offset + field.element_pointer_offset, sizeof(string));
+            bool matched = false;
+            if (string && (error = capture_string(field, string, writer, &matched)) != Error::ok) return error;
+            std::array<std::byte, max_element_bytes> repeated{};
+            if ((error = writer.raw(slot, repeated.data(), field.element_bytes)) != Error::ok) return error;
+            if (std::memcmp(writer.out.bytes.data() + slot_offset, repeated.data(), field.element_bytes)) return Error::changed_guard;
+            if (field.stop_at_dynamic && matched) break;
+        }
+        return Error::ok;
     }
     if (field.kind != Kind::utf16) return Error::invalid_plan;
-    std::uintptr_t klass = 0, length_address = 0;
-    std::int32_t length = 0;
-    if (!address_add(address, 16, length_address)) return Error::bounds;
-    auto error = writer.scalar(field, address, &klass, sizeof(klass));
-    if (error != Error::ok) return error;
-    if ((error = writer.scalar(field, length_address, &length, sizeof(length))) != Error::ok) return error;
-    if (!field.expected_class || klass != field.expected_class) return Error::class_mismatch;
-    if (length < 0 || length > field.max_units || field.max_units > max_string_units) return Error::invalid_length;
-    std::uintptr_t text;
-    if (!address_add(address, 20, text)) return Error::bounds;
-    const auto text_offset = writer.out.byte_count;
-    const auto bytes = static_cast<std::size_t>(length) * 2;
-    if ((error = writer.copy(field, text, bytes)) != Error::ok) return error;
-    // The monitor and padding are not string identity facts. Only class,
-    // length and the exact text are owned and checked again.
-    std::uintptr_t after_class = 0;
-    std::int32_t after_length = 0;
-    if ((error = writer.raw(address, &after_class, sizeof(after_class))) != Error::ok) return error;
-    if ((error = writer.raw(length_address, &after_length, sizeof(after_length))) != Error::ok) return error;
-    if (klass != after_class || length != after_length) return Error::changed_guard;
-    std::array<std::byte, max_string_units * 2> repeated{};
-    if (bytes && (error = writer.raw(text, repeated.data(), bytes)) != Error::ok) return error;
-    if (bytes && std::memcmp(writer.out.bytes.data() + text_offset, repeated.data(), bytes)) return Error::changed_guard;
-    return Error::ok;
+    return capture_string(field, address, writer);
 }
 }
 
@@ -147,12 +182,13 @@ Error validate_plan(const HookCapturePlan& plan) noexcept {
             || (field.root == Root::arg && !(plan.arg_mask & (1u << field.root_index)))
             || ((field.guard == Guard::none) != (field.guard_id == 0))) return Error::invalid_plan;
         for (std::size_t j = 0; j < i; ++j) if (plan.fields[j].id == field.id) return Error::invalid_plan;
+        if (field.stop_at_dynamic && field.kind != Kind::utf16_array) return Error::invalid_plan;
         auto n = field.bytes;
         std::size_t count = field.depth + 1, read_count = field.depth + 1;
         if (field.kind == Kind::utf16) {
             if (!field.expected_class || !field.max_units || field.max_units > max_string_units) return Error::invalid_plan;
             n = 2 * (12 + field.max_units * 2); count += 2; read_count = field.depth + 6;
-        } else if (field.kind == Kind::counted_bytes) {
+        } else if (field.kind == Kind::counted_bytes || field.kind == Kind::utf16_array) {
             bool found = false;
             for (std::size_t j = 0; j < i; ++j) {
                 const auto& prior = plan.fields[j];
@@ -162,6 +198,15 @@ Error validate_plan(const HookCapturePlan& plan) noexcept {
             }
             if (!found || !field.element_bytes || !field.max_count) return Error::invalid_plan;
             n = static_cast<std::uint32_t>(field.element_bytes) * field.max_count;
+            if (field.kind == Kind::utf16_array) {
+                if (field.max_count > max_array_elements || field.element_bytes > max_element_bytes
+                    || field.element_pointer_offset > field.element_bytes
+                    || sizeof(std::uintptr_t) > static_cast<std::size_t>(field.element_bytes - field.element_pointer_offset)
+                    || !field.expected_class || !field.max_units || field.max_units > max_string_units) return Error::invalid_plan;
+                n = field.max_count * (2 * field.element_bytes + 2 * (12 + field.max_units * 2));
+                count = field.depth + field.max_count * 4;
+                read_count = field.depth + field.max_count * 8;
+            }
         } else if (field.kind != Kind::bytes || !n) return Error::invalid_plan;
         const auto phase = static_cast<std::size_t>(field.phase);
         bytes[phase] += field.depth * sizeof(std::uintptr_t) + n;

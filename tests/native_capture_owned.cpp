@@ -15,19 +15,21 @@ void* operator new[](std::size_t size) { return ::operator new(size); }
 void operator delete[](void* p) noexcept { std::free(p); }
 void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
 
-struct Arena {
+template<std::size_t Capacity> struct OwnedArena {
     static constexpr std::uintptr_t base = 0x10000;
-    std::array<std::byte, 2048> memory{};
+    std::array<std::byte, Capacity> memory{};
     unsigned reads = 0, mutate_at = 0, mutation_offset = 0;
     template<class T> void set(std::size_t offset, T value) { std::memcpy(memory.data() + offset, &value, sizeof(value)); }
     static bool read(void* context, std::uintptr_t address, void* out, std::size_t size) noexcept {
-        auto& self = *static_cast<Arena*>(context);
-        if (++self.reads == self.mutate_at) self.set<std::uint32_t>(self.mutation_offset, 99);
+        auto& self = *static_cast<OwnedArena*>(context);
+        if (++self.reads == self.mutate_at) self.template set<std::uint32_t>(self.mutation_offset, 99);
         if (address < base || address - base > self.memory.size() || size > self.memory.size() - (address - base)) return false;
         std::memcpy(out, self.memory.data() + address - base, size);
         return true;
     }
 };
+using Arena = OwnedArena<2048>;
+using LargeArena = OwnedArena<65536>;
 static HookCapturePlan plan() {
     HookCapturePlan value;
     value.arg_count = 1; value.arg_mask = 1; value.max_bytes = 2048; value.max_reads = 64;
@@ -158,6 +160,57 @@ int main() {
     assert(read_snapshot(owned, 2, 7, 2, Arena::base + 32, nullptr, 0) == Error::ok);
     p.fields[1].guard = Guard::none; p.fields[1].guard_id = 0;
     assert(validate_plan(p) == Error::invalid_plan);
+
+    // Blackboard keys are captured by live count, preserving first-match order
+    // and the matched slot value; a poisoned tail after "dynamic" is never read.
+    p = plan(); p.max_bytes = 131072; p.max_reads = 4096; p.field_count = 3;
+    p.fields[0] = field(1, 1, 0, 4); p.fields[0].guard_id = 1; p.fields[0].guard = Guard::before;
+    p.fields[1] = field(2, 2, 64, 0); p.fields[1].kind = Kind::utf16_array;
+    p.fields[1].count_field_id = 1; p.fields[1].element_bytes = 24; p.fields[1].max_count = 128;
+    p.fields[1].guard_id = 1; p.fields[1].guard = Guard::member;
+    p.fields[1].max_units = 200; p.fields[1].expected_class = 0x777; p.fields[1].stop_at_dynamic = true;
+    p.fields[2] = p.fields[0]; p.fields[2].id = 3; p.fields[2].role = 3; p.fields[2].guard = Guard::after;
+    assert(validate_plan(p) == Error::ok);
+    arena.memory.fill(std::byte{0}); arena.set<std::uint32_t>(0, 2);
+    arena.set<std::uintptr_t>(64, Arena::base + 256); arena.set<float>(72, 12.5f);
+    arena.set<std::uintptr_t>(88, 0x90000);
+    arena.set<std::uintptr_t>(256, 0x777); arena.set<std::uint32_t>(272, 7);
+    constexpr char16_t dynamic_key[] = u"dynamic";
+    std::memcpy(arena.memory.data() + 276, dynamic_key, 14);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
+    float shield = 0;
+    arena.memory.fill(std::byte{0xaa});
+    assert(read_snapshot(owned, 2, 7, 2, Arena::base + 72, &shield, 4) == Error::ok && shield == 12.5f);
+    assert(read_snapshot(owned, 2, 7, 2, Arena::base + 88, &pointer, 8) == Error::missing_plan_field);
+    assert(read_snapshot(owned, 2, 7, 2, Arena::base + 276, &value, 4) == Error::ok);
+    // Turning early stop off exposes the real unreadable second key, not a
+    // fabricated null or an instruction to dereference that key later.
+    arena.memory.fill(std::byte{0}); arena.set<std::uint32_t>(0, 2);
+    arena.set<std::uintptr_t>(64, Arena::base + 256); arena.set<std::uintptr_t>(88, 0x90000);
+    arena.set<std::uintptr_t>(256, 0x777); arena.set<std::uint32_t>(272, 7);
+    std::memcpy(arena.memory.data() + 276, dynamic_key, 14);
+    p.fields[1].stop_at_dynamic = false;
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::field_unreadable);
+    assert(owned.fields[1].attempted_address == 0x90000 && owned.fields[1].attempted_size == 8);
+    p.fields[1].max_count = 129;
+    assert(validate_plan(p) == Error::invalid_plan);
+
+    // The original 128 x 200 legal maximum fits the declared 128KiB read budget.
+    p.fields[1].max_count = 128; p.fields[1].stop_at_dynamic = true;
+    LargeArena large;
+    large.set<std::uint32_t>(0, 128);
+    for (std::size_t i = 0; i < 128; ++i) {
+        const auto string_offset = 4096 + i * 424;
+        large.set<std::uintptr_t>(64 + i * 24, LargeArena::base + string_offset);
+        large.set<std::uintptr_t>(string_offset, 0x777);
+        large.set<std::uint32_t>(string_offset + 16, 200);
+        std::memset(large.memory.data() + string_offset + 20, 0x41, 400);
+    }
+    assert(validate_plan(p) == Error::ok);
+    assert(capture(p, Phase::entry, c, LargeArena::read, &large, owned) == Error::ok);
+    assert(owned.read_count == 1026 && owned.read_bytes == 111624 && owned.byte_count == 55816);
+    p.max_bytes = 111623;
+    assert(validate_plan(p) == Error::bounds);
 
     // Return and checkpoint/absolute roots are explicit and phase-restricted.
     p = plan(); p.field_count = 1; p.fields[0] = field(1, 1, 0, 4);

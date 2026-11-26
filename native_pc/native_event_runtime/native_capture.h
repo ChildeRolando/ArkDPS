@@ -5,11 +5,12 @@
 
 namespace arkdps::capture {
 static_assert(sizeof(std::uintptr_t) == 8, "capture plans require the verified 64-bit ABI");
-constexpr std::size_t max_fields = 256, max_depth = 12, max_segments = 1024, max_bytes = 65536;
+constexpr std::size_t max_fields = 256, max_depth = 12, max_segments = 1024, max_bytes = 131072;
 constexpr std::size_t max_roots = 16, max_string_units = 200, max_guards = 64, max_reads = 4096;
+constexpr std::size_t max_array_elements = 128, max_element_bytes = 128;
 enum class Phase : std::uint8_t { entry, leave, checkpoint };
 enum class Root : std::uint8_t { arg, entry_ref, parent_ref, global_slot, return_value, checkpoint_ref, absolute };
-enum class Kind : std::uint8_t { bytes, utf16, counted_bytes };
+enum class Kind : std::uint8_t { bytes, utf16, counted_bytes, utf16_array };
 enum class Guard : std::uint8_t { none, before, after, member };
 enum class Error : std::uint8_t {
     ok, invalid_plan, invalid_phase, bounds, missing_root, field_unreadable,
@@ -26,7 +27,8 @@ struct Field {
     Kind kind = Kind::bytes;
     std::uint16_t max_units = 0;
     std::uintptr_t expected_class = 0;
-    std::uint16_t count_field_id = 0, element_bytes = 0, max_count = 0;
+    std::uint16_t count_field_id = 0, element_bytes = 0, max_count = 0, element_pointer_offset = 0;
+    bool stop_at_dynamic = false;
     std::uint8_t guard_id = 0;
     Guard guard = Guard::none;
     bool required = true;
