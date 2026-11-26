@@ -1,0 +1,1 @@
+PASS owned graph programs: immutable ABI/guard priority/concurrent/range/lease/predicates

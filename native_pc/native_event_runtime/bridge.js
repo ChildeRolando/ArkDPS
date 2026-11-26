@@ -175,12 +175,13 @@ function __arkdpsSealedProvider(){
  const required=['__nativeOwnedLease','__nativeOwnedRead','__nativeOwnedScalar','__nativeOwnedStatus','__nativeOwnedPoint'];
  const optional=['__nativeOwnedHpObservation','__nativeOwnedConsumeHpFailure','__nativeOwnedGraphReadBatch','__nativeOwnedGraphCheck','__nativeOwnedGraphFailure'];
  for(const key of keys){
-  if(typeof key!=='string'||(key!=='version'&&key!=='__nativeOwnedNumericAddress'&&!required.includes(key)&&!optional.includes(key)))throw Error('unexpected native owned provider member');
+  if(typeof key!=='string'||(key!=='version'&&key!=='__nativeOwnedNumericAddress'&&key!=='__nativeOwnedGraphTypedPackets'&&!required.includes(key)&&!optional.includes(key)))throw Error('unexpected native owned provider member');
   const descriptor=__arkdpsProviderDescriptor(bundle,key);
   if(!descriptor||!__arkdpsProviderHasOwn(descriptor,'value')||descriptor.writable!==false||descriptor.configurable!==false)throw Error('native owned provider member is mutable');
  }
  const version=__arkdpsProviderDescriptor(bundle,'version'),numeric=__arkdpsProviderDescriptor(bundle,'__nativeOwnedNumericAddress');
  if(version?.value!==1||numeric?.value!==true)throw Error('invalid native owned provider bundle version');
+ const typed=__arkdpsProviderDescriptor(bundle,'__nativeOwnedGraphTypedPackets');if(typed!==undefined&&(typed.value!==1||typeof __arkdpsProviderDescriptor(bundle,'__nativeOwnedGraphCheck')?.value!=='function'||typeof __arkdpsProviderDescriptor(bundle,'__nativeOwnedGraphFailure')?.value!=='function'))throw Error('invalid native graph typed capability');
  for(const key of required)if(typeof __arkdpsProviderDescriptor(bundle,key)?.value!=='function')throw Error('native owned provider member unavailable');
  for(const key of optional){const descriptor=__arkdpsProviderDescriptor(bundle,key);if(descriptor!==undefined&&typeof descriptor.value!=='function')throw Error('invalid optional native owned provider');}
  for(const pair of [['__nativeOwnedHpObservation','__nativeOwnedConsumeHpFailure'],['__nativeOwnedGraphCheck','__nativeOwnedGraphFailure']])if(__arkdpsProviderHasOwn(bundle,pair[0])!==__arkdpsProviderHasOwn(bundle,pair[1]))throw Error('incomplete native owned provider pair');
@@ -197,13 +198,14 @@ function __arkdpsReplayBegin(record,controlled=null){
   let native=__arkdpsSealedProvider();
   if(native===null){
   const lease=globalThis.__nativeOwnedLease,read=globalThis.__nativeOwnedRead,scalar=globalThis.__nativeOwnedScalar,
-   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,hpObservation=globalThis.__nativeOwnedHpObservation,hpFailure=globalThis.__nativeOwnedConsumeHpFailure,graphCheck=globalThis.__nativeOwnedGraphCheck,graphFailure=globalThis.__nativeOwnedGraphFailure,graphBatch=globalThis.__nativeOwnedGraphReadBatch;
+   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,hpObservation=globalThis.__nativeOwnedHpObservation,hpFailure=globalThis.__nativeOwnedConsumeHpFailure,graphCheck=globalThis.__nativeOwnedGraphCheck,graphFailure=globalThis.__nativeOwnedGraphFailure,graphBatch=globalThis.__nativeOwnedGraphReadBatch,graphTyped=globalThis.__nativeOwnedGraphTypedPackets;
+  if(graphTyped!==undefined&&(graphTyped!==1||typeof graphCheck!=='function'||typeof graphFailure!=='function'))throw Error('invalid native graph typed capability');
   if(typeof lease!=='function'||typeof read!=='function'||typeof scalar!=='function'||typeof status!=='function'||typeof point!=='function')
    throw new Error('native owned provider unavailable');
   if((hpObservation!==undefined||hpFailure!==undefined)&&(typeof hpObservation!=='function'||typeof hpFailure!=='function'))throw new Error('native HP observation provider unavailable');
   native=__arkdpsNativeProvider;
-  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedHpObservation!==hpObservation||native.__nativeOwnedConsumeHpFailure!==hpFailure||native.__nativeOwnedGraphCheck!==graphCheck||native.__nativeOwnedGraphFailure!==graphFailure||native.__nativeOwnedGraphReadBatch!==graphBatch)
-   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedHpObservation:hpObservation,__nativeOwnedConsumeHpFailure:hpFailure,__nativeOwnedGraphCheck:graphCheck,__nativeOwnedGraphFailure:graphFailure,__nativeOwnedGraphReadBatch:graphBatch});
+  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedHpObservation!==hpObservation||native.__nativeOwnedConsumeHpFailure!==hpFailure||native.__nativeOwnedGraphCheck!==graphCheck||native.__nativeOwnedGraphFailure!==graphFailure||native.__nativeOwnedGraphReadBatch!==graphBatch||native.__nativeOwnedGraphTypedPackets!==graphTyped)
+   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedHpObservation:hpObservation,__nativeOwnedConsumeHpFailure:hpFailure,__nativeOwnedGraphCheck:graphCheck,__nativeOwnedGraphFailure:graphFailure,__nativeOwnedGraphReadBatch:graphBatch,__nativeOwnedGraphTypedPackets:graphTyped});
   }
   if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||(controlled===null&&native.__nativeOwnedLease(record.ticket)!==true))throw new Error('native owned lease unavailable');
   __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};if(controlled!==null)__arkdpsControlledFrames.set(__arkdpsReplay,controlled);return;
@@ -623,7 +625,9 @@ function __arkdpsOwnedGraphPrimitives(kind,graph){
   }
   if(codecs.filter(value=>value!==null).length>32)return null;
   let offset=4;const offsets=codecs.map(values=>{if(values===null)return -1;const start=offset+2;offset=start+values.length;return start;});
-  geometry=Object.freeze({fields:Object.freeze([...fields]),codecs:Object.freeze(codecs),offsets:Object.freeze(offsets),revision:graph.revision,mode:graph.mode_epoch});__arkdpsPrimitiveGeometry.set(graph,geometry);
+  let layout='v1|'+fields.length;
+  for(let index=0;index<codecs.length;index++){const values=codecs[index];if(values===null)continue;layout+='|'+index+':'+fields[index].bytes+':'+values.length;for(const value of values)layout+=':'+value.kind+'@'+value.offset;}
+  geometry=Object.freeze({fields:Object.freeze([...fields]),codecs:Object.freeze(codecs),offsets:Object.freeze(offsets),packetLength:offset,layout,revision:graph.revision,mode:graph.mode_epoch});__arkdpsPrimitiveGeometry.set(graph,geometry);
  }
  if(geometry.revision!==graph.revision||geometry.mode!==graph.mode_epoch)__arkdpsReplayGap('primitive graph geometry changed');
  const packet=__arkdpsNativeCall('__nativeOwnedGraphCheck',kind,geometry.revision,geometry.mode,1);
@@ -632,21 +636,27 @@ function __arkdpsOwnedGraphPrimitives(kind,graph){
   if(Number.isInteger(index)&&index>=0&&index<geometry.fields.length)return __arkdpsReplayCheckpoint(geometry.fields[index].role,replay.record.checkpoint??0,()=>__arkdpsNativeReadFailure(status));
   __arkdpsNativeReadFailure(status);
  }
- if(!Array.isArray(packet)||packet[0]!==1||packet[1]!==geometry.fields.length||packet[2]!==(replay.record.checkpoint??0)||packet[3]!==geometry.mode)__arkdpsReplayGap('invalid primitive graph packet');
- let at=4;
- for(let index=0;index<geometry.codecs.length;index++){
-  const codecs=geometry.codecs[index];
-  if(codecs===null)continue;
-  if(packet[at++]!==index||packet[at++]!==codecs.length)__arkdpsReplayGap('invalid primitive graph value count');
-  for(const codec of codecs){
-   const value=packet[at++];
-   if(codec.kind==='u32'||codec.kind==='i32'){
-    if(typeof value!=='number'||!Number.isInteger(value)||value<(codec.kind==='u32'?0:-2147483648)||value>(codec.kind==='u32'?4294967295:2147483647))__arkdpsReplayGap('invalid primitive graph number');
-   }else if(typeof value!=='bigint'||value<(codec.kind==='u64'?0n:-9223372036854775808n)||value>(codec.kind==='u64'?18446744073709551615n:9223372036854775807n))__arkdpsReplayGap('invalid primitive graph integer');
+ if(!Array.isArray(packet)||packet[0]!==1||packet[1]!==geometry.fields.length||packet[2]!==(replay.record.checkpoint??0)||packet[3]!==geometry.mode||packet.length!==geometry.packetLength)__arkdpsReplayGap('invalid primitive graph packet');
+ if(native.__nativeOwnedGraphTypedPackets===1){
+  if(packet.__arkdpsGraphLayout!==geometry.layout)__arkdpsReplayGap('primitive graph typed layout mismatch');
+  let issued;try{issued=native.__nativeOwnedGraphCheck(kind,geometry.revision,geometry.mode,2,packet);}catch(error){__arkdpsReplayGap('native graph typed recognition failed');}
+  if(issued!==packet)__arkdpsReplayGap('unissued primitive graph packet');
+ }else{
+  let at=4;
+  for(let index=0;index<geometry.codecs.length;index++){
+   const codecs=geometry.codecs[index];
+   if(codecs===null)continue;
+   if(packet[at++]!==index||packet[at++]!==codecs.length)__arkdpsReplayGap('invalid primitive graph value count');
+   for(const codec of codecs){
+    const value=packet[at++];
+    if(codec.kind==='u32'||codec.kind==='i32'){
+     if(typeof value!=='number'||!Number.isInteger(value)||value<(codec.kind==='u32'?0:-2147483648)||value>(codec.kind==='u32'?4294967295:2147483647))__arkdpsReplayGap('invalid primitive graph number');
+    }else if(typeof value!=='bigint'||value<(codec.kind==='u64'?0n:-9223372036854775808n)||value>(codec.kind==='u64'?18446744073709551615n:9223372036854775807n))__arkdpsReplayGap('invalid primitive graph integer');
+   }
   }
+  if(at!==packet.length)__arkdpsReplayGap('invalid primitive graph trailing values');
+  Object.freeze(packet);
  }
- if(at!==packet.length)__arkdpsReplayGap('invalid primitive graph trailing values');
- Object.freeze(packet);
  const flat=Object.freeze({packet,offsets:geometry.offsets});
  const io=new __ArkDpsGraphPrimitives();__arkdpsGraphProofs.set(io,{format:1,replay,kind,graph,geometry,flat});return io;
 }

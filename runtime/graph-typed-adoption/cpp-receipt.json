@@ -1,0 +1,81 @@
+{
+  "runs": {
+    "control": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-static",
+        "-O2",
+        "-pthread",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\native_pc\\native_event_runtime",
+        "-isystem",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\quickjs-headers",
+        "-isystem",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\tests\\owned_read_plan_test.cpp",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\native_pc\\native_event_runtime\\native_capture.cpp",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-0.o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-1.o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-2.o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-3.o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-4.o",
+        "-o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\runtime\\graph-typed-adoption\\control.exe"
+      ],
+      "returncode": 0,
+      "binary_sha256": "9b02d24d64accc3173f44567fcab05ea5ea16dde96d62b3ee846f1edd1c6a9fe",
+      "stderr": "",
+      "stdout": "PASS owned graph programs: immutable ABI/guard priority/concurrent/range/lease/predicates\n"
+    },
+    "identity-mutant": {
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-static",
+        "-O2",
+        "-pthread",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-I",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\runtime\\graph-typed-adoption\\mutation",
+        "-I",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\native_pc\\native_event_runtime",
+        "-isystem",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\quickjs-headers",
+        "-isystem",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\tests\\owned_read_plan_test.cpp",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\native_pc\\native_event_runtime\\native_capture.cpp",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-0.o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-1.o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-2.o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-3.o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-4.o",
+        "-o",
+        "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\runtime\\graph-typed-adoption\\identity-mutant.exe"
+      ],
+      "returncode": 3221226505,
+      "binary_sha256": "20264e28fcdf802e68a7c69b95c48b307ae91687f83ab0f13459c679f3b0f5b9",
+      "stderr": "Assertion failed: JS_IsUndefined(recognized)&&poisoned, file E:\\\u93c2\u56e8\u3002\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\tests\\owned_read_plan_test.cpp, line 89\n",
+      "stdout": ""
+    }
+  },
+  "inputs_sha256": {
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-0.o": "9b57de662910a8500a96eb201fa51a9b5a22881b5f44083bfcf6295e36df7a61",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-1.o": "d42a47f5f2a9d8b619496753faec5691c137a77d6726ba7b998072d28ead71a6",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-2.o": "13058fb02edd05f161d2e437a21a4d72dcc6ee194b56488ac59f6371fbc1abdd",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-3.o": "2a234ea2e284edb4f3c36bdd936bcb124df699321199ff329527df8b5b3c31af",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-4.o": "3eb1e8db3d287e212ce53de2aaad29c5200c7b18c5941b2eaacbbec1328bcbd3",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\tests\\owned_read_plan_test.cpp": "21a713a9b21e1067bc905a9045d6d272b87591099709453c340cdedd14d124b5",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\native_pc\\native_event_runtime\\owned_replay_js.h": "559fa152a83faf11e856920971b2566e31be3b658f162b887cb5cd18ddc98768",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\native_pc\\native_event_runtime\\engine_capture_config.h": "b6ed9a0f1b8b177673459df890fa9a37f131d83ea64713ab7d4d0dc91d55c4c0",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\native_pc\\native_event_runtime\\engine_capture_plan.h": "b2c7619114d7dfc65cf601ee7d817d3d678efa17001dd4eee353ec0723f45dea",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\native_pc\\native_event_runtime\\bridge.js": "2e23f27ef67d6739ace10c4ad3dc782acaa493762370be1f2379cc208eb43729"
+  },
+  "driver_sha256": "65f905eace1a6a06271b6dbe08c917d41cffe16f2369714a6f23935dd987d3aa"
+}

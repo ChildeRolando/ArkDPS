@@ -30,7 +30,7 @@ struct OwnedReadField {
     std::vector<ObservationValue> observations;
     std::vector<OwnedReadWord> words;std::vector<std::uint16_t> utf16;bool compare_utf16=false;
 };
-struct OwnedReadProgram {unsigned tiers=0;std::vector<OwnedReadField> fields;};
+struct OwnedReadProgram {unsigned tiers=0;std::vector<OwnedReadField> fields;std::string typed_layout;};
 
 struct ObservationSpec {std::uint16_t source_index=0;std::string name;std::vector<ObservationValue> values;};
 struct ObservationField {OwnedReadField raw;std::uint16_t presence_id=0;std::string name;std::vector<ObservationValue> values;};

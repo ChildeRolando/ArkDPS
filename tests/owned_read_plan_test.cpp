@@ -72,6 +72,32 @@ static void graph_contract(JSContext* c){
  assert(check_config->scope->primitive_ready);
  start();owned::bind_graphs(check_config,2,0,1);JSValue typedArgs[]{JS_NewString(c,"scope"),JS_NewUint32(c,2),JS_NewUint32(c,1),JS_NewUint32(c,1)};
  value=owned::graph_check(c,JS_UNDEFINED,4,typedArgs);assert(JS_IsArray(c,value)==1&&!poisoned);
+ // Format2 only recognizes the exact immutable format1 result under the
+ // existing native lease/configuration/program. It never re-runs OwnedView.
+ const auto issue=[&](){start();owned::bind_graphs(check_config,2,0,1);return owned::graph_check(c,JS_UNDEFINED,4,typedArgs);};
+ const auto adopt=[&](JSValueConst packet,JSContext* context=nullptr,unsigned revision=2,unsigned mode=1){
+  if(!context)context=c;
+  JSValue args[]{JS_NewString(context,"scope"),JS_NewUint32(context,revision),JS_NewUint32(context,mode),JS_NewUint32(context,2),JS_DupValue(context,packet)};
+  auto result=owned::graph_check(context,JS_UNDEFINED,5,args);for(auto arg:args)JS_FreeValue(context,arg);return result;
+ };
+ auto recognized=adopt(value);assert(JS_IsObject(recognized)&&JS_VALUE_GET_PTR(recognized)==JS_VALUE_GET_PTR(value)&&!poisoned);JS_FreeValue(c,recognized);
+ auto global=JS_GetGlobalObject(c);assert(JS_SetPropertyStr(c,global,"issuedGraph",JS_DupValue(c,value))>=0);JS_FreeValue(c,global);
+ const char* frozen="Object.getOwnPropertyDescriptor(issuedGraph,'__arkdpsGraphLayout').value==='v1|33|0:4:2:u32@0:i32@0'&&!Object.getOwnPropertyDescriptor(issuedGraph,'__arkdpsGraphLayout').enumerable&&!Reflect.set(issuedGraph,'__arkdpsGraphLayout','forged')&&Object.isFrozen(issuedGraph)&&!Reflect.set(issuedGraph,'0',99)&&!Reflect.defineProperty(issuedGraph,'99',{value:1})";
+ auto frozen_result=JS_Eval(c,frozen,std::strlen(frozen),"typed-immutable.js",JS_EVAL_TYPE_GLOBAL);assert(!JS_IsException(frozen_result)&&JS_ToBool(c,frozen_result)==1);JS_FreeValue(c,frozen_result);
+ // A fresh copy, boolean, public object, old packet, changed binding, foreign
+ // context, and a reissued packet are not certificates, even with equal data.
+ auto fake=JS_NewArray(c);recognized=adopt(fake);assert(JS_IsUndefined(recognized)&&poisoned);JS_FreeValue(c,fake);
+ JS_FreeValue(c,value);value=issue();recognized=adopt(JS_TRUE);assert(JS_IsUndefined(recognized)&&poisoned);
+ JS_FreeValue(c,value);value=issue();auto* other_context=JS_NewContext(JS_GetRuntime(c));recognized=adopt(value,other_context);assert(JS_IsUndefined(recognized)&&poisoned);JS_FreeContext(other_context);
+ JS_FreeValue(c,value);value=issue();owned::binding().ticket++;recognized=adopt(value);assert(JS_IsUndefined(recognized)&&poisoned);
+ JS_FreeValue(c,value);value=issue();owned::binding().graph_checkpoint++;recognized=adopt(value);assert(JS_IsUndefined(recognized)&&poisoned);
+ JS_FreeValue(c,value);value=issue();CaptureConfiguration another=*check_config;another.id++;owned::binding().configuration=&another;recognized=adopt(value);assert(JS_IsUndefined(recognized)&&poisoned);
+ JS_FreeValue(c,value);value=issue();recognized=adopt(value,nullptr,3);assert(JS_IsUndefined(recognized)&&poisoned);
+ JS_FreeValue(c,value);value=issue();recognized=adopt(value,nullptr,2,2);assert(JS_IsUndefined(recognized)&&poisoned);
+ JS_FreeValue(c,value);value=issue();owned::bind_graphs(check_config,2,0,1);recognized=adopt(value);assert(JS_IsUndefined(recognized)&&poisoned);
+ JS_FreeValue(c,value);value=issue();auto newer=owned::graph_check(c,JS_UNDEFINED,4,typedArgs);recognized=adopt(value);assert(JS_IsUndefined(recognized)&&poisoned);JS_FreeValue(c,newer);
+ JS_FreeValue(c,value);value=issue();owned::end();recognized=adopt(value);assert(JS_IsUndefined(recognized)&&poisoned);
+ JS_FreeValue(c,value);value=issue();
  auto got=JS_GetPropertyUint32(c,value,6);std::uint32_t actual=0;assert(JS_ToUint32(c,&actual,got)==0&&actual==100);JS_FreeValue(c,got);JS_FreeValue(c,value);
  std::memset(data.data(),255,4);start();owned::bind_graphs(check_config,2,0,1);value=owned::graph_check(c,JS_UNDEFINED,4,typedArgs);got=JS_GetPropertyUint32(c,value,7);std::int32_t signed_value=0;assert(JS_ToInt32(c,&signed_value,got)==0&&signed_value==-1);JS_FreeValue(c,got);JS_FreeValue(c,value);std::uint32_t restored=100;std::memcpy(data.data(),&restored,4);
  for(auto arg:typedArgs)JS_FreeValue(c,arg);

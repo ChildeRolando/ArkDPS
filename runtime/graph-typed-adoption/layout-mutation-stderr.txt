@@ -1,0 +1,17 @@
+evalmachine.<anonymous>:166
+ if(__arkdpsReplay!==null)throw new Error('replay already active');
+                          ^
+
+Error: replay already active
+    at __arkdpsReplayBegin (evalmachine.<anonymous>:166:33)
+    at evalmachine.<anonymous>:8:12
+    at Script.runInContext (node:vm:149:12)
+    at Object.runInContext (node:vm:301:6)
+    at Object.<anonymous> (E:\鏂囨。\ChatGPT\ArkDPS\arkdps-graph-typed-adoption\tests\native_pc_graph_typed_adoption_fixture.js:20:4)
+    at Module._compile (node:internal/modules/cjs/loader:1830:14)
+    at Object..js (node:internal/modules/cjs/loader:1961:10)
+    at Module.load (node:internal/modules/cjs/loader:1553:32)
+    at Module._load (node:internal/modules/cjs/loader:1355:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)
+
+Node.js v24.15.0

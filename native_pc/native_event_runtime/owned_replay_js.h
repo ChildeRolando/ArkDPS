@@ -38,6 +38,11 @@ struct Binding {
     std::uint64_t hp_mode=0;bool hp_issued=false;
     std::array<std::uint16_t,16> hp_status{};
     JSContext* hp_packet_context=nullptr;JSValue hp_packet=JS_UNDEFINED;
+    JSContext* graph_packet_context=nullptr;JSValue graph_packet=JS_UNDEFINED;
+    const capture::CaptureConfiguration* graph_packet_configuration=nullptr;
+    const ReadProgram* graph_packet_program=nullptr;
+    std::uint64_t graph_packet_ticket=0,graph_packet_configuration_id=0,graph_packet_revision=0,graph_packet_mode=0;
+    std::uint32_t graph_packet_checkpoint=0;
 };
 inline Binding& binding() { static auto* value = new Binding; return *value; }
 inline void error(capture::Error value) noexcept {
@@ -48,12 +53,18 @@ inline void release_hp_packet() noexcept {
     auto& owner=binding();if(owner.hp_packet_context)JS_FreeValue(owner.hp_packet_context,owner.hp_packet);
     owner.hp_packet=JS_UNDEFINED;owner.hp_packet_context=nullptr;owner.hp_issued=false;
 }
+inline void release_graph_packet() noexcept {
+    auto& owner=binding();if(owner.graph_packet_context)JS_FreeValue(owner.graph_packet_context,owner.graph_packet);
+    owner.graph_packet=JS_UNDEFINED;owner.graph_packet_context=nullptr;
+    owner.graph_packet_configuration=nullptr;owner.graph_packet_program=nullptr;
+    owner.graph_packet_ticket=owner.graph_packet_configuration_id=owner.graph_packet_revision=owner.graph_packet_mode=0;owner.graph_packet_checkpoint=0;
+}
 inline capture::Error begin(const void* segments,std::size_t segment_count,
                            const void* fields,std::size_t field_count,
                            const std::byte* payload,std::size_t payload_bytes,
                            const std::vector<std::string>& roles,std::uint64_t ticket,
                            capture::Error record_error,bool concurrent=false) noexcept {
-    release_hp_packet();auto& owner=binding();owner.roles=&roles;owner.ticket=ticket;owner.concurrent=concurrent;
+    release_hp_packet();release_graph_packet();auto& owner=binding();owner.roles=&roles;owner.ticket=ticket;owner.concurrent=concurrent;
     owner.js_exception=false;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;
     owner.error=owner.view.initialize(segments,segment_count,fields,field_count,payload,payload_bytes,
                                      static_cast<std::uint16_t>(roles.size()),record_error);
@@ -62,7 +73,7 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
     return owner.error;
 }
 inline void end() noexcept {
-    release_hp_packet();auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;owner.view.reset();
+    release_hp_packet();release_graph_packet();auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;owner.view.reset();
 }
 struct Lease {
     Lease()=default;Lease(const Lease&)=delete;Lease& operator=(const Lease&)=delete;
@@ -257,7 +268,7 @@ inline JSValue execute_read_batch(JSContext* c,const ReadProgram& plan,unsigned 
                 else {std::int64_t value;std::memcpy(&value,data,8);append(JS_NewBigInt64(c,value));}
             }
         }
-        if(failed||JS_DefinePropertyValueStr(c,result,"length",JS_NewUint32(c,at),0)<0||JS_PreventExtensions(c,result)<0){JS_FreeValue(c,result);conversion_exception();return JS_EXCEPTION;}
+        if(failed||JS_DefinePropertyValueStr(c,result,"__arkdpsGraphLayout",JS_NewStringLen(c,plan.typed_layout.data(),plan.typed_layout.size()),0)<0||JS_DefinePropertyValueStr(c,result,"length",JS_NewUint32(c,at),0)<0||JS_PreventExtensions(c,result)<0){JS_FreeValue(c,result);conversion_exception();return JS_EXCEPTION;}
         return result;
     }
     return allocated(JS_NewArrayBufferCopy(c,reinterpret_cast<const std::uint8_t*>(output.data()),cursor));
@@ -347,14 +358,15 @@ inline JSValue consume_hp_failure(JSContext* c,JSValueConst,int count,JSValueCon
 // Exact record configuration is selected by engine, never by a JS supplied id.
 inline void bind_graphs(const capture::CaptureConfiguration* config,std::uint64_t scope,
                         std::uint64_t publication,std::uint64_t mode,std::uint32_t checkpoint=0) noexcept {
-    auto& owner=binding();owner.configuration=config;owner.scope_revision=scope;
+    release_graph_packet();auto& owner=binding();owner.configuration=config;owner.scope_revision=scope;
     owner.publication_revision=publication;owner.graph_mode=mode;owner.graph_checkpoint=checkpoint;
 }
 inline JSValue graph_batch(JSContext* c,int count,JSValueConst* args,bool check) {
     auto& owner=binding();owner.js_exception=false;owner.graph_failure=UINT32_MAX;double revision=0,mode=0,chunk=0,format=0;
-    if((check?(count!=3&&count!=4):count!=4)||!owner.active||!owner.configuration||!JS_IsString(args[0])
+    if(count!=5)release_graph_packet();
+    if((check?(count!=3&&count!=4&&count!=5):count!=4)||!owner.active||!owner.configuration||!JS_IsString(args[0])
         ||!number(c,args[1],revision,1,9007199254740991.0)
-        ||!number(c,args[2],mode,0,9007199254740991.0)||(!check&&!number(c,args[3],chunk,0,65535))||(check&&count==4&&!number(c,args[3],format,1,1))) {
+        ||!number(c,args[2],mode,0,9007199254740991.0)||(!check&&!number(c,args[3],chunk,0,65535))||(check&&count==4&&!number(c,args[3],format,1,1))||(check&&count==5&&!number(c,args[3],format,2,2))) {
         if(!owner.js_exception)error(capture::Error::invalid_plan);
         return unavailable();
     }
@@ -364,10 +376,33 @@ inline JSValue graph_batch(JSContext* c,int count,JSValueConst* args,bool check)
     const auto* graph=scope?owner.configuration->scope.get():publication?owner.configuration->publication.get():nullptr;
     const auto recorded=scope?owner.scope_revision:owner.publication_revision;
     if(!graph||!graph->available||revision!=recorded||revision!=graph->revision||mode!=graph->mode_epoch
-        ||mode!=owner.graph_mode||owner.configuration->mode_epoch!=owner.graph_mode||(check?!graph->check_ready:chunk>=graph->read_chunks.size())||(format==1&&!graph->primitive_ready)) {
+        ||mode!=owner.graph_mode||owner.configuration->mode_epoch!=owner.graph_mode||(check?!graph->check_ready:chunk>=graph->read_chunks.size())||((format==1||format==2)&&!graph->primitive_ready)) {
         error(capture::Error::missing_plan_field);return JS_UNDEFINED;
     }
-    return execute_read_batch(c,check?graph->check_program:graph->read_chunks[static_cast<std::size_t>(chunk)],1,0,owner.graph_checkpoint,check,format==1);
+    if(format==2){
+        // Recognition only: no live read, re-execution, coercion, or caller-made
+        // verified flag can replace the exact packet emitted under this lease.
+        if(!scope||owner.error!=capture::Error::ok||owner.graph_packet_context!=c
+            ||owner.graph_packet_configuration!=owner.configuration
+            ||owner.graph_packet_configuration_id!=owner.configuration->id
+            ||owner.graph_packet_program!=&graph->check_program
+            ||owner.graph_packet_ticket!=owner.ticket||owner.graph_packet_revision!=static_cast<std::uint64_t>(revision)
+            ||owner.graph_packet_mode!=owner.graph_mode||owner.graph_packet_checkpoint!=owner.graph_checkpoint
+            ||!JS_IsObject(args[4])||!JS_IsObject(owner.graph_packet)
+            ||JS_VALUE_GET_PTR(args[4])!=JS_VALUE_GET_PTR(owner.graph_packet)) {
+            error(capture::Error::invalid_plan);return JS_UNDEFINED;
+        }
+        return JS_DupValue(c,owner.graph_packet);
+    }
+    auto result=execute_read_batch(c,check?graph->check_program:graph->read_chunks[static_cast<std::size_t>(chunk)],1,0,owner.graph_checkpoint,check,format==1);
+    if(format==1&&scope&&owner.error==capture::Error::ok&&JS_IsObject(result)){
+        owner.graph_packet_context=c;owner.graph_packet=JS_DupValue(c,result);
+        owner.graph_packet_configuration=owner.configuration;owner.graph_packet_configuration_id=owner.configuration->id;
+        owner.graph_packet_program=&graph->check_program;owner.graph_packet_ticket=owner.ticket;
+        owner.graph_packet_revision=static_cast<std::uint64_t>(revision);owner.graph_packet_mode=owner.graph_mode;
+        owner.graph_packet_checkpoint=owner.graph_checkpoint;
+    }
+    return result;
 }
 inline JSValue graph_read_batch(JSContext* c,JSValueConst,int count,JSValueConst* args){return graph_batch(c,count,args,false);}
 inline JSValue graph_check(JSContext* c,JSValueConst,int count,JSValueConst* args){return graph_batch(c,count,args,true);}
@@ -408,6 +443,8 @@ inline void install(JSContext* c,void(*poison)() noexcept,bool sealed=true) {
         if(JS_IsException(value)||JS_DefinePropertyValueStr(c,bundle,name,value,JS_PROP_ENUMERABLE)<0)failed=true;
     };
     define("version",JS_NewUint32(c,1));define("__nativeOwnedNumericAddress",JS_TRUE);
+    define("__nativeOwnedGraphTypedPackets",JS_NewUint32(c,1));
+    if(!failed&&JS_SetPropertyStr(c,global,"__nativeOwnedGraphTypedPackets",JS_NewUint32(c,1))<0)failed=true;
     if(!failed&&JS_SetPropertyStr(c,global,"__nativeOwnedNumericAddress",JS_TRUE)<0)failed=true;
     struct Entry{const char* name;JSCFunction* function;int arguments;};
     const Entry entries[]{

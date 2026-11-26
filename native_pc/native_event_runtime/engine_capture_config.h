@@ -148,6 +148,21 @@ public:
             if(!next->check_ready)next->check_program.fields.clear();else next->check_program.tiers=1;
             next->primitive_ready=next->check_ready;
             for(const auto& field:next->check_program.fields)if(field.project&&field.observations.empty())next->primitive_ready=false;
+            if(next->primitive_ready){
+                // Exact declarative layout, not a collision-prone hash. It is
+                // derived once from this immutable program, never live values.
+                auto& layout=next->check_program.typed_layout;
+                layout="v1|"+std::to_string(next->check_program.fields.size());
+                unsigned original=0;
+                for(const auto& field:next->check_program.fields){
+                    const auto index=original++;if(!field.project)continue;
+                    layout+="|"+std::to_string(index)+":"+std::to_string(field.bytes)+":"+std::to_string(field.observations.size());
+                    for(const auto& codec:field.observations){
+                        const char* kind=codec.kind==1?"u32":codec.kind==5?"i32":codec.kind==2?"u64":"i64";
+                        layout+=":"+std::string(kind)+"@"+std::to_string(codec.offset);
+                    }
+                }
+            }
         }
         if (!publication && next->available) {
             next->body_insertion=plan_uint(graph.at("body_insertion_index"),next->code->plan->field_count);
