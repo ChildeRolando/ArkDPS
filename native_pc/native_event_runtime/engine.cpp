@@ -1153,7 +1153,7 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
             const auto active=runtime.active.load(std::memory_order_acquire);
             const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
             const auto activity=runtime.activity_generation.load(std::memory_order_acquire);
-            if (!runtime.terminal_fence.accepts(active,reserved,activity,capture_read,nullptr)) return false;
+            if (!runtime.terminal_fence.accepts(active,reserved,activity,capture::capture_read,nullptr)) return false;
             std::atomic_thread_fence(std::memory_order_seq_cst);
             return runtime.active.load(std::memory_order_acquire)==0
                 && runtime.lanes->reserved.load(std::memory_order_acquire)==reserved
