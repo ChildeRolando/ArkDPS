@@ -135,6 +135,8 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
 const __arkdpsControlledFrames=new WeakMap();
 const __arkdpsBatchAuthority=(()=>{
  const nativeAdvance=globalThis.__nativeBoundedReplayAdvance,nativeHealth=globalThis.__nativeReplayHealthy;
+ const cap=typeof nativeAdvance==='function'?Object.getOwnPropertyDescriptor(nativeAdvance,'arkdpsControlledFinish'):undefined;
+ const controlledFinish=cap!==undefined&&Object.hasOwn(cap,'value')&&cap.value===1&&cap.writable===false&&cap.configurable===false;
  const dispatchOwner=__arkdpsReplayDispatch,beginOwner=__arkdpsReplayBegin,endOwner=__arkdpsReplayEnd;
  const pending=new WeakMap(),active=new WeakSet();
  const valid=(state,record)=>state!==null&&typeof state==='object'&&active.has(state)&&state.record===record;
@@ -147,7 +149,7 @@ const __arkdpsBatchAuthority=(()=>{
   },
   run(advance,controller,header,dispatch){
    if(typeof dispatch!=='function'||typeof advance!=='function'||!(header instanceof ArrayBuffer)||header.byteLength!==176)throw Error('invalid bounded replay entry');
-   const trusted=typeof nativeAdvance==='function'&&advance===nativeAdvance&&dispatch===dispatchOwner&&__arkdpsSealedProvider()!==null;
+   const trusted=controlledFinish&&typeof nativeAdvance==='function'&&advance===nativeAdvance&&dispatch===dispatchOwner&&__arkdpsSealedProvider()!==null;
    const view=new DataView(header);let answer,count=0;
    for(;;){
     const item=advance(controller,answer);answer=undefined;

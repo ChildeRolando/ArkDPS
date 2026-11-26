@@ -1011,6 +1011,19 @@ JSValue js_batch_advance(JSContext* c,JSValueConst,int count,JSValueConst* args)
         return packet;
     });
 }
+// A version gate for bootstrap/source compatibility, never a substitute for
+// the native-held controller and finish validation below.
+JSValue controlled_advance_function(JSContext* c) {
+    auto fn=JS_NewCFunction(c,js_batch_advance,"__nativeBoundedReplayAdvance",2);
+    if(JS_IsException(fn))return fn;
+    if(JS_DefinePropertyValueStr(c,fn,"arkdpsControlledFinish",JS_NewInt32(c,1),0)<0){JS_FreeValue(c,fn);return JS_EXCEPTION;}
+    return fn;
+}
+void install_controlled_advance(JSContext* c,JSValueConst global) {
+    auto fn=controlled_advance_function(c);
+    if(JS_IsException(fn))throw std::runtime_error(exception(c));
+    if(JS_SetPropertyStr(c,global,"__nativeBoundedReplayAdvance",fn)<0)throw std::runtime_error(exception(c));
+}
 unsigned replay_bounded_batch(std::size_t first_size,std::chrono::steady_clock::time_point deadline,unsigned remaining) {
     auto& runtime=state();auto* c=runtime.context;auto& batch=replay_batch_state();
     if(batch.active)throw std::runtime_error("nested bounded replay batch");
@@ -1245,7 +1258,7 @@ void initialize_on_worker(const std::string& source) {
     function(c,global,"__publishCaptureScope",js_publish_scope,1);
     function(c,global,"__publishCapturePublication",js_publish_publication,1);
     function(c,global,"__nativeReplayHealthy",js_replay_healthy,0);
-    function(c,global,"__nativeBoundedReplayAdvance",js_batch_advance,2);
+    install_controlled_advance(c,global);
     runtime.batch_advance=JS_GetPropertyStr(c,global,"__nativeBoundedReplayAdvance");
     function(c,global,"__send",js_send,1);function(c,global,"__nativeActive",js_active,0);function(c,global,"__pid",js_pid,0);
     try {

@@ -54,7 +54,7 @@ def main():
         return
     assert args.fixture=='bounded', 'production HP fixture requires --build-only and its explicit workload runner'
     cases = []
-    for case in ['normal', 'fault', 'early', 'pending', 'string', 'nan', 'lease', 'health', 'nativefault', 'mode', 'phase', 'root', 'cp', 'hook', 'status', 'planned', 'false-health']:
+    for case in ['normal', 'fault', 'early', 'pending', 'string', 'nan', 'lease', 'health', 'nativefault', 'mode', 'phase', 'root', 'cp', 'hook', 'status', 'planned', 'false-health', 'no-cap', 'bool-cap', 'mutable-cap']:
         run = subprocess.run([str(binary), case], cwd=ROOT, capture_output=True, text=True, timeout=10)
         (output/(case+'.log')).write_text(run.stdout + run.stderr)
         assert run.returncode == 0 and 'PASS_OWNED_BATCH' in run.stdout, (case, run.returncode, run.stdout, run.stderr)

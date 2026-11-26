@@ -33,7 +33,11 @@ int main(int argc,char** argv){
  auto& runtime=state();runtime.runtime=JS_NewRuntime();runtime.context=JS_NewContext(runtime.runtime);auto* c=runtime.context;
  arkdps::capture::CaptureLanes::Config limits;limits.lane_queue={16,65536};limits.spill={16,65536};runtime.lanes=std::make_unique<arkdps::capture::CaptureLanes>(limits);
  owned::install(c,[]()noexcept{state().lanes->poison(LaneFault::replay_structure);});
- auto global=JS_GetGlobalObject(c);function(c,global,"__nativeReplayHealthy",js_replay_healthy,0);function(c,global,"__pid",js_pid,0);function(c,global,"__nativeActive",js_active,0);function(c,global,"__nativeBoundedReplayAdvance",js_batch_advance,2);
+ auto global=JS_GetGlobalObject(c);function(c,global,"__nativeReplayHealthy",js_replay_healthy,0);function(c,global,"__pid",js_pid,0);function(c,global,"__nativeActive",js_active,0);if(test_mode=="no-cap"||test_mode=="bool-cap"||test_mode=="mutable-cap"){
+  auto fn=JS_NewCFunction(c,js_batch_advance,"__nativeBoundedReplayAdvance",2);
+  if(test_mode!="no-cap")assert(JS_DefinePropertyValueStr(c,fn,"arkdpsControlledFinish",test_mode=="bool-cap"?JS_TRUE:JS_NewInt32(c,1),test_mode=="mutable-cap"?JS_PROP_C_W_E:0)>=0);
+  assert(JS_SetPropertyStr(c,global,"__nativeBoundedReplayAdvance",fn)>=0);
+ }else install_controlled_advance(c,global);
  runtime.batch_advance=JS_GetPropertyStr(c,global,"__nativeBoundedReplayAdvance");function(c,global,"__ownedInvalidate",invalidate_binding,1);
  std::ifstream stream("native_pc/native_event_runtime/bridge.js");std::string bridge((std::istreambuf_iterator<char>(stream)),{});assert(!bridge.empty());script(c,bridge);
  runtime.replay_dispatch=JS_GetPropertyStr(c,global,"__arkdpsReplayDispatch");runtime.replay_batch=JS_GetPropertyStr(c,global,"__arkdpsReplayBatch");
@@ -69,6 +73,7 @@ int main(int argc,char** argv){
  assert(runtime.batch_calls==1&&runtime.batch_issued==replay_batch_state().issued&&runtime.batch_finalized==replay_batch_state().finalized);
  if(fault)assert(runtime.batch_issued==2&&runtime.batch_finalized==1);
  if(!fault&&!malformed&&!binding_fault&&!changed_health)assert(runtime.batch_issued==3&&runtime.batch_finalized==3&&runtime.maximum_batch_edges==3&&runtime.batch_barriers==1);
+ if(test_mode=="no-cap"||test_mode=="bool-cap"||test_mode=="mutable-cap")assert(owned::binding().lease_calls==8&&owned::binding().status_calls==4&&runtime.replay_health_calls==4&&runtime.controlled_finish_checks==3);
  if(test_mode=="normal")assert(owned::binding().lease_calls==2&&owned::binding().status_calls==1&&runtime.replay_health_calls==1&&runtime.controlled_finish_checks==3);
  // Independent rejection of a public call without the native-issued controller.
  if(runtime.lanes->failure.load()==0){JSValue wrong[]{JS_NewObject(c),JS_UNDEFINED};auto rejected=js_batch_advance(c,JS_UNDEFINED,2,wrong);assert(JS_IsException(rejected)&&runtime.lanes->failure.load()==static_cast<unsigned>(LaneFault::replay_structure));auto ignored=JS_GetException(c);JS_FreeValue(c,ignored);JS_FreeValue(c,wrong[0]);}
