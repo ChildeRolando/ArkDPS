@@ -33,6 +33,8 @@ check(arrays.some(node=>node.max_count===32&&node.element_bytes===24&&node.skip_
 check(arrays.some(node=>node.max_count===64&&node.element_bytes===8));
 check(arrays.some(node=>node.max_count===128&&node.count_offset===0x20));
 check(plan.projections.some(node=>node.gate==='ancestor'&&node.expected_class===metadata.classes.Character&&node.ancestry_depth===10));
+check(plan.projections.filter(node=>node.local_fail_boundary===true).length===3);
+check(plan.projections.filter(node=>node.parent_byte_offset===0x90&&node.parent_byte_value===1).length===2);
 check(plan.max_bytes===1048576&&plan.max_reads===65536);
 assert.throws(()=>vm.runInContext('__arkdpsBuildColdCapturePlan({...metadata,cold_metadata_ready:false})',context));checks++;
 assert.throws(()=>vm.runInContext('__arkdpsColdMetadataRead({toString:()=>"0xdead"},8)',context));checks++;

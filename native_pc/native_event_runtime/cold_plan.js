@@ -2,6 +2,15 @@
 // amount calculation or lifecycle decisions live in this module.
 'use strict';
 const __arkdpsColdMetadata=new Map();
+const __arkdpsColdClassIdentities=new Map();
+function __arkdpsColdClassIdentity(klass,name,namespace){
+ const classes=__arkdpsColdClassIdentities.get(namespace+':'+name);
+ if(!classes){
+  if(typeof __arkdpsReplayGap==='function'&&__arkdpsReplayActive())__arkdpsReplayGap('unverified cold class identity '+namespace+':'+name);
+  throw new Error('unverified cold class identity '+namespace+':'+name);
+ }
+ return classes.has(klass.toString());
+}
 function __arkdpsColdMetadataSeal(address,size){
  const key=address.toString()+':'+size,bytes=address.readByteArray(size);
  if(!(bytes instanceof ArrayBuffer)||bytes.byteLength!==size)throw new Error('cold metadata unreadable');
@@ -27,7 +36,9 @@ function __arkdpsPrepareColdMetadata(meta){
  const fromType=api('il2cpp_class_from_type','pointer',['pointer']);
  const warmName=k=>{
   if(!k||k.isNull())return;
-  className(k);classNamespace(k);
+  const name=className(k),namespace=classNamespace(k),key=namespace+':'+name;
+  if(!__arkdpsColdClassIdentities.has(key))__arkdpsColdClassIdentities.set(key,new Set());
+  __arkdpsColdClassIdentities.get(key).add(k.toString());
   if(!parents.has(k.toString())){
    parents.add(k.toString());__arkdpsColdMetadataSeal(k.add(0x58),8);
    warmName(k.add(0x58).readPointer());
@@ -122,12 +133,12 @@ function __arkdpsBuildColdCapturePlan(metadata){
  const typed=(name,path,bytes,children,extra={})=>object(path,bytes,children,{gate:'exact',expected_class:klass(name),...extra});
  const arrayHeader=(max_visits)=>object([0x10],32,[],{max_visits,allow_null:true});
  const data=(path,max_visits)=>typed('BattleCharacterData',path,8,[scalar(0x50,32,max_visits),scalar(0x90,2,max_visits),scalar(0x98,12,max_visits),
-  text([0x50],max_visits),text([0x98],max_visits,true)],{max_visits});
+  text([0x50],max_visits),{...text([0x98],max_visits,true),parent_byte_offset:0x90,parent_byte_value:1}],{max_visits});
  const card=typed('PlayerCard',[0x40],32,[text([0x10],8,true),text([0x18],8,true)],{max_visits:8,allow_null:true});
  const scene=typed('ScenePlayerData',[8],32,[text([0x18],8),card],{max_visits:8});
  const playerList=object([0x18],32,[arrayHeader(1),array([],0x18,0x10,16,8,1,[scene])]);
  const playerModel=typed('AutoChessPlayerDataModel',[0xf8],8,[playerList]);
- const chess=typed('ChessInst',[0],80,[data([0x48],256)],{max_visits:256});
+ const chess=typed('ChessInst',[0],80,[data([0x48],256)],{max_visits:256,local_fail_boundary:true});
  const chessList=object([8],32,[arrayHeader(8),array([],0x18,0x10,8,64,8,[chess])],{max_visits:8});
  const groupList=object([0x20],32,[arrayHeader(1),array([],0x18,0x10,16,8,1,[chessList])]);
  const battle=typed('AutoChessBattleDataModel',[0xe8],8,[groupList]);
@@ -140,9 +151,9 @@ function __arkdpsBuildColdCapturePlan(metadata){
  const manager=typed('AutoChessGameManager',[16],8,[status,center],{max_visits:32,allow_null:true});
  const dict=object([0x10],48,[object([0x18],32),array([],0x20,0x18,24,32,1,[manager],{skip_negative_i32_offset:0})]);
  const host=typed('SingletonHost',[0x2e8],8,[dict]);
- const character=object([0],40,[data([0x538],128)],{gate:'ancestor',expected_class:klass('Character'),ancestry_depth:10,max_visits:128});
+ const character=object([0],40,[data([0x538],128)],{gate:'ancestor',expected_class:klass('Character'),ancestry_depth:10,max_visits:128,local_fail_boundary:true});
  const container=object([0x18],36,[arrayHeader(1),array([],0x20,0x10,8,128,1,[character])]);
- const units=typed('UnitManager',[0x2c0],8,[container]);
+ const units=typed('UnitManager',[0x2c0],8,[container],{local_fail_boundary:true});
  const root=typed('BattleController',[0x58,0xb8,0],0x18,[object([0x10],48),object([0xe0],56,[object([0x30],8)]),
   object([0x160],8,[text([0x18],1,false,200)]),scalar(0x228,4)]);
  const autoRoot=typed('BattleController',[0x58,0xb8,0],8,[host,units]);
