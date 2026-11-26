@@ -1,5 +1,6 @@
 // Narrow compatibility surface for the unmodified PC event probe. Not a Frida runtime.
 'use strict';
+globalThis.__arkdpsNativeCaptureControl=true;
 function __integer(value) {
  if(value instanceof NativePointer)return value.value;
  if(value instanceof NativeInteger)return value.value;
@@ -117,6 +118,8 @@ function __arkdpsRequest(json){
   case 'read':result=api.readEvents(command.after,command.through);break;
   case 'terminal_read':result=api.readTerminalEvents(command.after,command.through);break;
   case 'ack':result=api.ackEvents(command.sequence);break;
+  case 'capture_status':result=api.captureControlStatus();break;
+  case 'capture_control':result=api.setCapturePaused(command.paused,command.revision);break;
   case 'stop':result=api.stop();break;
   default:throw new Error('unknown operation');
  }

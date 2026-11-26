@@ -186,6 +186,8 @@ KEY_EVENTS = {
     'observer_cleanup_error': ('error_type', 'code'),
     'observer_retry': ('generation', 'previous_status', 'status'),
     'observer_recovery_deferred': ('generation', 'observer_status', 'code', 'can_restart_in_process'),
+    'event_capture_segment': ('reason', 'revision', 'previous_feed', 'feed'),
+    'event_capture_control': ('supported', 'requested_paused', 'paused', 'state', 'revision'),
     'native_hook_request_failed': ('op', 'error_type', 'win32_error', 'code', 'response_bytes',
                                    'response_limit', 'requested_event_count'),
     'lifecycle_state': ('previous', 'state'),

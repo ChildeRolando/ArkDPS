@@ -1495,6 +1495,19 @@ class BattleSessions:
         self._archived = True
         self.state = 'ended'
 
+    def next_capture_segment(self, reason, feed_id):
+        """Shared live/replay boundary for an intentional partial observation."""
+        if (reason not in ('event_capture_paused', 'event_capture_resumed')
+                or not isinstance(feed_id, str) or not feed_id or feed_id == self.feed_id):
+            raise ValueError('invalid capture segment boundary')
+        self._close_event_gap(reason)
+        self.metadata['capture_segment'] = dict(reason=reason, complete=False)
+        self._archive(reason)
+        successor = BattleSessions(feed_id)
+        successor._archives.extend(self.pop_archives())
+        successor.capture_segment_reason = reason
+        return successor
+
     def _terminal_update(self, observation):
         if observation.sample is None:
             # A short read during settlement did not consume or lose any
@@ -1686,6 +1699,11 @@ class BattleSessions:
             return False
         if observation.kind not in ('sample', 'terminal', 'gap', 'end', 'waiting', 'preparing', 'scope_unavailable'):
             raise ValueError('unknown observation kind')
+        if (observation.events or {}).get('capture_pause_tail') is True:
+            if (observation.kind not in ('sample', 'terminal') or self.adapter is None
+                    or observation.generation != self.generation):
+                raise ValueError('pause tail does not belong to the active observation segment')
+            self.adapter.statistics.event_coverage_broken = True
         if observation.kind == 'scope_unavailable':
             self._multiplayer_call('invalidate_presence')
             if observation.generation > self.generation:
@@ -1773,14 +1791,17 @@ class BattleSessions:
             # its independent archive copy cannot be lost with the new sample.
             event_observation = observation
             if observation.generation > self.generation:
+                segment_reason = getattr(self, 'capture_segment_reason', None)
                 previous_stream = self.adapter.event_stream if self.adapter is not None else None
-                pending_bootstrap = verified_pending_scope_start(observation.sample, observation.events,
-                    previous_sequence=previous_stream.sequence if previous_stream is not None else None)
+                pending_bootstrap = (None if segment_reason else verified_pending_scope_start(
+                    observation.sample, observation.events,
+                    previous_sequence=previous_stream.sequence if previous_stream is not None else None))
                 self._archive('new_battle', successor=observation)
                 previous_multiplayer = self.multiplayer
                 bootstrap = pending_bootstrap
                 bootstrap_error = None
-                if bootstrap is None and observation.events and isinstance(observation.events.get('drain'), dict):
+                if (not segment_reason and bootstrap is None and observation.events
+                        and isinstance(observation.events.get('drain'), dict)):
                     try:
                         bootstrap = verified_autochess_round_start(observation.sample,
                             observation.events['drain'], observation.events.get('after'))
@@ -1817,6 +1838,10 @@ class BattleSessions:
                     self.multiplayer.inherit_settlement_scopes(previous_multiplayer, observation.sample)
                 self.multiplayer_error = None
                 self.metadata = self._metadata(observation.sample)
+                if segment_reason:
+                    self.metadata['capture_segment'] = dict(reason=segment_reason, complete=False)
+                    self.adapter.statistics.event_coverage_broken = True
+                    self.capture_segment_reason = None
                 self.snapshot_intervals = []
                 self._snapshot_open = False
                 if bootstrap is not None:
@@ -1941,6 +1966,67 @@ class BattleRuntime:
         self.record = lambda observation: None
         self._pending_event_ack = None
         self._accepted_event_observer = None
+
+    def settle_event_ack(self, observer):
+        """Confirm only the previously admitted prefix before a control boundary."""
+        pending = self._pending_event_ack
+        if pending is None:
+            return True
+        if (pending[0] is not observer or len(pending) < 5
+                or probe_cursor_lifetime(observer) is not pending[4]):
+            raise CaptureRetry('事件确认仍属于旧观察器，不能切换采集片段')
+        sample = self.sessions.latest_sample or {}
+        contract = contract_for(observer, sample)
+        if pending[2] != contract.ack_scope(sample, self.sessions.generation):
+            raise CaptureRetry('事件确认仍属于旧战局，不能切换采集片段')
+        if contract.ack_mark_required:
+            final = pending[3]
+            if final is not None:
+                checked = observer.read_terminal_tail(pending[1])
+                valid = checked.get('after') == final and checked.get('sequence') == pending[1]
+            else:
+                valid = contract.validate_ack_mark(sample, _observer_mark(observer), pending[1])
+            if not valid:
+                raise CaptureRetry('原事件前缀尚未取得同源确认')
+        confirmed = acknowledge_event_batch(observer, pending[1])
+        if confirmed:
+            if pending[3] is not None:
+                self.sessions.terminal_acknowledged(True)
+            self._pending_event_ack = None
+        return bool(confirmed)
+
+    def control_tail_ready(self, sequence):
+        if self.sessions.adapter is None:
+            return True  # No earlier host observation segment exists.
+        capture = self.sessions.capture
+        stream = self.sessions.adapter.event_stream
+        return (stream is not None and stream.sequence >= sequence
+                and self._pending_event_ack is None and not capture.closed)
+
+    def poll_control_tail(self, collector, observer, sequence, generation):
+        """Admit an owned pause tail without starting a different battle baseline."""
+        observation = self._acquire(collector, observer)
+        if (observation.kind not in ('sample', 'terminal') or observation.generation != generation
+                or self.sessions.capture is None or self.sessions.capture.closed):
+            raise CaptureRetry('暂停前事件尾部尚不能在原战局中验证，保留原输入与队列')
+        observation = replace(observation, events=dict(observation.events or {}, capture_pause_tail=True))
+        consumed = self._consume(observation)
+        self._acknowledge_observation(observation, observer, consumed)
+        return observation
+
+    def begin_capture_segment(self, reason):
+        """Seal an observation fragment without inventing a new native battle."""
+        if self._pending_event_ack is not None:
+            raise CaptureRetry('原事件前缀尚未确认，不能切换采集片段')
+        previous_feed = self.feed.id
+        # Only the host observation namespace changes. Acquired game identities
+        # remain untouched, and the existing durable history queue retains ownership.
+        feed = BattleFeed()
+        sessions = self.sessions.next_capture_segment(reason, feed.id)
+        self.feed, self.sessions = feed, sessions
+        self.view = BattleView(self.sessions)
+        self._accepted_event_observer = None
+        return dict(reason=reason, previous_feed=previous_feed, feed=self.feed.id)
 
     def _consume(self, observation):
         # Reject an invalid live handoff before journaling it as a consumable

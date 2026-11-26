@@ -23,6 +23,7 @@ from event_observer import ObserverStatus
 from event_probe import (NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry, AssembledProbeSource,
                          assemble_probe_source, ready_probe_modes, acquire_native_terminal_tail,
                          reset_probe_cursor, commit_probe_prefix, check_round_start_range, read_probe_range,
+                         request_capture_pause,
                          finite_message_number as _finite_number,
                          reject_message_constant as _reject_constant,
                          unique_message_fields as _unique_fields)
@@ -704,6 +705,8 @@ class NativeHookEventProbe:
         self.status = ObserverStatus.STOPPED
         self.error = None
         self.probe_modes = {}
+        self.capture_paused = False
+        self._capture_control_revision = self._capture_control_generation = 0
         self.cleanup_errors = {}
         self._loader = self._pipe = self._config = None
         self._started = self._attempted = False
@@ -801,6 +804,8 @@ class NativeHookEventProbe:
                 if not process.process_alive():
                     raise RuntimeError('游戏进程在原生组件偏好初始化期间退出')
             self.probe_modes = ready_probe_modes(hello['ready'])
+            if type(hello.get('capture_pause_version')) is int and hello['capture_pause_version'] == 1:
+                self.probe_modes['native_capture_pause_version'] = 1
             self.probe_modes['probe_source'] = dict(assembled.audit(), provider=PROVIDER, protocol=PROTOCOL,
                 submitted_sha256=sha256(source.encode('utf-8')).hexdigest(),
                 dll_sha256=image_sha256, frida_required=False,
@@ -833,7 +838,7 @@ class NativeHookEventProbe:
             if self._timing_sink is not None:
                 try:
                     diagnostic = dict(
-                        op=operation if operation in ('mark', 'read', 'ack', 'terminal_read', 'stop') else 'other',
+                        op=operation if operation in ('mark', 'read', 'ack', 'terminal_read', 'stop', 'capture_control') else 'other',
                         error_type=type(exc).__name__,
                         win32_error=getattr(exc, 'winerror', None) or getattr(exc, 'errno', None),
                         utc=datetime.now(timezone.utc).isoformat())
@@ -890,6 +895,16 @@ class NativeHookEventProbe:
 
     def mark(self):
         return self._request('mark', native_quiet_boundary_version=1, **self._mark_options())
+
+    @property
+    def capture_pause_supported(self):
+        version = self.probe_modes.get('capture_pause_version')
+        native_version = self.probe_modes.get('native_capture_pause_version')
+        return (type(version) is int and version == 1
+                and type(native_version) is int and native_version == 1)
+
+    def set_capture_paused(self, paused, revision):
+        return request_capture_pause(self, paused, revision)
 
     def read_terminal_mark(self):
         self.last_terminal_response = None

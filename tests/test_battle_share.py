@@ -6,7 +6,7 @@ import pytest
 
 from battle_history import BattleHistory, BattleRecord
 from battle_share import (json_bytes, record_labels, record_statistics,
-                          write_export)
+                          record_display, write_export)
 from panel_model import PanelConfig, Category
 from test_battle_history import record
 
@@ -26,6 +26,22 @@ def exported_record(payload):
     """Split the export into its display-only block and the versioned record."""
     data = json.loads(payload)
     return data.pop('display'), data
+
+
+@pytest.mark.parametrize('reason,label', [('event_capture_paused', '事件暂停'),
+                                         ('event_capture_resumed', '事件恢复')])
+def test_manual_capture_fragments_are_labeled_in_history_and_export(reason, label):
+    data = record(outcome='victory').to_dict()
+    data['reason'] = reason
+    data['metadata']['capture_segment'] = dict(reason=reason, complete=False)
+    fragment = BattleRecord.from_dict(data)
+    display = record_display(fragment)
+    assert display['outcome'] == '采样片段'
+    assert display['capture_segment_label'] == '采样片段 · ' + label
+    assert '逐次统计仅覆盖本片段' in display['capture_warning']
+    exported, preserved = exported_record(json_bytes(fragment))
+    assert exported['capture_segment_label'] == display['capture_segment_label']
+    assert preserved == fragment.to_dict()
 
 
 def test_export_is_exact_versioned_record_with_unknown_zero_precision_and_coverage():

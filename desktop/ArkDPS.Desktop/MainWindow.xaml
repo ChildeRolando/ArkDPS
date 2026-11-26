@@ -698,18 +698,22 @@
    <Border x:Name="SideStatusBar" Grid.Row="2" Background="{DynamicResource Card}" BorderBrush="{DynamicResource Edge}" BorderThickness="0,1,0,0" Padding="10,5">
     <StackPanel>
      <TextBlock x:Name="SideAttachmentStatus" Visibility="Collapsed" Foreground="{DynamicResource Ink}" FontSize="12"/>
-     <DockPanel ToolTip="{Binding ToolTip, ElementName=StatusBadge}">
-      <TextBlock x:Name="SideGameFpsStatus" DockPanel.Dock="Right" Text="FPS —" Width="74" Margin="8,0,0,0"
+     <TextBlock x:Name="SideStackCaptureStatus" Visibility="Collapsed" Foreground="{DynamicResource Muted}" FontSize="11"
+                Margin="0,0,0,3" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite"/>
+     <DockPanel x:Name="SideStatusLine" ToolTip="{Binding ToolTip, ElementName=StatusBadge}">
+      <Button x:Name="SideEventCaptureButton" DockPanel.Dock="Right" Content="暂停事件" Click="ToggleEventCapture"
+              MinWidth="82" MinHeight="30" Padding="7,3" Margin="6,0,0,0" IsEnabled="False"
+              ToolTip="等待采集端报告事件采集状态" ToolTipService.ShowOnDisabled="True"
+              AutomationProperties.Name="暂停逐次事件采集" AutomationProperties.LiveSetting="Polite"/>
+      <TextBlock x:Name="SideGameFpsStatus" DockPanel.Dock="Right" Text="FPS —" Width="68" Margin="6,0,0,0"
                  Foreground="{DynamicResource Muted}" FontFamily="{DynamicResource DataFont}" FontSize="11"
                  TextAlignment="Right" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
                  ToolTip="等待游戏帧率采样"/>
       <Ellipse DockPanel.Dock="Left" Width="7" Height="7" VerticalAlignment="Center" Margin="0,0,6,0"
                Fill="{Binding Fill, ElementName=StatusLight}"/>
       <TextBlock x:Name="SideDataStatus" Text="{Binding Text, ElementName=Status}" Foreground="{DynamicResource Muted}" FontSize="11"
-                 TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
+                 TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
      </DockPanel>
-     <TextBlock x:Name="SideStackCaptureStatus" Visibility="Collapsed" Foreground="{DynamicResource Muted}" FontSize="11"
-                Margin="0,3,0,0" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite"/>
     </StackPanel>
    </Border>
   </Grid>
