@@ -10,6 +10,8 @@
 
 ## 实验与实证
 
+- [手动对局性能计时](performance-timings.md) — 低开销开关、原生/宿主/WPF 阶段、日志解释与 rc.43 私有计时包验收。
+
 - [官服 PC Frida 生命周期与恢复约束](native-pc-frida-state-machine.md) — 状态转换、资源所有权、请求世代与覆盖验证。
 
 - [单局战斗事件与计算要素挖掘](battle-event-research.md) — 当前采集边界、公开线索、事件矩阵和验证顺序。
