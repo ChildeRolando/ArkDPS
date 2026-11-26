@@ -58,6 +58,22 @@ def start_pending(case):
     assert case.fixture.commits == [0, 1]
 
 
+def sample_empty_window_with_callback(case, monkeypatch):
+    source = case.fixture
+    case.advance(1.75)
+    mark = source.observer.mark
+    with monkeypatch.context() as sampling:
+        def opening_mark():
+            before = mark()
+            case.extra_epoch += 1
+            sampling.setattr(source.observer, 'mark', mark)
+            return before
+
+        sampling.setattr(source.observer, 'mark', opening_mark)
+        assert source.poll().kind == 'preparing'
+    assert source.range_reads == [(1, 1)] and source.commits == [0, 1]
+
+
 def test_pending_ack_applied_but_reply_lost_never_reduces_first_hit_twice(monkeypatch):
     case = pending_case(monkeypatch)
     source = case.fixture
@@ -83,7 +99,7 @@ def test_pending_ack_applied_but_reply_lost_never_reduces_first_hit_twice(monkey
     assert player['skill_initialization']['reason_codes'] == ['baseline_not_zero_tick']
 
 
-@pytest.mark.parametrize('fault', ['zero', 'consumer_seed', 'raw_guard', 'accounts', 'missing_page',
+@pytest.mark.parametrize('fault', ['zero', 'consumer_seed', 'raw_guard', 'accounts', 'anchor_callback', 'missing_page',
     'page_generation', 'page_birth', 'sequence_gap', 'before_anchor', 'foreign_scope', 'merged_drain'])
 def test_pending_transaction_raw_tamper_fails_before_new_receiver_or_ack(monkeypatch, fault):
     case = pending_case(monkeypatch)
@@ -97,6 +113,7 @@ def test_pending_transaction_raw_tamper_fails_before_new_receiver_or_ack(monkeyp
     elif fault == 'consumer_seed': tx['anchor']['sample']['autochess_lifecycle_baseline_ready'] = True
     elif fault == 'raw_guard': tx['anchor']['sample']['native_window_guard']['before']['native_identity']['stats'] = '0x60000'
     elif fault == 'accounts': tx['anchor']['after']['native_autochess_context']['players'][0]['uid'] = 'other'
+    elif fault == 'anchor_callback': tx['anchor']['before']['epoch'] -= 1
     elif fault == 'missing_page': tx['pages'] = []
     elif fault == 'page_generation': tx['pages'][0]['batch']['native_generation'] += 1
     elif fault == 'page_birth': tx['pages'][0]['batch']['native_process_created_filetime'] = 999
@@ -153,16 +170,22 @@ def test_bounded_pages_preserve_every_first_scope_hit_without_baseline_read(monk
     assert source.commits == [0, 1, 4]
 
 
-def test_no_reset_zero_output_scope_is_materialized_at_real_anchor_and_latest_empty_point(monkeypatch):
+@pytest.mark.parametrize('callback', [False, True], ids=['quiet', 'callback_without_output'])
+def test_no_reset_zero_output_scope_is_materialized_at_real_anchor_and_latest_empty_point(monkeypatch, callback):
     case = pending_case(monkeypatch); source = case.fixture
     start_pending(case)
-    case.advance(1.75)
-    assert source.poll().kind == 'preparing'
-    assert source.range_reads == [(1, 1)] and source.commits == [0, 1]
+    if callback:
+        sample_empty_window_with_callback(case, monkeypatch)
+    else:
+        case.advance(1.75)
+        assert source.poll().kind == 'preparing'
+        assert source.range_reads == [(1, 1)] and source.commits == [0, 1]
     case.advance(2, phase=7)
     ending = source.poll()
     assert ending.events['pending_scope_exit']['version'] == 1
     assert ending.sample['game_time'] == 1.75 and ending.sample['frame'] == 52
+    assert ending.events['before']['sequence'] == ending.events['after']['sequence'] == 1
+    assert ending.events['after']['epoch'] - ending.events['before']['epoch'] == int(callback)
     archives = source.runtime.sessions.pop_archives()
     assert len(archives) == 2  # Defense plus a genuine assistance scope with no output.
     empty = archives[-1]
@@ -180,6 +203,15 @@ def test_no_reset_zero_output_scope_is_materialized_at_real_anchor_and_latest_em
     for record in case.records:
         assert replay.consume(observation_from_json(asdict(record)))
     assert replay.pop_archives() == archives
+
+    observer = source.observer
+    case.advance(2.5, phase=4, next_round=True)
+    assert source.poll().kind == 'sample'
+    case.advance(3, amount=75)
+    source.poll()
+    assert source.observer is observer and source.commits == [0, 1, 1, 2]
+    player = source.runtime.sessions.multiplayer.result()['players'][2]
+    assert player['observed_damage'] == 75
 
 
 def test_real_serial_and_generation_reset_can_supersede_only_the_empty_prestart_fragment(monkeypatch):
@@ -222,6 +254,19 @@ def test_empty_reset_supersession_requires_exact_independent_and_source_fences(m
     assert source.runtime.feed._pending_scope is not None
 
 
+def test_reset_cannot_supersede_an_empty_window_that_spanned_a_callback(monkeypatch):
+    from test_pc_serial_clock_reset_end import reset_native_clock
+    case = pending_case(monkeypatch)
+    source = case.fixture
+    start_pending(case)
+    sample_empty_window_with_callback(case, monkeypatch)
+    reset_native_clock(case)
+    with pytest.raises(StreamGap, match='strict source-generation fence'):
+        source.poll()
+    assert source.commits == [0, 1]
+    assert source.runtime.feed._pending_scope is not None
+
+
 def test_zero_output_exit_raw_tamper_cannot_manufacture_an_archive(monkeypatch):
     case = pending_case(monkeypatch); source = case.fixture
     start_pending(case)
@@ -236,9 +281,12 @@ def test_zero_output_exit_raw_tamper_cannot_manufacture_an_archive(monkeypatch):
 
 
 @pytest.mark.parametrize('ending', ['battle_absent', 'finished', 'process_changed'])
-def test_pending_zero_scope_survives_an_actual_departure_without_a_reset(monkeypatch, ending):
+@pytest.mark.parametrize('callback', [False, True], ids=['initial_only', 'callback_without_output'])
+def test_pending_zero_scope_survives_an_actual_departure_without_a_reset(monkeypatch, ending, callback):
     case = pending_case(monkeypatch); source = case.fixture
     start_pending(case)
+    if callback:
+        sample_empty_window_with_callback(case, monkeypatch)
     if ending == 'process_changed':
         source.runtime.process_changed()
     else:
@@ -251,13 +299,43 @@ def test_pending_zero_scope_survives_an_actual_departure_without_a_reset(monkeyp
     archives = source.runtime.sessions.pop_archives()
     assert len(archives) == 2
     empty = archives[-1]
-    assert empty['last_sample']['game_time'] == 1.5
+    assert empty['last_sample']['game_time'] == (1.75 if callback else 1.5)
     assert empty['last_sample']['multiplayer']['coverage_start'] == 1.5
     assert empty['event_status'] != 'finished'
     assert source.runtime.feed._pending_scope is None and source.commits == [0, 1]
     replay = BattleSessions(case.records[0].feed)
     for record in case.records:
         assert replay.consume(observation_from_json(asdict(record)))
+    assert replay.pop_archives() == archives
+
+
+def test_unconsumed_prefix_cannot_replace_last_empty_scope_endpoint(monkeypatch):
+    case = pending_case(monkeypatch)
+    source = case.fixture
+    start_pending(case)
+    sample_empty_window_with_callback(case, monkeypatch)
+    case.advance(2, amount=75)
+    unconsumed = source.runtime._acquire(source.collector, source.observer)
+    assert [record['amount'] for record in unconsumed.events['drain']['events']] == [75]
+
+    life = deepcopy(source.collector.read_lifecycle())
+    life['battle'] = None
+    source.collector.read_lifecycle = lambda: deepcopy(life)
+    ending = source.poll()
+    assert ending.events['pending_scope_end']['reason'] == 'battle_absent'
+    assert ending.sample['game_time'] == 1.75
+    assert source.commits == [0, 1] and source.queue[0]['amount'] == 75
+    archives = source.runtime.sessions.pop_archives()
+    assert len(archives) == 2 and archives[-1]['event_status'] != 'finished'
+
+    replay = BattleSessions(ending.feed)
+    for record in case.records[:-1]:
+        assert replay.consume(observation_from_json(asdict(record)))
+    forged = asdict(ending)
+    forged['sample']['rows'] = [{'damage': 75}]
+    with pytest.raises(StreamGap, match='invalid positive-time empty scope witness'):
+        replay.consume(observation_from_json(forged))
+    assert replay.consume(observation_from_json(asdict(ending)))
     assert replay.pop_archives() == archives
 
 
