@@ -5,6 +5,10 @@ const traceNestedParent=globalThis.arkdpsTraceNestedParent===true;
 const coalesceEnemyHp=globalThis.arkdpsCoalesceEnemyHp!==false;
 const observeSourceCharacterUid=globalThis.arkdpsSourceCharacterUid!==false;
 function api(n,r,a){return new NativeFunction(il.getExportByName(n),r,a);}
+function registerProbeHook(address,callbacks){
+ if(typeof probeAdapter.prepareCaptureHook==='function')probeAdapter.prepareCaptureHook(address,callbacks);
+ return Interceptor.attach(address,callbacks);
+}
 function className(k){return k.add(0x10).readPointer().readCString();}
 function fieldOffsets(k,names){
  const seen=classFieldOffsets(k);
@@ -333,6 +337,7 @@ try{
   const finished=uniqueMethod(found.BattleController,'OnCharacterFinished',2);
   cfg.methods.push({owner:'BattleController',name:'OnCharacterFinished',address:finished.toString()});
  }catch(e){cfg.skillFinishError=String(e);}
+ if(typeof probeAdapter.prepareCaptureMetadata==='function')probeAdapter.prepareCaptureMetadata({found,clock,skillF,mitigationMethods,skillCastStateMethods,characterLifecycleMethods,enemyEntryConfig,enemyStateMethods,terminalMethods});
 } finally {api('il2cpp_thread_detach','void',['pointer'])(thread);}
 // A callback increments epoch on entry and remains active until its native
 // invocation returns. RPC marks are serialized with these JS callbacks.
@@ -2302,7 +2307,7 @@ function installMitigationHooks(){
  if(!mitigationMethods)return;
  const attached=[];
  function observe(address,name,enter,leave,cleanup,barrier=false){
-  attached.push(Interceptor.attach(address,{
+  attached.push(registerProbeHook(address,{
    arkdpsName:name,
    onEnter(args){
     this.tid=this.threadId;
@@ -2481,7 +2486,7 @@ function installEnemyEntryHooks() {
   for(const [method,address] of [['_UpdatePlayerSideAndMapLayer',enemyEntryConfig.layer],['Born',enemyEntryConfig.born]]){
    const label='enemy entry '+method;
    const isBorn=method==='Born';
-   installed.push(Interceptor.attach(address,{
+   installed.push(registerProbeHook(address,{
     arkdpsName:label,
     onEnter(args){
      if(stopped||fatal||!enemyEntryReady)return;
@@ -2541,7 +2546,7 @@ function installEnemyEntryHooks() {
     }
    }));
   }
-  installed.push(Interceptor.attach(enemyEntryConfig.recycle,{
+  installed.push(registerProbeHook(enemyEntryConfig.recycle,{arkdpsName:'BObject.OnRecycle',
    onEnter(args){
      if(!awaitingEnemyTile.size&&!enemyBirthProofs.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size
         &&!enemyHpBirths.size)return;
@@ -2573,7 +2578,7 @@ function installEnemyPhaseHook() {
  const label='enemy phase DoReborn';
  const installed=[];
  try{
-  installed.push(Interceptor.attach(enemyPhaseMethods.fakeDeath,{
+  installed.push(registerProbeHook(enemyPhaseMethods.fakeDeath,{arkdpsName:'Enemy.DoFakeDeath',
    onEnter(args){
     if(stopped||fatal)return;
     try{
@@ -2594,7 +2599,7 @@ function installEnemyPhaseHook() {
      if(this.started)endEnemyHook('Enemy.DoFakeDeath');
    }
   }));
-  installed.push(Interceptor.attach(enemyPhaseMethods.reborn,{
+  installed.push(registerProbeHook(enemyPhaseMethods.reborn,{arkdpsName:'Enemy.DoReborn',
    onEnter(args){
     if(stopped||fatal)return;
     try{
@@ -2728,7 +2733,7 @@ function installEnemyStateHooks() {
    };
    try{
     callbacks.arkdpsName='hp.'+label;
-    installed.push(Interceptor.attach(address,callbacks));
+    installed.push(registerProbeHook(address,callbacks));
     if(attributeChange)enemyMaxHpReady=enemyAttributesReady;
    }catch(e){
     if(!attributeChange)throw e;
@@ -2736,7 +2741,7 @@ function installEnemyStateHooks() {
    }
   }
   const label='Enemy.OnFinish';
-  installed.push(Interceptor.attach(enemyStateMethods.finish,{
+  installed.push(registerProbeHook(enemyStateMethods.finish,{arkdpsName:label,
    onEnter(args){
     if(stopped||fatal)return;
     try{
@@ -2772,7 +2777,7 @@ function installEnemyStateHooks() {
   if(enemyStateMethods.trapFinish){
    const label='Entity.OnFinish';
    try{
-    installed.push(Interceptor.attach(enemyStateMethods.trapFinish,{
+    installed.push(registerProbeHook(enemyStateMethods.trapFinish,{arkdpsName:label,
      onEnter(args){
       if(stopped||fatal)return;
       try{
@@ -2846,7 +2851,7 @@ function installCharacterBornHook(){
  if(!characterLifecycleMethods)return;
  const label='Character.Born';
  try{
- const hook=Interceptor.attach(characterLifecycleMethods.born,{
+ const hook=registerProbeHook(characterLifecycleMethods.born,{arkdpsName:label,
   onEnter(args){
    if(stopped||fatal)return;
    // Born may allocate instanceUid inside the call. Capture receiver/data and the raw clock first.
@@ -2906,7 +2911,7 @@ function installSkillCastStateHook(){
  if(!skillCastStateMethods)return;
  const label='BasicSkill.OnCastFinish';
  try{
-  const hook=Interceptor.attach(skillCastStateMethods.address,{
+  const hook=registerProbeHook(skillCastStateMethods.address,{
    arkdpsName:label,
    onEnter(args){
     if(stopped||fatal)return;
@@ -2953,7 +2958,7 @@ function shouldObserveCallback({owner,name}){
    ||owner==='Unit'&&name==='OnAfterOutputDamage');
 }
 for(const m of cfg.methods.filter(shouldObserveCallback)){
- hooks.push(Interceptor.attach(ptr(m.address),{
+ hooks.push(registerProbeHook(ptr(m.address),{
   arkdpsName:m.owner+'.'+m.name,
   onEnter(args){
    active++;epoch++;this.callbackEpoch=epoch;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
@@ -3433,7 +3438,7 @@ function currentTerminalBoundary(candidate=terminalBoundary){
 function installTerminalHooks(){
  if(!terminalMethods)return;
  try{
-  hooks.push(Interceptor.attach(terminalMethods.state,{
+  hooks.push(registerProbeHook(terminalMethods.state,{arkdpsName:'BattleController.set_state',
    onEnter(args){
     probeAdapter.enterTerminalStateHook(this,args);
     const state=args[1].toInt32();
@@ -3452,7 +3457,7 @@ function installTerminalHooks(){
     probeAdapter.leaveTerminalStateHook(this);
    }
   }));
-  hooks.push(Interceptor.attach(terminalMethods.destroy,{
+  hooks.push(registerProbeHook(terminalMethods.destroy,{arkdpsName:'BattleController.Destroy',
    onEnter(args){
     countTerminalDiagnostic('destroy_entered');
     this.generation=++terminalGeneration;
@@ -3545,7 +3550,7 @@ function installAutoChessRoundResetHook(){
  const label='BattleController.ClearRunTimeData';
  const otherCallbacks=()=>active>0||(probeAdapter.pendingMarkCallbacks?.()??0)>1;
  try{
-  hooks.push(Interceptor.attach(autoChessRoundResetMethod,{
+  hooks.push(registerProbeHook(autoChessRoundResetMethod,{arkdpsName:label,
    onEnter(args){
     if(!probeHooksReady||stopped||fatal)return;
     const unclaimed=autoChessUnclaimedZero;
