@@ -336,7 +336,7 @@ function __arkdpsNativeAddress(address){
 const __arkdpsHpObservationGeometry=new WeakMap(),__arkdpsPreparedHpObservations=new WeakMap();
 class __ArkDpsHpObservation {
  #replay;#packet;#geometry;#root;#attributes=null;
- constructor(replay,packet,geometry,receiver,root,contract,prepared){this.#replay=replay;this.#packet=packet;this.#geometry=geometry;this.#root=root;if(prepared)__arkdpsPreparedHpObservations.set(this,{replay,contract,root});Object.freeze(this);}
+ constructor(replay,packet,geometry,receiver,root){this.#replay=replay;this.#packet=packet;this.#geometry=geometry;this.#root=root;Object.freeze(this);}
  #active(){if(this.#replay!==__arkdpsReplay)__arkdpsReplayGap('HP observation lease ended');}
  #object(receiver){this.#active();let root;try{root=__integer(receiver);}catch(error){__arkdpsReplayGap('invalid HP observation receiver');}if(root!==this.#root)__arkdpsReplayGap('HP observation receiver changed');}
  #fact(name){
@@ -403,7 +403,9 @@ function __arkdpsCreateHpObservation(contract,receiver,prepared){
  if(prepared!==undefined&&packet!==prepared)__arkdpsReplayGap('prepared HP packet identity changed');
  if(!Array.isArray(packet)||packet.length!==geometry.length||packet[0]!==1||packet[1]!==geometry.count||packet[2]!== (replay.record.edge==='entry'?0:1)||packet[3]!== (replay.record.checkpoint??0)||packet[4]!==replay.record.facts?.mode_epoch)__arkdpsReplayGap('invalid HP observation packet');
  try{Object.freeze(packet);}catch(error){__arkdpsReplayGap('mutable HP observation packet');}
- return new __ArkDpsHpObservation(replay,packet,geometry,receiver,root,contract,prepared!==undefined);
+ const io=new __ArkDpsHpObservation(replay,packet,geometry,receiver,root);
+ if(prepared!==undefined)__arkdpsPreparedHpObservations.set(io,{replay,contract,root});
+ return io;
 }
 function __arkdpsOwnedHpObservation(contract,receiver){return __arkdpsCreateHpObservation(contract,receiver,undefined);}
 function __arkdpsPreparedHpObservation(contract,receiver,packet){
