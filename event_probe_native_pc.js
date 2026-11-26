@@ -741,7 +741,7 @@ function compileCapturedScopeReads(graph){
  const fields=Object.isFrozen(graph.fields)?graph.fields:scopeReadGeometry(graph.fields);
  reads=Object.freeze(fields.map((field,index)=>{
   const base=Object.freeze(ptr(field.absolute_address)),path=field.pointer_offsets;
-  const kind=field.kind==='utf16'?0:field.bytes===12?1:Array.isArray(field.expected)?2:field.bytes===4?3:4;
+  const kind=field.kind==='utf16'?0:(field.role==='scope.clock_open'||field.role==='scope.clock_close')?1:Array.isArray(field.expected)?2:field.bytes===4?3:4;
   const expectedPointer=kind===4&&field.expected!==undefined&&field.expected!==null?Object.freeze(ptr(field.expected)):null;
   return Object.freeze({role:field.role,slot:index,base,path,offset:field.offset,
    address:path.length?null:Object.freeze(base.add(field.offset)),kind,bytes:field.bytes,expected:field.expected,expectedPointer,
