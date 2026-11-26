@@ -1,0 +1,420 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "dispatch_profile": {
+        "entry": {
+          "calls": 0,
+          "samples": 0,
+          "us": {}
+        },
+        "leave": {
+          "calls": 0,
+          "samples": 0,
+          "us": {}
+        }
+      },
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 0,
+        "registered_plans": 0,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 8.52360001206398,
+      "setters_per_second": 586606.5973207552,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "dispatch_profile": {
+        "entry": {
+          "calls": 5000,
+          "samples": 40,
+          "us": {
+            "packed_record": 109.60003733634949,
+            "replay_begin": 225.8000373840332,
+            "receiver_setup": 130.40000200271606,
+            "argument_proxy": 113.10002207756042,
+            "actual_callback": 1600.299894809723,
+            "health_and_prefix": 41.30008816719055,
+            "replay_end": 74.00000095367432,
+            "result_envelope": 32.19994902610779
+          }
+        },
+        "leave": {
+          "calls": 5000,
+          "samples": 40,
+          "us": {
+            "packed_record": 104.19997572898865,
+            "replay_begin": 212.30003237724304,
+            "receiver_setup": 27.799934148788452,
+            "argument_proxy": 52.000075578689575,
+            "actual_callback": 656.7000150680542,
+            "health_and_prefix": 46.8999445438385,
+            "replay_end": 62.60010600090027,
+            "result_envelope": 27.099937200546265
+          }
+        }
+      },
+      "js_profile": {
+        "scope_ms": 0.5776000022888184,
+        "scope_inside_pub_ms": 0.5776000022888184,
+        "prefix_ms": 6.025200009346008,
+        "journal_ms": 0.6088999807834625
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 25002,
+        "capture_ms": 6.454100000000212,
+        "capture_read_bytes": 1281886,
+        "capture_read_count": 77238,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 2,
+        "graph_check_timing": {
+          "calls": 2,
+          "max_us": 160.8,
+          "sampled_us": 160.8,
+          "samples": 1
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 20007,
+        "registered_plans": 0,
+        "scalar_calls": 30005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 2.697799999999976
+      },
+      "branch": "unchanged",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 427.26589998602867,
+      "setters_per_second": 11702.31464800607,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "dispatch_profile": {
+        "entry": {
+          "calls": 5000,
+          "samples": 40,
+          "us": {
+            "packed_record": 116.50002002716064,
+            "replay_begin": 243.8000738620758,
+            "receiver_setup": 136.79993152618408,
+            "argument_proxy": 123.10001254081726,
+            "actual_callback": 1627.3000836372375,
+            "health_and_prefix": 44.199973344802856,
+            "replay_end": 86.79994940757751,
+            "result_envelope": 35.800039768218994
+          }
+        },
+        "leave": {
+          "calls": 5000,
+          "samples": 40,
+          "us": {
+            "packed_record": 109.99995470046997,
+            "replay_begin": 219.50000524520874,
+            "receiver_setup": 27.799993753433228,
+            "argument_proxy": 54.10003662109375,
+            "actual_callback": 4766.299992799759,
+            "health_and_prefix": 55.299997329711914,
+            "replay_end": 74.70005750656128,
+            "result_envelope": 31.4999520778656
+          }
+        }
+      },
+      "js_profile": {
+        "scope_ms": 402.8373991847038,
+        "scope_inside_pub_ms": 0.08239999413490295,
+        "prefix_ms": 132.40479999780655,
+        "journal_ms": 94.53769999742508
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 30002,
+        "capture_ms": 21.763500000000104,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 5002,
+        "graph_check_timing": {
+          "calls": 5002,
+          "max_us": 26.6,
+          "sampled_us": 156.20000000000002,
+          "samples": 40
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 25007,
+        "registered_plans": 0,
+        "scalar_calls": 50005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 17.968099999999595
+      },
+      "branch": "changed_damage",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 1244.4271999895573,
+      "setters_per_second": 4017.912819682789,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 5000,
+      "event_kinds": {
+        "enemy_hp": 5000
+      }
+    },
+    {
+      "dispatch_profile": {
+        "entry": {
+          "calls": 5000,
+          "samples": 40,
+          "us": {
+            "packed_record": 118.69993805885315,
+            "replay_begin": 244.90001797676086,
+            "receiver_setup": 144.99998092651367,
+            "argument_proxy": 126.69998407363892,
+            "actual_callback": 1667.8999662399292,
+            "health_and_prefix": 43.700069189071655,
+            "replay_end": 84.49995517730713,
+            "result_envelope": 34.400105476379395
+          }
+        },
+        "leave": {
+          "calls": 5000,
+          "samples": 40,
+          "us": {
+            "packed_record": 105.69995641708374,
+            "replay_begin": 219.8999524116516,
+            "receiver_setup": 27.900129556655884,
+            "argument_proxy": 54.9999475479126,
+            "actual_callback": 4649.699985980988,
+            "health_and_prefix": 56.20014667510986,
+            "replay_end": 93.799889087677,
+            "result_envelope": 31.30003809928894
+          }
+        }
+      },
+      "js_profile": {
+        "scope_ms": 367.09639969468117,
+        "scope_inside_pub_ms": 0.08340001106262207,
+        "prefix_ms": 5.400299996137619,
+        "journal_ms": 0.760699987411499
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 30002,
+        "capture_ms": 20.540099999999637,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 5002,
+        "graph_check_timing": {
+          "calls": 5002,
+          "max_us": 9.3,
+          "sampled_us": 137.4,
+          "samples": 40
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 25007,
+        "registered_plans": 0,
+        "scalar_calls": 50005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 16.90829999999972
+      },
+      "branch": "heal_coalesced",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 934.067500025034,
+      "setters_per_second": 5352.932202293726,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "dispatch_profile": {
+        "entry": {
+          "calls": 5000,
+          "samples": 40,
+          "us": {
+            "packed_record": 109.50005054473877,
+            "replay_begin": 213.70002627372742,
+            "receiver_setup": 120.80010771751404,
+            "argument_proxy": 109.09992456436157,
+            "actual_callback": 1433.100014925003,
+            "health_and_prefix": 37.199944257736206,
+            "replay_end": 75.90007781982422,
+            "result_envelope": 31.499892473220825
+          }
+        },
+        "leave": {
+          "calls": 5000,
+          "samples": 40,
+          "us": {
+            "packed_record": 91.00013971328735,
+            "replay_begin": 190.4999017715454,
+            "receiver_setup": 24.299979209899902,
+            "argument_proxy": 47.69998788833618,
+            "actual_callback": 3945.0999796390533,
+            "health_and_prefix": 47.20008373260498,
+            "replay_end": 64.09987807273865,
+            "result_envelope": 28.400003910064697
+          }
+        }
+      },
+      "js_profile": {
+        "scope_ms": 372.5161010324955,
+        "scope_inside_pub_ms": 0.0778999924659729,
+        "prefix_ms": 7.714900016784668,
+        "journal_ms": 2.3075000047683716
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 30002,
+        "capture_ms": 17.862000000000666,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 5002,
+        "graph_check_timing": {
+          "calls": 5002,
+          "max_us": 5.2,
+          "sampled_us": 108.29999999999998,
+          "samples": 40
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 25007,
+        "registered_plans": 0,
+        "scalar_calls": 50005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 15.318199999999708
+      },
+      "branch": "maxhp_dirty",
+      "setters": 5000,
+      "dirty": 50,
+      "elapsed_ms": 908.9356999993324,
+      "setters_per_second": 5500.9391753494465,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 101,
+      "event_kinds": {
+        "enemy_hp": 101
+      }
+    }
+  ],
+  "provenance": {
+    "source": "8502fe3; bridge instrumented only in own runtime",
+    "binary_sha256": "10cf03ebe8ec192c19c78d161a3ef682211ea11dd01dd2c8b402e4aab8c305ab",
+    "script_sha256": "7e6d9c1a32dd6fa608c4ae701f46b04349352634034da9fa9addbb22be6b8386",
+    "source_files": {
+      "event_probe_native_pc.js": "a8e3867e05414cb7b6c5bc11f999d12f6321084fb29492725411bfd548760466",
+      "event_probe_runtime.js": "b30931f8633ffc01d3d9170e28638b85f5129825b9ee6ff0ff604fe88a249810",
+      "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc",
+      "native_pc/native_event_runtime/cold_plan.js": "4b9e7615b5dfc5e9dbc6030323cb56ba6b789aa682116114bc77ffd3634dce33",
+      "native_pc/native_event_runtime/publication.js": "5a83506f7f1ba64afbcd8592522d8f9b84f71a60ab7596ce1f718932ba545577",
+      "native_pc/native_event_runtime/bridge.js": "b321451cbddb2fa15f1ccdfc7c626299b925b12d28f68bd18dbfde8b7f66bf11"
+    }
+  }
+}
