@@ -30,6 +30,9 @@ enum class LaneFault : unsigned { none, thread_identity, threads_full, depth_ful
 struct InvocationState {
     void* hook = nullptr;
     bool apply_modifier=false, buff_damage=false, hp_ignored=false;
+    bool hp_before_valid=false, hp_exact_enemy=false, hp_nested_dirty=false;
+    std::uint64_t hp_before=0;
+    std::uint32_t hp_uid=0;
     std::uint64_t id = 0, parent = 0, mode_epoch = 0;
     std::uintptr_t return_address = 0;
     const CaptureConfiguration* configuration=nullptr;

@@ -11,6 +11,9 @@ bool reader(void* p,std::uintptr_t address,void* out,std::size_t size) noexcept 
  if(address!=reinterpret_cast<std::uintptr_t>(&r.word)||size!=8)return false;
  std::memcpy(out,&r.word,size);return true;
 }
+bool owned_reader(void* count,std::uintptr_t address,void* out,std::size_t size) noexcept {
+ ++*static_cast<unsigned*>(count);std::memcpy(out,reinterpret_cast<const void*>(address),size);return true;
+}
 int main(){
  auto configs=std::make_unique<CaptureConfigurations>();
  Reads reads; const auto address=std::to_string(reinterpret_cast<std::uintptr_t>(&reads.word));
@@ -92,5 +95,36 @@ int main(){
  reads.count=0;reads.born=0;reads.word=43;header={};
  capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
  assert(reads.count>2 && !lane->calls[0].hp_ignored);
+ std::array<std::byte,128> enemy{};std::uint64_t klass=42,hpbits=123456;std::uint32_t uid=7;
+ std::memcpy(enemy.data(),&klass,8);std::memcpy(enemy.data()+0x18,&uid,4);
+ enemy[0x25]=std::byte{1};std::memcpy(enemy.data()+0x40,&hpbits,8);
+ auto hpfield=[&](unsigned id,const char* name,const char* phase,unsigned offset,unsigned size) {
+   auto f=field(id,"body",phase,"none",0);f["name"]=name;f["absolute_address"]=std::to_string(reinterpret_cast<std::uintptr_t>(enemy.data()+offset));f["bytes"]=size;return f;
+ };
+ plan["hp_filter"]["attribute_index_arg"]=nullptr;plan["hp_filter"]["normal_setter"]=true;
+ plan["fields"]=J::array({field(1,"clock_open","entry","before",1),field(2,"clock_close","entry","after",1),
+ hpfield(3,"hp.identity","entry",0,0x1c),hpfield(4,"hp.born","entry",0x25,1),hpfield(5,"hp.before","entry",0x40,8),
+ hpfield(6,"hp.id","entry",0x60,8),field(7,"clock_open","leave","before",1),field(8,"clock_close","leave","after",1),
+ hpfield(9,"hp.closing","leave",0x18,0x30),hpfield(10,"attributes.count","leave",0x60,4)});
+ plan["fields"][9]["tier"]="changed";
+ auto nochange_plan=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*nochange_plan);
+ unsigned native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::entry,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(lane->calls[0].hp_before_valid && lane->calls[0].hp_exact_enemy);
+ native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==3 && snapshot->field_count==3 && header.scope_unavailable);
+ lane->calls[0].hp_nested_dirty=true;native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==6 && !header.scope_unavailable);
+ lane->calls[0].hp_nested_dirty=false;native_reads=0;header={};header.publication_request=1;
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==8 && header.publication_captured && !header.scope_unavailable);
+ native_reads=0;header={};hpbits++;std::memcpy(enemy.data()+0x40,&hpbits,8);
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==6);
+ lane->depth=2;lane->calls[0].hp_nested_dirty=false;context.args[1]=0;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(lane->calls[0].hp_nested_dirty);
  std::cout<<"scope bracket, clock spanning graph, pinned immutable revision passed\n";
 }
