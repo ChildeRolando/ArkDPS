@@ -17,6 +17,7 @@ static std::vector<Region> regions;
 static std::unique_ptr<CompiledPlan> plan;
 static Snapshot snapshot;
 static Context input;
+static RecordHeader last_header;
 static std::unique_ptr<CaptureConfigurations> configurations;
 static std::unique_ptr<Lane> capture_lane;
 static Region *region(std::uintptr_t a, std::size_t n) {
@@ -97,6 +98,7 @@ struct FunctionTiming {
 static FunctionTiming hook_timing, graph_timing;
 static bool sample_functions = false;
 static bool native_wrappers = true;
+static std::uint64_t prepared_attempts = 0, prepared_packets = 0;
 static bool sealed_owner = true;
 struct SampleTimer {
   FunctionTiming &t;
@@ -195,6 +197,21 @@ static JSValue owned_batch(JSContext *c, JSValueConst self, int n,
   return result;
 }
 #endif
+#ifdef ARKDPS_DIRECT_HP
+static JSValue direct_reason(JSContext *c, JSValueConst, int n,
+                             JSValueConst *args) {
+  const auto reason =
+      direct_hp_reason(*plan, last_header, n == 1 && JS_ToBool(c, args[0]));
+  return JS_NewUint32(c, static_cast<unsigned>(reason));
+}
+static JSValue prepare_hp(JSContext *c, JSValueConst, int, JSValueConst *) {
+  ++prepared_attempts;
+  auto result = arkdps::owned_js::prepare_hp_observation(c);
+  if (JS_IsObject(result))
+    ++prepared_packets;
+  return result;
+}
+#endif
 static JSValue seal_plans(JSContext *, JSValueConst, int, JSValueConst *) {
 #ifdef ARKDPS_CAPTURE_READ_BATCH
   arkdps::owned_js::seal_read_plans();
@@ -205,9 +222,12 @@ static JSValue seal_plans(JSContext *, JSValueConst, int, JSValueConst *) {
 static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
   std::int32_t phase = 0;
   JS_ToInt32(c, &phase, argv[0]);
-  const auto start = std::chrono::steady_clock::now();
+  const auto start = sample_functions ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
   RecordHeader raw_header;
   raw_header.phase = phase ? Phase::leave : Phase::entry;
+  raw_header.args = input.args;
+  raw_header.arg_mask = input.args_valid;
+  raw_header.depth = 1;
   raw_header.invocation = (serial + 2) / 2;
   if (argc > 1 && JS_ToBool(c, argv[1]))
     raw_header.publication_request = serial + 1;
@@ -224,8 +244,8 @@ static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
   if (error != Error::ok)
     return JS_ThrowInternalError(c, "capture error %u",
                                  static_cast<unsigned>(error));
-  const auto captured = std::chrono::steady_clock::now();
-  profile.capture_ms +=
+  const auto captured = sample_functions ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+  if(sample_functions) profile.capture_ms +=
       std::chrono::duration<double, std::milli>(captured - start).count();
   profile.read_count += snapshot.read_count;
   profile.read_bytes += snapshot.read_bytes;
@@ -251,12 +271,13 @@ static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
   arkdps::owned_js::bind_hook(plan.get(), raw_header.phase, input.args[0],
                               raw_header.checkpoint);
 #endif
-  profile.view_ms += std::chrono::duration<double, std::milli>(
+  if(sample_functions) profile.view_ms += std::chrono::duration<double, std::milli>(
                          std::chrono::steady_clock::now() - captured)
                          .count();
   if (result != Error::ok)
     return JS_ThrowInternalError(c, "view error %u",
                                  static_cast<unsigned>(result));
+  last_header = raw_header;
   std::array<std::uint64_t, 22> header{};
   header[0] = serial;
   header[1] = (serial + 1) / 2;
@@ -279,6 +300,7 @@ static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
 static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
   if (n && JS_ToBool(c, args[0])) {
     profile = {};
+    prepared_attempts = prepared_packets = 0;
     hp_observation_calls = hp_failure_calls = 0;
     hook_timing = {};
     graph_timing = {};
@@ -311,6 +333,9 @@ static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
                      {"sampled_us", t.sampled_us},
                      {"max_us", t.max_us}};
   }
+  j["cpp_timing_enabled"] = sample_functions;
+  j["prepared_issue_attempts"] = prepared_attempts;
+  j["prepared_packets"] = prepared_packets;
   j["hp_observation_calls"] = hp_observation_calls;
   j["hp_failure_calls"] = hp_failure_calls;
   j["hook_point_calls"] = hook_point_calls;
@@ -405,6 +430,7 @@ int main(int argc, char **argv) {
   auto *c = JS_NewContext(rt);
 #ifdef ARKDPS_SEALED_PROVIDER
   native_wrappers = false;
+
   for (int i = 2; i < argc; i++)
     if (std::string(argv[i]) == "--unsealed-provider")
       sealed_owner = false;
@@ -415,6 +441,13 @@ int main(int argc, char **argv) {
 #endif
   JS_SetMemoryLimit(rt, 512 * 1024 * 1024);
   auto g = JS_GetGlobalObject(c);
+#ifdef ARKDPS_DIRECT_HP
+  JS_SetPropertyStr(c, g, "__ownedPrepareHp",
+                    JS_NewCFunction(c, prepare_hp, "__ownedPrepareHp", 0));
+  JS_SetPropertyStr(
+      c, g, "__ownedDirectReason",
+      JS_NewCFunction(c, direct_reason, "__ownedDirectReason", 1));
+#endif
   JS_SetPropertyStr(c, g, "print", JS_NewCFunction(c, print, "print", 1));
   JS_SetPropertyStr(c, g, "__monotonicMs",
                     JS_NewCFunction(c, timer, "__monotonicMs", 0));
@@ -497,6 +530,12 @@ int main(int argc, char **argv) {
       JS_SetPropertyStr(c, g, "__nativeOwnedReadPlanRegister", JS_UNDEFINED);
     }
   }
+  bool direct_enabled = false;
+  for (int i = 2; i < argc; i++)
+    if (std::string(argv[i]) == "--direct-hp")
+      direct_enabled = true;
+  JS_SetPropertyStr(c, g, "__ownedDirectEnabled",
+                    JS_NewBool(c, direct_enabled));
   JS_FreeValue(c, g);
   auto result = JS_Eval(c, source.data(), source.size(), "owned-hp-bench.js",
                         JS_EVAL_TYPE_GLOBAL);
@@ -515,6 +554,7 @@ int main(int argc, char **argv) {
     status = 1;
   }
   JS_FreeValue(c, result);
+  arkdps::owned_js::end();
   JS_FreeContext(c);
   JS_FreeRuntime(rt);
   return status;

@@ -66,3 +66,21 @@ install; both keep identical nativefunction references and rawObservation enable
 calls and internal OwnedView reads are excluded. C++I/O counts are null with
 availabilityfalse rather than fakezero. Bothgroups must show2*count actual routed
 HpObservation requests and the same NativeGraphCheck request count.
+
+
+Stage B direct dispatch comparison (same binary and generated script):
+
+```powershell
+python tests/run_production_hp_quickjs.py --stage <existing-stage> --output runtime/direct-hp-b-validation/run --count 2000 --full-scope --source-root <frozen-source> --native-root <frozen-source> --bridge-root <frozen-source> --compare-direct
+```
+
+The direct selector is the engine's `direct_hp_reason`, without a copied
+eligibility predicate. Eligible records use native `prepare_hp_observation` and
+the nine-argument production dispatch. Publication records retain the ordinary
+path. Each branch asserts issued/adopted packets, direct entry/leave, fallback,
+and ArgsProxy counts, plus existing HP endpoints, unknown-state and publication
+fence checks. The default C++ timing profiler is off; `--sample-functions` enables
+its function and capture/view timings. Routed request counts remain available.
+This comparison uses synchronous owned fixture production, not a FIFO throughput
+acceptance or an in-game FPS result. Freeze source bytes before comparing, and
+retain failed runs instead of repeating a known queue overflow as new evidence.
