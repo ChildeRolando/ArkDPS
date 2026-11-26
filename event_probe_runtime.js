@@ -818,10 +818,10 @@ function traceNestedParents(child,phase){
    diagnostic.parent_hp_before=parent.hpBefore??null;
    diagnostic.parent_target_hit_hp_before=parent.targetHit?.hpBefore??null;
    diagnostic.parent_target_hit_uid=parent.targetHit?.uid??null;
-   diagnostic.parent_real_delta=fp(parent.mod.add(0x48));diagnostic.parent_amount=fp(parent.mod.add(0x30));
-   diagnostic.parent_source_instance=parent.mod.readPointer().toString();
-   diagnostic.parent_source_matches=!!parent.nativeModifierSource?.equals(parent.mod.readPointer());
-   diagnostic.parent_target_matches=parent.mod.add(0x10).readPointer().equals(child.target);
+   diagnostic.parent_real_delta=captureInvocationRead(parent,()=>fp(parent.mod.add(0x48)));diagnostic.parent_amount=captureInvocationRead(parent,()=>fp(parent.mod.add(0x30)));
+   diagnostic.parent_source_instance=captureInvocationRead(parent,()=>parent.mod.readPointer()).toString();
+   diagnostic.parent_source_matches=!!parent.nativeModifierSource?.equals(captureInvocationRead(parent,()=>parent.mod.readPointer()));
+   diagnostic.parent_target_matches=captureInvocationRead(parent,()=>parent.mod.add(0x10).readPointer()).equals(child.target);
    diagnostic.parent_target_hit_ambiguous=!!parent.targetHitAmbiguous;
    diagnostic.parent_modifier_reused=!!parent.mitigationModifierReused;
    diagnostic.parent_numeric_shield=parent.numericShield??null;
@@ -847,9 +847,9 @@ function traceNestedParentFinal(parent){
   diagnostic.target_uid=damageTargetUid(parent.target);diagnostic.target_hp=targetHp(parent.target);
   diagnostic.parent_hp_before=parent.hpBefore??null;
   diagnostic.parent_target_hit_hp_before=parent.targetHit?.hpBefore??null;
-  diagnostic.parent_real_delta=fp(parent.mod.add(0x48));diagnostic.parent_amount=fp(parent.mod.add(0x30));
-  diagnostic.parent_source_matches=!!parent.nativeModifierSource?.equals(parent.mod.readPointer());
-  diagnostic.parent_target_matches=parent.mod.add(0x10).readPointer().equals(parent.target);
+  diagnostic.parent_real_delta=captureInvocationRead(parent,()=>fp(parent.mod.add(0x48)));diagnostic.parent_amount=captureInvocationRead(parent,()=>fp(parent.mod.add(0x30)));
+  diagnostic.parent_source_matches=!!parent.nativeModifierSource?.equals(captureInvocationRead(parent,()=>parent.mod.readPointer()));
+  diagnostic.parent_target_matches=captureInvocationRead(parent,()=>parent.mod.add(0x10).readPointer()).equals(parent.target);
   diagnostic.parent_target_hit_ambiguous=!!parent.targetHitAmbiguous;
   diagnostic.parent_modifier_reused=!!parent.mitigationModifierReused;
  }catch(error){diagnostic.read_error=String(error);}
@@ -943,12 +943,13 @@ function targetSettlementIdentity(scope,hit,when,allowShieldCancel=false){
   scope.mod.add(0x68).readS32()===commit.type&&(allowShieldCancel||scope.mod.add(0x70).readS32()===0); });
 }
 function numericFullBlockSettlement(scope,hit,when,amount){
+ return captureInvocationRead(scope,()=>{
  const absorbed=scope.numericShield,incoming=scope.firstShieldIncoming;
  return !scope.targetSettlementNested&&amount===0&&!scope.numericShieldUnknown&&!scope.unmatchedShield&&
   Number.isFinite(absorbed)&&absorbed>0&&Number.isFinite(incoming)&&
   Math.abs(absorbed-incoming)<=Math.max(0.01,incoming*1e-6)&&
   targetSettlementIdentity(scope,hit,when,true)&&fp(scope.mod.add(0x30))===0&&
-  fp(scope.mod.add(0x48))===0&&targetHp(hit.target)===hit.hpBefore;
+  fp(scope.mod.add(0x48))===0&&targetHp(hit.target)===hit.hpBefore; });
 }
 function observeNestedTargetSettlement(invocation){
  traceNestedParents(invocation,'child_entry');
@@ -3690,8 +3691,10 @@ function __arkdpsPublicationServed(through){
 }
 function __arkdpsSnapshotPublication(fence,terminalProof=null){
  if(!fence||fence.sequence!==sequence||fence.epoch!==epoch||active!==0||activeHooks.size!==0)throw new Error('publication reducer fence changed');
- const records=queue.slice();
- if(records.length!==sequence-acknowledgedSequence||records.some((event,index)=>event.sequence!==acknowledgedSequence+index+1))throw new Error('publication prefix incomplete');
+ const published=typeof __arkdpsPublicationJournal==='object'?__arkdpsPublicationJournal.publishedThrough:acknowledgedSequence;
+ if(!Number.isSafeInteger(published)||published<acknowledgedSequence||published>sequence)throw new Error('publication delta origin unavailable');
+ const records=queue.slice(published-acknowledgedSequence);
+ if(records.length!==sequence-published||records.some((event,index)=>event.sequence!==published+index+1))throw new Error('publication delta incomplete');
  const baseline={};
  if(typeof probeAdapter.baselineEnvelope==='function')Object.assign(baseline,probeAdapter.baselineEnvelope(fence,queue,acknowledgedSequence,sequence));
  Object.assign(baseline,autoChessRoundStartEnvelope(fence,queue,acknowledgedSequence,sequence));
@@ -3702,8 +3705,8 @@ function __arkdpsSnapshotPublication(fence,terminalProof=null){
   const terminal=readTerminalEvents(acknowledgedSequence,sequence,false);
   if(terminal.retry===false)terminal_read=terminal;
  }
- const projection={mark,acknowledged:acknowledgedSequence,events:records,
-  hp_context:hpContext.map(item=>({eventSequence:item.eventSequence,context:item.context})),read_fields,terminal_read};
+ const projection={mark,acknowledged:acknowledgedSequence,events_after:published,events_through:sequence,events:records,
+  hp_context:hpContext.filter(item=>item.eventSequence>published&&item.eventSequence<=sequence).map(item=>({eventSequence:item.eventSequence,context:item.context})),read_fields,terminal_read};
  const owned=JSON.parse(JSON.stringify(projection));
  const freeze=value=>{if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value);}return value;};
  return freeze(owned);
