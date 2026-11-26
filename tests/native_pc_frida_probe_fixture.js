@@ -336,8 +336,9 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     write(p.add(0x48), BigInt(Math.round(real * 4294967296)));
     write(p.add(0x60), 0); write(p.add(0x68), type); write(p.add(0x70), 0); return p;
   }
-  function installSyntheticMitigation({fail = false} = {}) {
-    const plan = {outer: alloc(), internal: alloc(), final: alloc(), damageType: 0x18};
+  function installSyntheticMitigation({fail = false, factories = 0, noEvent = false} = {}) {
+    const plan = {outer: alloc(), internal: alloc(), final: alloc(), damageType: 0x18,
+      ...(factories?{factories:Array.from({length:factories},()=>alloc())}:{}),...(noEvent?{noEvent:alloc()}:{})};
     const before = hooks.size;
     if (fail) rejectedHook = plan.internal.toString();
     context.syntheticMitigationPlan = plan;
