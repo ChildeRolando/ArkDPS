@@ -24,6 +24,7 @@ const module={exports:{}};const process={argv:[],env:{}};
 '''.replace('FILES',json.dumps(files)).replace('USE_OWNED','true' if owned else 'false')
     bench=r'''
 const f=module.exports.fixture({platform:'native_pc',enemyHpState:true,sourcePath:'event_probe_native_pc.js'});
+f.write(f.enemyClass.add(0x58),f.entity);f.write(f.entity.add(0x58),f.bObject);f.write(f.bObject.add(0x58),f.ptr(0));
 let stamps=0;
 f.context.observeScope=when=>{stamps++;when.native_autochess_scope={protocol_version:1,status:'available',verified_same_frame:true,frame:when.frame,game_time:when.game_time,scope_key:'owned:round:8',phase:4,round:8,collection_mode:'local'};};
 f.vm.runInContext('probeAdapter.stampClock=globalThis.observeScope',f.context);
@@ -35,7 +36,7 @@ const setter=f.callback('SetHpInternal',f.entity),dirty=f.callback('OnAttributeD
 OWNED_SETUP
 const results=[];
 for(const branch of ['input_only_baseline','unchanged','changed_damage','heal_coalesced','maxhp_dirty']){
- let hp=100000,dirtyCount=0;f.write(enemy.add(0x40),fp(hp));const initial=f.context.rpc.exports.mark().sequence;const stampsBefore=stamps;
+ let hp=100000,dirtyCount=0;f.write(enemy.add(0x40),fp(hp));const initial=f.vm.runInContext('sequence',f.context);const stampsBefore=stamps;
  if(OWNED)__ownedProfile(true);const start=__monotonicMs();
  for(let i=0;i<COUNT;i++){
   let call={threadId:1};if(branch!=='input_only_baseline'){if(OWNED)call=dispatch(0,undefined);else setter.onEnter.call(call,[enemy]);}
@@ -44,7 +45,7 @@ for(const branch of ['input_only_baseline','unchanged','changed_damage','heal_co
   if(branch!=='input_only_baseline'){if(OWNED)dispatch(1,call);else setter.onLeave.call(call);}
  }
  const ms=__monotonicMs()-start;
- const mark=f.context.rpc.exports.mark();const events=f.vm.runInContext('queue',f.context).filter(e=>e.sequence>initial);
+ const mark=f.vm.runInContext('flushCoalescedEnemyHp();({sequence,active,error:fatal})',f.context);const events=f.vm.runInContext('queue',f.context).filter(e=>e.sequence>initial);
  assertion.equal(mark.active,0);assertion.equal(mark.error,null);
  assertion.equal(f.vm.runInContext('enemyStateUnknown',f.context),false,'HP unknown must not become benchmark success');
  if(branch==='changed_damage')assertion.equal(mark.sequence-initial,COUNT);if(branch==='heal_coalesced')assertion.equal(mark.sequence-initial,2);
@@ -70,7 +71,10 @@ for(const field of plan.fields){let p=field.root==='global_slot'?clock:enemy;for
 const ranges=[];for(const [at,b]of [...memory].sort((a,b)=>a[0]<b[0]?-1:1)){const last=ranges.at(-1);if(last&&BigInt(last.address)+BigInt(last.bytes.length)===at)last.bytes.push(b);else ranges.push({address:at.toString(),bytes:[b]});}
 __ownedConfigure(JSON.stringify({plan,ranges,enemy:enemy.toString()}));
 let reading=false;
-for(const name of ['add','readByteArray','readPointer','readU8','readU16','readU32','readS32','readU64','readS64','readFloat','readUtf16String'])P.prototype[name]=function(...args){return (reading?NativePointer.prototype[name]:original[name]).apply(this,args);};
+// Setup pointers have the same value ABI; ensure metadata operands do not
+// invoke BigInt(object)->hex conversion during native pointer comparisons.
+Object.setPrototypeOf(P.prototype,NativePointer.prototype);Object.setPrototypeOf(clock,NativePointer.prototype);
+assertion(clock.constructor===NativePointer);const toString=P.prototype.toString;P.prototype.toString=()=>{throw Error('metadata pointer parsed as a string');};try{assertion.equal(__integer(f.enemyClass),f.enemyClass.value);assertion.equal(__integer(f.bObject),f.bObject.value);}finally{P.prototype.toString=toString;}
 const write=f.write;f.write=(p,value)=>{write(p,value);if(p.equals(enemy.add(0x40))||p.equals(cache.add(0x28)))__ownedPut(Number(p.value),value);};
 __arkdpsSealClassHierarchy(new Map([[f.enemyClass.toString(),f.entity.toString()],[f.entity.toString(),f.bObject.toString()],[f.bObject.toString(),'0x0']]));
 f.context.arkdpsNativeAsyncCapture=true;globalThis.__nativeCaptureCapabilities=()=>caps;f.context.testSetter=setter;f.vm.runInContext('nativeCaptureModeHistory.set(0,nativeAutoDesiredMode);prepareNativeCaptureHook(ptr(0x9000),testSetter)',f.context);

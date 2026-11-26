@@ -16,10 +16,12 @@ owned bytes, the actual native OwnedReplayView and provider, production bridge
 pointer/scalar/string methods and packed fused dispatch, argument mask, receiver
 identity, actual adapter mode wrapper, and actual shared HP setter callbacks.
 Fixtures supply metadata/native setup. A setup-sealed explicit fixture class
-hierarchy supports strict replay. A few setup-created fixture pointers (including
-the clock) route reads through the production pointer methods during consumption.
-This interoperability, input writes, and driver loop remain in measured elapsed
-cost; do not interpret the rate as an exact production worker ceiling.
+hierarchy supports strict replay. The clock is promoted to the real production NativePointer prototype; setup
+metadata pointer prototypes inherit NativePointer so comparisons take the value
+path, with a throwing-toString check to reject accidental BigInt(object) parsing.
+No hybrid rest/apply read wrappers remain in the timed path. The source fixture
+ptr factory still has a setup/replay branch. Input writes and the driver loop
+remain in measured elapsed cost; do not interpret the rate as an exact production worker ceiling.
 
 Excluded: complete live scope/publication graph, journal materialization, actual
 bounded FIFO/IPC, and native E/L snapshots for the nested dirty callback. Dirty
