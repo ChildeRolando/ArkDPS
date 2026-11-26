@@ -9,11 +9,12 @@ function check(condition){assert.ok(condition);checks++;}
 function plain(value){return JSON.parse(JSON.stringify(value));}
 function record(ticket){return {version:1,edge:'leave',ticket:String(ticket),activity_begin:String(ticket*2),
  activity_end:String(ticket*2+1),closed_after:true,active_after:0};}
-function projection(sequence,ack=0,epoch=sequence+1){return {
+function projection(sequence,ack=0,epoch=sequence+1,after=ack){return {
  mark:{sequence,epoch,frame:sequence,game_time:sequence/30,active:0,active_hooks:[],error:null,stopped:false,
   native_generation:1,native_identity:{controller:'0x10000'},native_fixed_time:String(sequence),
   native_autochess_context:{scope_key:'round1',memberships:[{uid:7}]}},
- acknowledged:ack,events:Array.from({length:sequence-ack},(_,i)=>({sequence:ack+i+1,amount:ack+i+1,frame:ack+i+1})),
+ acknowledged:ack,events_after:after,events_through:sequence,
+ events:Array.from({length:sequence-after},(_,i)=>({sequence:after+i+1,amount:after+i+1,frame:after+i+1})),
  hp_context:[],read_fields:{native_generation:1,frame:sequence,game_time:sequence/30,
   baseline_discarded_skill_events_complete:true,autochess_round_start:{sequence:0}},terminal_read:null};}
 function read(j,p,after,through,operation='read',served=()=>{}){
@@ -44,13 +45,13 @@ function read(j,p,after,through,operation='read',served=()=>{}){
  const j=new Journal(),a=j.publish(record(1),projection(2));
  // Continuous game activity after a captured closed prefix cannot erase it.
  const open={...record(2),closed_after:false,active_after:4};
- check(j.publish(open,projection(3)).retry===true&&j.failure!=null);
+ check(j.publish(open,projection(3)).native_publication_failure===true&&j.failure!=null);
  // A structural producer failure seals the journal rather than ACKing old data.
- check(read(j,a,0,2).retry&&j.ack(0,()=>({acknowledged:0})).error);
+ check(read(j,a,0,2).native_publication_failure&&j.ack(0,()=>({acknowledged:0})).error);
 }
 {
  const j=new Journal(),a=j.publish(record(1),projection(2));
- const b=j.publish(record(3),projection(4));
+ const b=j.publish(record(3),projection(4,0,5,2));
  check(read(j,a,0,2).events.length===2);
  check(read(j,b,2,4).events.map(x=>x.sequence).join(',')==='3,4');
  check(read(j,a,0,3).retry===true);
@@ -59,7 +60,7 @@ function read(j,p,after,through,operation='read',served=()=>{}){
  const baseline=read(j,b,4,4);
  check(baseline.events.length===0&&baseline.autochess_round_start.sequence===0);
  // Same normalized sequence can have later independent clocks/scopes.
- const p=projection(4,0,8);p.mark.frame=10;p.read_fields.frame=10;
+ const p=projection(4,0,8,4);p.mark.frame=10;p.read_fields.frame=10;
  const c=j.publish(record(5),p);
  check(c.native_publication.token!==b.native_publication.token&&read(j,b,4,4).frame===4&&read(j,c,4,4).frame===10);
 }
@@ -79,7 +80,7 @@ function read(j,p,after,through,operation='read',served=()=>{}){
 {
  const j=new Journal(),p=projection(0);
  p.terminal_read={terminal_boundary:{sequence:0},retry:false};
- check(j.publish(record(1),p).retry&&j.failure==='invalid terminal publication endpoint');
+ check(j.publish(record(1),p).native_publication_failure&&j.failure==='invalid terminal publication endpoint');
 }
 {
  const j=new Journal({maxMarks:2}),a=j.publish(record(1),projection(0));
@@ -91,17 +92,24 @@ for(const mutate of [
  p=>p.events.splice(0,1),p=>p.events[1].sequence=1,p=>p.acknowledged=1,p=>p.mark.active=1,
  p=>p.mark.epoch=-1,p=>p.mark.game_time=Infinity,p=>p.events[1].amount=NaN,
  p=>p.mark.sequence=3,p=>p.hp_context=[{eventSequence:-1,context:{}}]
+ ,p=>p.events_after=1,p=>p.events_through=1
 ]){
  const j=new Journal(),p=projection(2);mutate(p);
- check(j.publish(record(1),p).retry===true&&j.failure!=null&&j.events.length===0&&j.readThrough===0);
+ check(j.publish(record(1),p).native_publication_failure===true&&j.failure!=null&&j.events.length===0&&j.readThrough===0);
+}
+{
+ const j=new Journal(),p=projection(1);p.mark.error='shared producer queue overflow';
+ const failed=j.publish(record(1),p);
+ check(failed.native_publication_failure&&failed.retry===false&&failed.error==='native publication producer failed or stopped');
+ check(j.mark().native_publication_failure&&j.ack(0,()=>{throw Error('failed stream ACK');}).error);
 }
 {
  const j=new Journal({maxEvents:1});
- check(j.publish(record(1),projection(2)).retry&&j.events.length===0);
+ check(j.publish(record(1),projection(2)).native_publication_failure&&j.events.length===0);
  const small=new Journal({maxBytes:100});
- check(small.publish(record(1),projection(1)).retry&&small.events.length===0);
+ check(small.publish(record(1),projection(1)).native_publication_failure&&small.events.length===0);
  const fenceBudget=new Journal({maxBytes:650});
- check(fenceBudget.publish(record(1),projection(0)).retry&&fenceBudget.bytes===0);
+ check(fenceBudget.publish(record(1),projection(0)).native_publication_failure&&fenceBudget.bytes===0);
 }
 {
  const j=new Journal(),m=j.publish(record(1),projection(2));

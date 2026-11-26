@@ -30,7 +30,8 @@ class ArkdpsPublicationJournal {
  }
  retry(reason){return {retry:true,error:null,stopped:false,events:[],hp_context:[],
   mark_retry_reason:reason,native_publication_version:1};}
- fail(reason){this.failure=String(reason);return this.retry(this.failure);}
+ failed(){return {retry:false,error:this.failure,stopped:false,events:[],hp_context:[],native_publication_failure:true};}
+ fail(reason){this.failure=String(reason);return this.failed();}
  terminalVerified(mark,terminal,acknowledged){
   if(terminal==null)return false;
   const boundary=terminal.terminal_boundary;
@@ -49,7 +50,7 @@ class ArkdpsPublicationJournal {
   return true;
  }
  publish(record,projection){
-  if(this.failure)return this.retry(this.failure);
+  if(this.failure)return this.failed();
   try{return this.publishChecked(record,projection);}
   catch(error){return this.fail(error.message||error);}
  }
@@ -58,21 +59,24 @@ class ArkdpsPublicationJournal {
    throw new Error('publication lacks a captured closed leave');
   const ticket=this.raw(record.ticket),begin=this.raw(record.activity_begin),end=this.raw(record.activity_end);
   if(ticket<=this.rawClosed||end!==begin+1n)throw new Error('publication raw prefix regressed or remained open');
-  if(!p||p.mark?.retry||p.mark?.error||p.mark?.stopped)return this.retry('native_publication_not_ready');
+  if(!p||p.mark?.retry)return this.retry('native_publication_not_ready');
+  if(p.mark?.error||p.mark?.stopped)throw new Error('native publication producer failed or stopped');
   const m=p.mark;
   if(!this.integer(m.sequence)||!this.integer(m.epoch)||!this.integer(m.frame)
      ||m.active!==0||!Array.isArray(m.active_hooks)||m.active_hooks.length!==0
      ||typeof m.game_time!=='number'||!Number.isFinite(m.game_time)||m.game_time<0
      ||!this.integer(p.acknowledged)||p.acknowledged!==this.acknowledged
+     ||!this.integer(p.events_after)||p.events_after!==this.publishedThrough||p.events_after<p.acknowledged
+     ||p.events_through!==m.sequence
      ||!Array.isArray(p.events)||!Array.isArray(p.hp_context)||!p.read_fields||typeof p.read_fields!=='object')
    throw new Error('invalid closed publication projection');
-  if(m.sequence<this.publishedThrough||p.events.length!==m.sequence-p.acknowledged)
+  if(m.sequence<this.publishedThrough||p.events.length!==m.sequence-p.events_after)
    throw new Error('publication event prefix is incomplete');
   if(this.latest&&m.epoch<this.latest.mark.epoch)throw new Error('publication event epoch regressed');
   const delta=[],contexts=[];
   let cost=0;
   for(let seq=this.publishedThrough+1;seq<=m.sequence;seq++){
-   const event=p.events[seq-p.acknowledged-1];
+   const event=p.events[seq-p.events_after-1];
    if(event?.sequence!==seq)throw new Error('publication event sequence gap');
    const owned=this.own(event);delta.push(owned);cost+=owned.bytes;
   }
@@ -113,9 +117,9 @@ class ArkdpsPublicationJournal {
   if(typeof token!=='string')return null;
   return this.marks.find(mark=>mark.token===token)??null;
  }
- mark(){return this.failure?this.retry(this.failure):this.latest?this.copy(this.latest.mark):this.retry('native_publication_not_ready');}
+ mark(){return this.failure?this.failed():this.latest?this.copy(this.latest.mark):this.retry('native_publication_not_ready');}
  read(command,served){
-  if(this.failure)return this.retry(this.failure);
+  if(this.failure)return this.failed();
   const pub=this.select(command.publication_token),after=command.after,through=command.through;
   if(!pub)return this.retry('native_publication_token_expired');
   if(!this.integer(after)||!this.integer(through)||after<this.acknowledged||after>through||through>pub.mark.sequence)

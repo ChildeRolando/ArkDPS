@@ -283,8 +283,20 @@ std::string safe_diagnostic(const char* message, const char* phase) {
             "hook thunk allocation failed", "hook thunk protection failed", "could not initialize native hook library",
             "could not create JavaScript runtime", "could not create JavaScript context", "probe did not publish readiness",
             "could not queue native hooks", "could not enable native hooks", "could not apply native hook changes",
-            "memory length exceeds the bounded runtime limit", "allocation limit exceeded", "unsafe integer"}) {
+            "memory length exceeds the bounded runtime limit", "allocation limit exceeded", "unsafe integer",
+            "native async capture plan is absent, incomplete or unbound",
+            "native hook requires a complete capture contract", "native callback replay has structural gaps",
+            "native capture replay failed", "native capture failed during replay",
+            "native replay violated the capture boundary", "native capture record exceeds worker buffer",
+            "native capture record has structural error", "cold metadata unreadable",
+            "cold metadata changed during setup", "cold field type unavailable", "cold generic cache mismatch"}) {
         if (first == text || first == type + ": " + text) detail = text;
+    }
+    // The finite producer fault code contains no pointer, token or game text.
+    // Preserve it instead of reducing queue exhaustion to an opaque exception.
+    for (unsigned code = 0; code <= 32; ++code) {
+        const auto fixed = std::string("native capture failed: code=") + std::to_string(code);
+        if (first == fixed || first == type + ": " + fixed) detail = fixed;
     }
     if (first.rfind("InternalError: native hook creation failed:", 0) == 0
             || first.rfind("Error: native hook creation failed:", 0) == 0

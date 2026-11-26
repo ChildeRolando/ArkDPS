@@ -209,16 +209,26 @@ def child(binary):
             count = command.get('count', 1000)
             if type(count) is not int or not 1 <= count <= 100000:
                 raise ValueError('owned burst count exceeds its bound')
+            rate = command.get('rate', 0)
+            if type(rate) is not int or not 0 <= rate <= 200000:
+                raise ValueError('owned burst rate exceeds its bound')
             function = libraries[0].ArkDpsTestInteger
             function.argtypes, function.restype = [ctypes.c_uint64] * 12, ctypes.c_uint64
             arguments = tuple(range(1, 13))
             timings, checksum = [], 0
-            for _ in range(count):
+            epoch = time.perf_counter_ns()
+            for index in range(count):
+                if rate and index % 128 == 0:
+                    deadline = epoch + index * 1000000000 // rate
+                    while time.perf_counter_ns() < deadline:
+                        if deadline-time.perf_counter_ns() > 500000:
+                            time.sleep(0)
                 started = time.perf_counter_ns()
                 checksum += function(*arguments)
                 timings.append(time.perf_counter_ns() - started)
             timings.sort()
-            print(json.dumps(dict(count=count, checksum=checksum, total_ns=sum(timings),
+            print(json.dumps(dict(count=count, checksum=checksum, total_ns=sum(timings), target_rate=rate,
+                producer_wall_ns=time.perf_counter_ns()-epoch,
                 p50_ns=timings[count//2], p99_ns=timings[min(count-1, count*99//100)],
                 maximum_ns=timings[-1])), flush=True)
         elif operation == 'owned-sret-buffer':
