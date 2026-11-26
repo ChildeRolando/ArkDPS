@@ -42,7 +42,8 @@ class __ArkDpsCaptureFacts {
  get scope_revision(){return __arkdpsPackedNumber(this.#view,9)||undefined;}
  get publication_revision(){return __arkdpsPackedNumber(this.#view,10)||undefined;}
  get cold_revision(){return __arkdpsPackedNumber(this.#view,11)||undefined;}
- get scope_unavailable(){return __arkdpsPackedNumber(this.#view,20)!==0;}
+ get scope_unavailable(){return (__arkdpsPackedNumber(this.#view,20)&1)!==0;}
+ get capture_concurrent(){return (__arkdpsPackedNumber(this.#view,20)&2)!==0;}
  get parent_checkpoints(){return __arkdpsPackedParents(this.#view);}
 }
 class __ArkDpsCaptureRecord {
@@ -51,7 +52,7 @@ class __ArkDpsCaptureRecord {
   if(!(bytes instanceof ArrayBuffer)||bytes.byteLength<176)throw Error('invalid packed capture header');
   this.#view=new DataView(bytes);
   const count=this.number(21);
-  if(count>256||bytes.byteLength!==176+count*16||this.number(18)>1)throw Error('invalid packed capture geometry');
+  if(count>256||bytes.byteLength!==176+count*16||this.number(18)>1||this.number(20)>3)throw Error('invalid packed capture geometry');
   this.#ticket=this.text(0);Object.freeze(this);
  }
  number(slot){return __arkdpsPackedNumber(this.#view,slot);}

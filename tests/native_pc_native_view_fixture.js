@@ -49,6 +49,8 @@ recordPrototype.number=numberMethod;recordPrototype.parents=parentsMethod;
 globalThis.sharedParentArray=retainedRecord.parents()===retainedFacts.parent_checkpoints;
 retainedRecord=null;__arkdpsReplayBegin(nativeRecord());__arkdpsReplayEnd();leased=false;
 globalThis.retainedFactsProof={mode:retainedFacts.mode_epoch,scope:retainedFacts.scope_revision,parents:retainedFacts.parent_checkpoints,frozen:Object.isFrozen(retainedFacts)&&Object.isFrozen(retainedFacts.parent_checkpoints[0])};leased=true;
+globalThis.packedFlags=[];for(let flag=0;flag<4;flag++){const bytes=new ArrayBuffer(176);new DataView(bytes).setBigUint64(160,BigInt(flag),true);const facts=__arkdpsPackedCaptureRecord(bytes).facts;packedFlags.push([facts.scope_unavailable,facts.capture_concurrent]);}
+const badFlags=new ArrayBuffer(176);new DataView(badFlags).setBigUint64(160,4n,true);globalThis.badPackedFlags=rejects(()=>__arkdpsPackedCaptureRecord(badFlags));
 const empty=__arkdpsPackedCaptureRecord(new ArrayBuffer(176));
 globalThis.packedEmpty=empty.facts.cold_revision===undefined&&empty.facts.scope_revision===undefined
  &&empty.facts.publication_revision===undefined&&empty.facts.parent_checkpoints.length===0&&empty.edge==='entry';
@@ -146,3 +148,5 @@ assert.equal(c.factsWithoutRecordMethods.mode,3);assert.equal(c.factsWithoutReco
 assert.equal(c.numericPinned.complete,true);assert(c.numericFlagRebuilt);assert.deepEqual(Array.from(c.numericCalls,x=>[x.type,x.value]),[['number','0'],['number','0'],['number','9007199254740991'],['number','9007199254740991'],['bigint','9007199254740992'],['bigint','9007199254740992'],['bigint','18446744073709551615'],['bigint','18446744073709551615'],['number','4096'],['bigint','4096']]);assert(c.unsafeAddress);assert.equal(c.unsafeAddressEnd.complete,false);
 
 assert(c.concurrentBytes);assert(c.concurrentScalar);assert(c.concurrentWitness);assert.equal(c.concurrentOptional.available,false);assert.equal(c.concurrentArguments,'0');assert(c.concurrentFrozen);assert.equal(c.concurrentEnd.complete,true);assert.equal(c.concurrentEnd.unreadable_reads,4);for(const key of ['concurrentBadAddress','concurrentBadField','concurrentBadPoint']){assert(c[key]);assert.equal(c[key+'End'].complete,false);}assert.equal(c.afterConcurrent,251);assert.equal(c.afterConcurrentEnd.complete,true);
+
+assert.deepEqual(Array.from(c.packedFlags,x=>Array.from(x)),[[false,false],[true,false],[false,true],[true,true]]);assert(c.badPackedFlags);
