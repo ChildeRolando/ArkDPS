@@ -73,12 +73,16 @@ function __arkdpsPackedCaptureRecord(bytes){return new __ArkDpsCaptureRecord(byt
 // by the worker before calling this function and remains live through End.
 // The result is only a transport envelope; C++ must independently inspect its
 // poison flag and complete bit before passing the projection to the journal.
-function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix){
+function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix,returnAddress){
  const record=__arkdpsPackedCaptureRecord(header);
  __arkdpsReplayBegin(record);
  let projection,summary,healthy=false;
  try{
   if(typeof __nativeReplayHealthy!=='function')__arkdpsReplayGap('native replay health helper unavailable');
+  if(record.edge==='entry'){
+   if(typeof returnAddress!=='bigint')__arkdpsReplayGap('native entry return address unavailable');
+   receiver={threadId:record.thread_id,returnAddress:ptr(returnAddress),nativeCaptureInvocation:record.invocation_id,nativeCaptureModeEpoch:record.number(7)};
+  }
   if(typeof callback==='function'){
    if(record.edge==='entry')callback.call(receiver,__arkdpsArguments(payload,argumentMask));
    else callback.call(receiver,ptr(payload));
@@ -88,7 +92,7 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
   if(healthy&&__arkdpsReplay.structural.length===0&&record.edge==='leave'&&record.closed_after&&typeof prefix==='function')
    projection=prefix(record);
  }finally{summary=__arkdpsReplayEnd(true);}
- return [record,projection,healthy&&summary];
+ return [record,projection,healthy&&summary,receiver];
 }
 function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read','invalid_phase'].includes(status);}
 function __arkdpsReplayBegin(record){
