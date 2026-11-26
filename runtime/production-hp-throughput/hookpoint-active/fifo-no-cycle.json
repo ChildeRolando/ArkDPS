@@ -1,0 +1,100 @@
+{
+  "queue": {
+    "actual_producer_setters_per_second": 30031.7577494662,
+    "capacity_pass": false,
+    "consumed_bytes": 35760375,
+    "consumed_prefix_contiguous": true,
+    "consumed_records": 10038,
+    "consumer_busy_ms": 801.709800000001,
+    "consumer_service_records_per_second": 12520.740048331687,
+    "elapsed_ms": 803.6506,
+    "entry_compact_max": 917,
+    "entry_compact_min": 917,
+    "failure_code": 4,
+    "leave_compact_max": 128078,
+    "leave_compact_min": 6208,
+    "max_queue_age_ms": 627.2005,
+    "pause_ms": 0,
+    "peak_resident_bytes": 136316990,
+    "producer_ms": 803.0166,
+    "raw_prefix_contiguous": false,
+    "requested_producer_ms": 10000,
+    "requested_setters": 300000,
+    "reserved_records": 48234,
+    "submitted_setters": 24116,
+    "target_setters_per_second": 30000,
+    "trend": [
+      {
+        "backlog": 1,
+        "consumed": 0,
+        "ms": 0.5638,
+        "reserved": 1
+      },
+      {
+        "backlog": 4714,
+        "consumed": 1266,
+        "ms": 100.5982,
+        "reserved": 5980
+      },
+      {
+        "backlog": 9050,
+        "consumed": 2566,
+        "ms": 200.6757,
+        "reserved": 11616
+      },
+      {
+        "backlog": 13539,
+        "consumed": 3791,
+        "ms": 300.7027,
+        "reserved": 17330
+      },
+      {
+        "backlog": 18807,
+        "consumed": 5081,
+        "ms": 400.7328,
+        "reserved": 23888
+      },
+      {
+        "backlog": 23018,
+        "consumed": 6374,
+        "ms": 500.7832,
+        "reserved": 29392
+      },
+      {
+        "backlog": 28426,
+        "consumed": 7580,
+        "ms": 600.7909,
+        "reserved": 36006
+      },
+      {
+        "backlog": 32849,
+        "consumed": 8757,
+        "ms": 700.8288,
+        "reserved": 41606
+      },
+      {
+        "backlog": 37266,
+        "consumed": 10010,
+        "ms": 800.8566,
+        "reserved": 47276
+      }
+    ]
+  },
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "actual CaptureLanes private queue and four 32MiB spill banks",
+    "independent paced producer and actual serialized consumer",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC and native hook trampoline",
+    "native dirty callback snapshots"
+  ],
+  "results": []
+}

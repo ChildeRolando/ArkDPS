@@ -21,3 +21,14 @@ Same actual FIFO requested300000 setters at30000/s with publication every8571:
 
 Pause0 consumer11774.75 raw/s (~5887 setters/s), insufficient60000raw/s.
 Requested ten seconds did not complete. No queue/fullscope/FPS pass claimed.
+
+## No-cycle bridge followup, same binary
+
+Removed unused replay->packet->replay strong cycle. Same2000 control-repeat and
+candidate-no-cycle: damage4218/4525, heal4811/6105, dirty5345/5102,
+unchanged12877/11945 setters/s; input606171/574267 (5.3percent drift).
+Candidate4000 realHookPoint calls. Improvement is branch-dependent.
+Actual FIFO0pause still code4 at803.0166ms,24116setters,10038raw consumed,
+service12520.74raw/s. Actualproducer30031.76setters/s. Relative to prior
+HookPoint FIFO11774.75raw/s, service improves6.3percent, not26.9percent.
+Requested10seconds still not completed; no acceptance claimed.

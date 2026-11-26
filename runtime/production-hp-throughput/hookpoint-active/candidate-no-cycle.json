@@ -1,0 +1,215 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 0,
+        "registered_plans": 0,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 3.482699990272522,
+      "setters_per_second": 574267.0932282914,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 0.5773999989032745,
+        "scope_inside_pub_ms": 0.5773999989032745,
+        "prefix_ms": 6.73989999294281,
+        "journal_ms": 0.5923999845981598
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 2.6125999999999614,
+        "capture_read_bytes": 522886,
+        "capture_read_count": 32238,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2,
+        "graph_output_bytes": 0,
+        "hook_point_calls": 4000,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 7,
+        "registered_plans": 0,
+        "scalar_calls": 5,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 1.1216999999999513
+      },
+      "branch": "unchanged",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 167.43970000743866,
+      "setters_per_second": 11944.598562414698,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 144.78639978170395,
+        "scope_inside_pub_ms": 0.08559998869895935,
+        "prefix_ms": 46.67699998617172,
+        "journal_ms": 35.28259998559952
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 7.488200000000164,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_output_bytes": 0,
+        "hook_point_calls": 4000,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 2007,
+        "registered_plans": 0,
+        "scalar_calls": 2005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 6.501400000000274
+      },
+      "branch": "changed_damage",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 442.0372000038624,
+      "setters_per_second": 4524.506082253993,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 2000,
+      "event_kinds": {
+        "enemy_hp": 2000
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 135.65120008587837,
+        "scope_inside_pub_ms": 0.08169999718666077,
+        "prefix_ms": 4.167199999094009,
+        "journal_ms": 0.7962000072002411
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 6.66900000000023,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_output_bytes": 0,
+        "hook_point_calls": 4000,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 2007,
+        "registered_plans": 0,
+        "scalar_calls": 2005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 5.826100000000275
+      },
+      "branch": "heal_coalesced",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 327.6026000082493,
+      "setters_per_second": 6104.957652807513,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 158.54729849100113,
+        "scope_inside_pub_ms": 0.08300000429153442,
+        "prefix_ms": 4.546400010585785,
+        "journal_ms": 1.5489999949932098
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 8.924400000000142,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_output_bytes": 0,
+        "hook_point_calls": 4000,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 2007,
+        "registered_plans": 0,
+        "scalar_calls": 2005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 7.593100000000158
+      },
+      "branch": "maxhp_dirty",
+      "setters": 2000,
+      "dirty": 20,
+      "elapsed_ms": 391.9986999928951,
+      "setters_per_second": 5102.057736508436,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 41,
+      "event_kinds": {
+        "enemy_hp": 41
+      }
+    }
+  ]
+}
