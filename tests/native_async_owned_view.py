@@ -77,7 +77,7 @@ globalThis.__arkdpsOnClosedRecord=record=>({mark:{sequence:0,epoch:entries,frame
  events_after:0,events_through:0,events:[],hp_context:[],read_fields:{sequence:0,epoch:entries},terminal_read:null});
 rpc.exports={mark(){throw Error('legacy live mark');},readEvents(){throw Error('legacy live read');},
  ackEvents:sequence=>({acknowledged:0,error:sequence<=served?null:'unserved'}),stop(){hook.detach();return {stopped:true};}};
-send({ready:true,fixture:'owned-native-view-semantic'});
+send({ready:true,fixture:'owned-native-view-semantic',capture_capabilities:__nativeCaptureCapabilities()});
 '''.replace('CASE', json.dumps(case)).replace('OFFSET', str(offset))
 
 
@@ -118,6 +118,10 @@ def run(binary, case):
             fixture.command('load')
             pipe = NativePipe(fixture.pipe_name, fixture.identity['pid'])
             ready = pipe.request('initialize', token=fixture.token)
+            capabilities = ready['ready']['capture_capabilities']
+            assert capabilities == dict(version=1, raw_collection='all', lowered_projections=[
+                'live_scope_guards', 'same_point_class_ancestry', 'open_parent_checkpoint',
+                'token_host_and_character_form', 'full_native_binding', 'current_buff_and_blackboard_keys']), capabilities
             if case == 'positive':
                 mark = fresh_mark(pipe, fixture)
                 assert mark.get('retry') is not True and mark.get('error') is None, mark
