@@ -10,7 +10,7 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
                                 const Context& context,
                                 const CaptureConfiguration* config,
                                 ReadMemory reader, void* user,
-                                Snapshot& snapshot, RecordHeader& header, Lane* lane=nullptr) noexcept {
+                                Snapshot& snapshot, RecordHeader& header, Lane* lane=nullptr, bool request_cold=false) noexcept {
     capture_begin(snapshot,phase,context,max_bytes,max_reads);
     InvocationState* invocation=lane && lane->depth ? &lane->calls[lane->depth-1] : nullptr;
     const auto hp_value=[&](unsigned kind,std::size_t bytes) noexcept -> const std::byte* {
@@ -82,7 +82,7 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
     const bool forced=phase==Phase::entry ? base.force_full_entry
         : phase==Phase::leave && base.force_cold_leave && (!base.force_cold_conditional
           || ((context.args_valid&(1u<<base.force_cold_arg)) && context.args[base.force_cold_arg]==base.force_cold_value));
-    const bool cold=base.cold && (forced || (header.publication_request
+    const bool cold=base.cold && (forced || request_cold || (header.publication_request
         && (!config || !config->scope || !config->scope->available)));
     header.projection_candidate=forced || header.publication_request;
     if (cold) {

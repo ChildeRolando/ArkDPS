@@ -126,6 +126,10 @@ int main(){
  lane->depth=2;lane->calls[0].hp_nested_dirty=false;context.args[1]=0;header={};
  capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
  assert(lane->calls[0].hp_nested_dirty);
+ boundary->force_full_entry=false;reads.mutate=false;reads.count=0;header={};header.publication_request=55;
+ capture_scope_point(*boundary,Phase::entry,context,configs->pin(0),reader,&reads,*snapshot,header,nullptr,true);
+ assert(header.cold_revision==1 && !header.scope_revision && !header.publication_revision);
+ assert(snapshot->field_count==6);
  const auto bounds=configs->collect_quiescent(0);
  assert(bounds["scope_before"]==2 && bounds["publication_before"]==1 && bounds["mode_before"]==0);
  assert(configs->pin(0)->scope->revision==2);

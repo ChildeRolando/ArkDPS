@@ -57,6 +57,7 @@ struct Runtime {
     JSValue publication_publish = JS_UNDEFINED, publication_request = JS_UNDEFINED;
     JSValue mode_state = JS_UNDEFINED, mode_install = JS_UNDEFINED, graph_retire = JS_UNDEFINED;
     std::atomic<std::uint64_t> capture_mode_epoch{0};
+    std::atomic<std::uint64_t> cold_publication_request{0};
     std::uint64_t published_mode_epoch = 0;
     int desired_mode = -1;
     std::string captured_publication;
@@ -780,6 +781,11 @@ void replay_record(const std::byte* bytes, std::size_t length) {
         }
     }
     if (header.publication_request) {
+        // A stable but stale expected graph can fail only in JS, after native
+        // guards succeeded. The next bounded candidate must capture actual
+        // cold facts; never mutate old expected roots or retry every callback.
+        if (runtime.published_ticket!=header.ticket)
+            runtime.cold_publication_request.store(header.publication_request,std::memory_order_release);
         auto claimed=header.publication_request;
         runtime.lanes->publication_claim.compare_exchange_strong(claimed,0,std::memory_order_acq_rel);
     }
@@ -908,7 +914,8 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     for (unsigned i=0;i<lane_count;++i) if (lanes.lanes[i].get()==lane) header.lane=i;
     header.depth=lane->depth; header.phase=Phase::entry; header.arg_mask=context.args_valid;
     capture_scope_point(hook->capture_plan,Phase::entry,context,call.configuration,
-                        capture_read,nullptr,lane->snapshot,header,lane);
+                        capture_read,nullptr,lane->snapshot,header,lane,
+                        header.publication_request && runtime.cold_publication_request.load(std::memory_order_acquire)==header.publication_request);
     save_entry_roots(hook->capture_plan,lane->snapshot,context);
     lanes.publish(*lane,header);
     return hook->original;
@@ -953,7 +960,8 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     header.active=runtime.active.load(std::memory_order_acquire);
     call.context.return_value=frame->rax; call.context.return_valid=true;
     capture_scope_point(hook->capture_plan,Phase::leave,call.context,call.configuration,
-                        capture_read,nullptr,lane->snapshot,header,lane);
+                        capture_read,nullptr,lane->snapshot,header,lane,
+                        header.publication_request && runtime.cold_publication_request.load(std::memory_order_acquire)==header.publication_request);
     header.activity=runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel)+1;
     header.active_after=runtime.active.fetch_sub(1,std::memory_order_acq_rel)-1;
     header.closed_after=header.active_after==0 && header.activity==header.activity_begin+1;
