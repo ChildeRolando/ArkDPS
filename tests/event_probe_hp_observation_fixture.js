@@ -48,6 +48,8 @@ for(const mode of ['normal','unborn','nonenemy','trap','dirty-nonhp','pending-re
  assert.equal(copied.observation.values[0].offset,0);assert.equal(copied.pointer_offsets.length,0);
  assert.strictEqual(vm.runInContext('sealedCaptureContract(sealedCaptureContract(rawObservationPlan))',f.context).fields[0].observation.name,plan.fields[0].name);
  f.context.authenticatedContract=sealed;assert.strictEqual(vm.runInContext('sealedCaptureContract(authenticatedContract)',f.context),sealed);
+ const prototypeKey=JSON.parse('{"__proto__":{"x":1}}'),holes=new Array(3);holes[0]={k:1};
+ for(const original of [prototypeKey,holes]){f.context.snapshotProbe=original;const copy=vm.runInContext('sealedCaptureContract(snapshotProbe)',f.context);assert.equal(JSON.stringify(copy),JSON.stringify(original));assert.deepEqual(Object.keys(copy),Object.keys(original));if(Array.isArray(original))assert.equal(copy.length,3);else{assert(Object.prototype.hasOwnProperty.call(copy,'__proto__'));assert.equal(copy.x,undefined);}}
  for(const bad of [new Map(),new Date(),{callback(){}}]){f.context.nonJsonContract=bad;assert.throws(()=>vm.runInContext('sealedCaptureContract(nonJsonContract)',f.context),/non-JSON capture contract/);}
  assert(Object.isFrozen(copied.observation.values));assert(Object.isFrozen(copied.observation.values[0]));assert(!Object.isFrozen(original.observation.values));
 }

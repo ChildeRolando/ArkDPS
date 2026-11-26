@@ -250,11 +250,11 @@ function sealedCaptureContract(value){
   if(path.has(item))throw new Error('cyclic capture contract');
   const array=Array.isArray(item),prototype=Object.getPrototypeOf(item);
   if(!array&&prototype!==null&&prototype.constructor?.name!=='Object')throw new Error('non-JSON capture contract');
-  path.add(item);const result=array?[]:{};
+  path.add(item);const result=array?new Array(item.length):{};
   for(const key of Object.keys(item)){
    const property=Object.getOwnPropertyDescriptor(item,key);
    if(!property||!Object.prototype.hasOwnProperty.call(property,'value'))throw new Error('non-JSON capture contract');
-   result[key]=copy(property.value);
+   Object.defineProperty(result,key,{value:copy(property.value),writable:true,enumerable:true,configurable:true});
   }
   path.delete(item);Object.freeze(result);nativeContractSnapshots.add(result);return result;
  }
