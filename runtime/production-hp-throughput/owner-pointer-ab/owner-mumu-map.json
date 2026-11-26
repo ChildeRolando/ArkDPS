@@ -1,0 +1,92 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_fixture_backend",
+  "includes": [
+    "actual shared HP callback"
+  ],
+  "excluded": [
+    "native capture",
+    "native owned view",
+    "scope guard validation",
+    "production publication",
+    "IPC/queue"
+  ],
+  "results": [
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "input_only_baseline",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 2.012100011110306,
+      "setters_per_second": 993986.3768980206,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "unchanged",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 74.31380000710487,
+      "setters_per_second": 26912.901773409343,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "changed_damage",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 110.26859998703003,
+      "setters_per_second": 18137.529634322404,
+      "publication_count": 0,
+      "scope_stamps": 2000,
+      "sequence_delta": 2000,
+      "event_kinds": {
+        "enemy_hp": 2000
+      }
+    },
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "heal_coalesced",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 101.90620002150536,
+      "setters_per_second": 19625.891256645213,
+      "publication_count": 0,
+      "scope_stamps": 2000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "maxhp_dirty",
+      "setters": 2000,
+      "dirty": 20,
+      "elapsed_ms": 102.07490000128746,
+      "setters_per_second": 19593.455393782155,
+      "publication_count": 0,
+      "scope_stamps": 2000,
+      "sequence_delta": 41,
+      "event_kinds": {
+        "enemy_hp": 41
+      }
+    }
+  ],
+  "provenance": {
+    "backend": "QuickJS Map-backed ordinary pointer provider; Mumu layout fixture, not Frida/realFPS",
+    "binary_sha256": "10cf03ebe8ec192c19c78d161a3ef682211ea11dd01dd2c8b402e4aab8c305ab",
+    "script_sha256": "36fd6b17d9e314a88730724a1e81ab2ad2018c37ace55bf7d8a9c262d9733404"
+  }
+}
