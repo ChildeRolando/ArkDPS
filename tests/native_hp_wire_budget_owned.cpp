@@ -1,4 +1,5 @@
 #include "engine_capture_pipeline.h"
+#include "owned_replay_view.h"
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -114,6 +115,26 @@ int main(int argc,char** argv){assert(argc==2||argc==3);std::ifstream stream(arg
  memory.clock_reads=0;memory.change_clock=true;RecordHeader negative;capture_scope_point(*plan,Phase::entry,context,pinned,Memory::read,&memory,lane->snapshot,negative,lane.get());assert(lane->snapshot.error==Error::changed_guard);memory.change_clock=false;memory.put<std::uint32_t>(memory.clock,30);
  memory.put(hp,opening);entry();memory.put(hp,std::uint64_t(120)<<32);memory.round_reads=0;memory.change_round=true;negative={};capture_scope_point(*plan,Phase::leave,context,pinned,Memory::read,&memory,lane->snapshot,negative,lane.get());assert(lane->snapshot.error==Error::changed_guard);
  receipt["negative_checks"]={"uid_change_disables_nochange","clock_changed_guard","scope_changed_guard"};
- if(argc==3){assert(std::string(argv[2])=="--spill-pressure");receipt["spill_pressure"]={spill_pressure(*entry_template,*heal_template,*publication_template,24),spill_pressure(*entry_template,*heal_template,*publication_template,32)};}
+ if(argc==3&&std::string(argv[2])=="--view-initialize"){
+  auto view=std::make_unique<OwnedReplayView>();receipt["view_initialize"]=Json::object();
+  for(const auto& branch:std::array<std::pair<const char*,const Snapshot*>,3>{{{"entry",entry_template.get()},{"heal",heal_template.get()},{"publication",publication_template.get()}}}){
+   const auto& snapshot=*branch.second;const unsigned repeats=std::string(branch.first)=="publication"?10:400;
+   const auto before=allocations.load();const auto start=std::chrono::steady_clock::now();
+   for(unsigned i=0;i<repeats;++i){
+    assert(view->initialize(snapshot.segments.data(),snapshot.segment_count,snapshot.fields.data(),snapshot.field_count,
+      snapshot.bytes.data(),snapshot.byte_count,static_cast<std::uint16_t>(configs->roles.size()),snapshot.error)==Error::ok);
+    // Exercise the indexed point and exact field read from the real captured
+    // snapshot; timing remains the same bounded operations before/after.
+    const auto& f=snapshot.fields[0];const auto point=view->point_info(f.role,f.checkpoint);assert(point.field_count>0);
+    if(f.final_segment!=0xffff){const auto& seg=snapshot.segments[f.final_segment];
+     const auto value=view->read(f.role,f.checkpoint,f.id,seg.address,seg.size);assert(value.error==Error::ok);
+     assert(!seg.size||std::memcmp(value.data,snapshot.bytes.data()+seg.offset,seg.size)==0);}
+   }
+   const auto ns=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-start).count();
+   const auto hot_allocations=allocations.load()-before;assert(hot_allocations==0);
+   receipt["view_initialize"][branch.first]={{"repeats",repeats},{"total_ns",ns},{"fields",snapshot.field_count},
+    {"segments",snapshot.segment_count},{"payload_bytes",snapshot.byte_count},{"allocations",hot_allocations}};
+  }
+ }else if(argc==3){assert(std::string(argv[2])=="--spill-pressure");receipt["spill_pressure"]={spill_pressure(*entry_template,*heal_template,*publication_template,24),spill_pressure(*entry_template,*heal_template,*publication_template,32)};}
  std::cout<<receipt.dump()<<'\n';
 }

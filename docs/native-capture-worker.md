@@ -196,3 +196,10 @@ worker完成闭合点发布时，只接收同一journal事务返回的有界内�
 解析完整body。旧captured_prefix_publication内部C++声明/实现没有源码、测试或已定义extern-C ABI
 调用者，随已不用的完整字符串缓存一并移除。此改动只减少发布成本，不证明生产HP回放已跟上
 事件入队速度，也不以扩容、跳过事实或改变fresh-mark要求来掩盖积压。
+
+
+OwnedReplayView的字段与segment索引仍保留原顺序语义（role/checkpoint/id与role/checkpoint/address/原index）。
+初始化时仅将通过相同校验的排序键解码一次到worker固定scratch，比较器不再反复解码序列化结构。
+增加327680字节worker驻留，无Game回调分配；不省略字段、guard、attempt范围或点位。
+生产HP计划生成的owned Snapshot专项覆盖小entry、changed回血及hostclaim publication输入；
+该索引微测只说明索引初始化成本，不能代替实际QuickJS共享HP回调与持续入队的吞吐验收。

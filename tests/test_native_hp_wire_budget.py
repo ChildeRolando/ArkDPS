@@ -31,6 +31,11 @@ def test_actual_hp_warm_plan_wire_budget(tmp_path):
         '-I',str(source),'-I',str(header.parent),str(ROOT/'tests/native_hp_wire_budget_owned.cpp'),
         str(source/'native_capture.cpp'),'-o',str(binary)],capture_output=True,text=True,timeout=60)
     assert build.returncode==0,build.stdout+build.stderr
+    view_result=subprocess.run([str(binary),str(plan),'--view-initialize'],capture_output=True,text=True,timeout=15)
+    assert view_result.returncode==0,(view_result.stdout,view_result.stderr)
+    view_receipt=json.loads(view_result.stdout)['view_initialize']
+    assert sum(row['repeats'] for row in view_receipt.values()) <= 2000
+    assert all(row['allocations']==0 for row in view_receipt.values())
     result=subprocess.run([str(binary),str(plan),'--spill-pressure'],capture_output=True,text=True,timeout=15)
     assert result.returncode==0,(result.returncode,result.stdout,result.stderr)
     receipt=json.loads(result.stdout)

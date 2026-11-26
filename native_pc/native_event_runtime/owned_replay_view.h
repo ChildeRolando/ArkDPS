@@ -51,14 +51,13 @@ public:
             field_keys_[slot] = key; field_indices_[slot] = static_cast<std::uint16_t>(i);
             used_slots_[used_count_++] = static_cast<std::uint16_t>(slot);
             field_order_[i] = static_cast<std::uint16_t>(i);
+            field_sort_keys_[i] = key;
         }
         std::sort(field_order_.begin(), field_order_.begin() + field_count, [&](auto a, auto b) noexcept {
-            const auto x = field_at(a), y = field_at(b);
-            const auto p = point_key(x.role, x.checkpoint), q = point_key(y.role, y.checkpoint);
-            return p != q ? p < q : x.id < y.id;
+            return field_sort_keys_[a] < field_sort_keys_[b];
         });
         for (std::size_t i = 0; i < field_count; ++i) {
-            const auto field = field_at(field_order_[i]); const auto key = point_key(field.role, field.checkpoint);
+            const auto key = field_sort_keys_[field_order_[i]] >> 16;
             if (!point_count_ || points_[point_count_ - 1].key != key) {
                 points_[point_count_++] = {key, static_cast<std::uint16_t>(i), static_cast<std::uint16_t>(i + 1), 0, 0, 0};
             } else points_[point_count_ - 1].field_end = static_cast<std::uint16_t>(i + 1);
@@ -72,12 +71,12 @@ public:
             if (field_index == none) return failure_ = Error::missing_plan_field;
             if (field_at(field_index).guard_id != segment.guard_id) return failure_ = Error::invalid_plan;
             segment_fields_[i] = field_index; segment_order_[i] = static_cast<std::uint16_t>(i);
+            segment_sort_points_[i] = point_key(segment.role, segment.checkpoint);
+            segment_sort_addresses_[i] = segment.address;
         }
         std::sort(segment_order_.begin(), segment_order_.begin() + segment_count, [&](auto a, auto b) noexcept {
-            const auto x = segment_at(a), y = segment_at(b);
-            const auto p = point_key(x.role, x.checkpoint), q = point_key(y.role, y.checkpoint);
-            if (p != q) return p < q;
-            if (x.address != y.address) return x.address < y.address;
+            if (segment_sort_points_[a] != segment_sort_points_[b]) return segment_sort_points_[a] < segment_sort_points_[b];
+            if (segment_sort_addresses_[a] != segment_sort_addresses_[b]) return segment_sort_addresses_[a] < segment_sort_addresses_[b];
             return a < b;
         });
         std::size_t cursor = 0;
@@ -204,6 +203,11 @@ private:
     std::array<std::uint16_t, field_key_slots> field_indices_{};
     std::array<std::uint16_t, max_fields> used_slots_{}, field_order_{};
     std::array<std::uint16_t, max_segments> segment_order_{}, segment_fields_{};
+    // Fixed worker scratch: decode each validated sort key once, rather than
+    // decoding serialized (potentially unaligned) structs in every comparison.
+    std::array<std::uint64_t, max_fields> field_sort_keys_{};
+    std::array<std::uint64_t, max_segments> segment_sort_points_{};
+    std::array<std::uintptr_t, max_segments> segment_sort_addresses_{};
     std::array<Point, max_fields> points_{};
 };
 } // namespace arkdps::capture

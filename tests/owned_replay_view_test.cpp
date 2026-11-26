@@ -51,6 +51,21 @@ int main(){
  std::memcpy(unaligned_fields.data()+1,f.fields.data(),f.nf*sizeof(FieldState));
  assert(view.initialize(unaligned_segments.data()+1,f.ns,unaligned_fields.data()+1,f.nf,f.payload.data(),f.nb,100)==Error::ok);
  assert(number(view.read(1,0,std::nullopt,0x1000,4),4)==0xabcdef00);
+ // Deliberately unordered fields/segments, maximum checkpoint and role IDs:
+ // predecoded ordering must preserve exact role/cp/id boundaries and not join
+ // same-address bytes belonging to different points.
+ f.reset();
+ const std::uint64_t a=11,b=22,c=33,d=44;
+ f.field(9,6,0);f.field(7,5,UINT32_MAX);f.field(8,5,0);f.field(6,UINT16_MAX,UINT32_MAX);
+ f.segment(7,5,UINT32_MAX,0x8000,&b,8);f.segment(6,UINT16_MAX,UINT32_MAX,0x8000,&d,8);
+ f.segment(9,6,0,0x8000,&a,8);f.segment(8,5,0,0x8000,&c,8);
+ assert(view.initialize(f.segments.data(),f.ns,f.fields.data(),f.nf,f.payload.data(),f.nb,UINT16_MAX)==Error::ok);
+ assert(number(view.read(5,UINT32_MAX,7,0x8000,8),8)==b);
+ assert(number(view.read(5,0,8,0x8000,8),8)==c);
+ assert(number(view.read(6,0,9,0x8000,8),8)==a);
+ assert(number(view.read(UINT16_MAX,UINT32_MAX,6,0x8000,8),8)==d);
+ assert(view.point_info(5,UINT32_MAX).single_field_id==7);
+ assert(view.read(5,1,7,0x8000,8).error==Error::missing_plan_field);
  // Failed prefixes cannot lend successful bytes. An independent successful
  // field at the same point is still usable in auto-ID mode.
  f.reset();std::uint64_t bytes=42,other=99;
