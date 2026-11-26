@@ -14,12 +14,13 @@ from native_pc.native_event_runtime.smoke import Fixture, export_offsets
 from native_pc.native_hook_source import NativePipe
 
 
-def source(binary, hostile=False):
+def source(binary, hostile=False, fixed_check=False):
     return r'''
 const word=Memory.alloc(8);word.writeU64(42);
 const address=Process.getModuleByName('ArkDPS.NativeEvents.dll').base.add(OFFSET);
 const field=(id,role,phase,side='none',guard=0)=>({field_id:id,role,phase,root:'absolute',absolute_address:word.toString(),
- root_index:0,pointer_offsets:[],offset:0,kind:'bytes',bytes:8,guard_side:side,guard_id:guard,required:true});
+ root_index:0,pointer_offsets:[],offset:0,kind:'bytes',bytes:8,guard_side:side,guard_id:guard,required:true,
+ ...(FIXED_CHECK?{projection:side==='before',comparison:{version:1,words:[{offset:0,kind:'u32',value:42},{offset:4,kind:'u32',value:0}]}}:{})});
 const scope={version:1,revision:1,mode_epoch:0,raw_collection:'all',available:true,body_insertion_index:1,
  fields:[field(1,'scope.open','checkpoint','before',1),field(2,'scope.close','checkpoint','after',1)]};
 const publication={version:1,revision:1,mode_epoch:0,raw_collection:'all',available:true,chunks:[{fields:[
@@ -31,8 +32,9 @@ const plan={schema_version:1,complete:true,profile:'owned',name:'owned-graph-bin
  fields:[field(1,'body','entry'),field(2,'body','leave')]};
 let entries=0,leaves=0,served=0;
 function check(kind,graph){
- const batch=__arkdpsOwnedGraphReadBatch(kind,graph,0);
- if(!batch||batch.slot(0).getBigUint64(0,true)!==42n||batch.slot(1).getBigUint64(0,true)!==42n)
+ const batch=FIXED_CHECK?__arkdpsOwnedGraphCheck(kind,graph):__arkdpsOwnedGraphReadBatch(kind,graph,0);
+ if(FIXED_CHECK&&__arkdpsVerifiedGraphProof(batch,kind,graph)!==true)throw Error('unverified graph proof');
+ if(!batch||batch.slot(0).getBigUint64(0,true)!==42n||(!FIXED_CHECK&&batch.slot(1).getBigUint64(0,true)!==42n))
   throw Error('graph facts mismatch');
 }
 const hook=Interceptor.attach(address,{arkdpsName:'owned.graph-binding',arkdpsCaptureContract:plan,
@@ -51,15 +53,15 @@ globalThis.__arkdpsOnClosedRecord=record=>{
 };
 rpc.exports={stop(){hook.detach();return {stopped:true};},ackEvents:()=>({acknowledged:0,error:'no fixture ACK permitted'})};
 send({ready:true,fixture:'self-owned-native-graph-binding'});
-'''.replace('OFFSET', str(export_offsets(binary)['ArkDpsTestInteger'])).replace('HOSTILE', str(hostile).lower())
+'''.replace('OFFSET', str(export_offsets(binary)['ArkDpsTestInteger'])).replace('HOSTILE', str(hostile).lower()).replace('FIXED_CHECK', str(fixed_check).lower())
 
 
-def run(binary, hostile=False):
+def run(binary, hostile=False, fixed_check=False):
     with TemporaryDirectory(prefix='arkdps-graph-binding-') as directory:
         fixture=Fixture(Path(directory),binary)
         pipe=None
         try:
-            text=source(binary,hostile)
+            text=source(binary,hostile,fixed_check)
             fixture.configure(source=text)
             fixture.command('load')
             pipe=NativePipe(fixture.pipe_name,fixture.identity['pid'],timeout=5)
@@ -87,7 +89,7 @@ def run(binary, hostile=False):
                 counters=result['native_async_capture']
                 assert counters['failure_code']==0 and counters['processed_ticket']==counters['reserved_ticket']==2,result
                 observation=dict(rejected=False,reply=result,original_abi_preserved=True)
-            return dict(identity=fixture.identity,hostile=hostile,observation=observation,
+            return dict(identity=fixture.identity,hostile=hostile,fixed_check=fixed_check,observation=observation,
                         source_sha256=sha256(text.encode()).hexdigest())
         finally:
             if pipe:pipe.close()
@@ -102,7 +104,8 @@ if __name__=='__main__':
     binary=args.binary.resolve()
     receipt=dict(scope=__doc__,binary_sha256=sha256(binary.read_bytes()).hexdigest(),cases=[])
     try:
-        for hostile in (False,True):receipt['cases'].append(run(binary,hostile))
+        for fixed_check in (False,True):
+            for hostile in (False,True):receipt['cases'].append(run(binary,hostile,fixed_check))
         receipt['result']='PASS'
     except BaseException as error:
         receipt.update(result='FAIL',error_type=type(error).__name__,error=str(error))
@@ -110,4 +113,4 @@ if __name__=='__main__':
     finally:
         args.receipt.parent.mkdir(parents=True,exist_ok=True)
         args.receipt.write_text(json.dumps(receipt,indent=2),encoding='utf-8')
-    print('PASS actual DLL graph binding and caught wrong-revision refusal; original ABI preserved')
+    print('PASS actual DLL raw/fixed graph binding and caught wrong-revision refusal; original ABI preserved')
