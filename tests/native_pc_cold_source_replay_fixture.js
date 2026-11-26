@@ -4,7 +4,7 @@
 // C++ capture ordering/budgets are independently exercised by native_capture_cold.
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const {world}=require('./native_pc_autochess_context_fixture.js');
-const f=world(),P=f.ptr(0).constructor,c=f.context;
+const f=world({fixtureOptions:{roundResetMethod:true}}),P=f.ptr(0).constructor,c=f.context;
 const methods=['readByteArray','readPointer','readU8','readU16','readU32','readS32','readU64','readS64','readFloat','readUtf16String','readCString'];
 const original=Object.fromEntries(methods.map(name=>[name,P.prototype[name]]));
 const metadata=new Map();let replaying=false,late=0;
@@ -93,5 +93,33 @@ assert.equal(c.summary.complete,true,JSON.stringify(c.summary));assert(zero);ass
 const changed=capture(),link=changed.segments.find(s=>s.role==='cold.root_close'&&s.address===f.controller.add(0xe0).toString());
 assert(link);link.bytes=new ArrayBuffer(8);assert.equal(reduce(changed),null);
 assert.equal(c.summary.complete,true,JSON.stringify(c.summary));
+// Exercise the real PLAYING transition callback with this cold tree on return.
+c.planMetadata={...c.metadata,clock:vm.runInContext('clock',c),skill_offsets:{},immutable_class_parents:true};
+const statePlan=vm.runInContext('nativeCapturePlan("BattleController.set_state",ptr(1),planMetadata)',c);
+function captureState(edge,cold,sourcePlan=statePlan){
+ const r=cold?capture():{version:1,edge,checkpoint:0,segments:[],fields:[],facts:{mode_epoch:0,scope_mode_epoch:0}};
+ r.edge=edge;r.segments=r.segments.filter(s=>!['clock_open','clock_close'].includes(s.role));r.fields=r.fields.filter(s=>!['clock_open','clock_close'].includes(s.role));
+ for(const field of sourcePlan.fields.filter(x=>x.phase===edge)){
+  const add=(p,b)=>r.segments.push({field_id:field.field_id,role:field.role,checkpoint:0,address:p.toString(),bytes:b,status:'ok',guard_id:field.guard_id});
+  try{let p=field.root==='global_slot'?c.planMetadata.clock:field.root==='absolute'?f.ptr(field.absolute_address):f.controller;
+   for(const offset of field.pointer_offsets){add(p.add(offset),raw(p.add(offset),8));p=original.readPointer.call(p.add(offset));}p=p.add(field.offset);
+   if(field.kind==='utf16'){add(p,raw(p,8));add(p.add(16),raw(p.add(16),4));const n=original.readS32.call(p.add(16)),text=original.readUtf16String.call(p.add(20)),b=new ArrayBuffer(n*2),v=new DataView(b);for(let i=0;i<n;i++)v.setUint16(i*2,text.charCodeAt(i),true);add(p.add(20),b);}else add(p,raw(p,field.bytes));
+   r.fields.push({field_id:field.field_id,role:field.role,checkpoint:0,status:'ok'});
+  }catch(error){r.fields.push({field_id:field.field_id,role:field.role,checkpoint:0,status:'field_unreadable'});for(const segment of r.segments)if(segment.role===field.role&&segment.field_id===field.field_id)segment.status='unreadable';}
+ }
+ return r;
+}
+function dispatch(record,fn){c.record=record;c.stateCallback=fn;replaying=true;try{vm.runInContext('__arkdpsReplayBegin(record);try{__arkdpsReplayPoint("body",stateCallback);}finally{globalThis.summary=__arkdpsReplayEnd();}',c);}finally{replaying=false;}assert.equal(c.summary.complete,true,JSON.stringify(c.summary));}
+f.write(f.controller.add(0x228),1);const stateHook=f.callback('set_state',f.controllerClass),stateCall={threadId:1};
+dispatch(captureState('entry',false),()=>stateHook.onEnter.call(stateCall,[f.controller,f.ptr(2)]));
+f.write(f.controller.add(0x228),2);dispatch(captureState('leave',true),()=>stateHook.onLeave.call(stateCall));
+assert.equal(vm.runInContext('nativeInitialBoundary?.source',c),'native-pc-producer',vm.runInContext('JSON.stringify(nativeInitialDiagnostics)',c));
+f.clock(30,4294967296n);
+const resetPlan=vm.runInContext('nativeCapturePlan("BattleController.ClearRunTimeData",ptr(1),planMetadata)',c),resetHook=f.callback('ClearRunTimeData',f.controllerClass),resetCall={threadId:1};
+dispatch(captureState('entry',false,resetPlan),()=>resetHook.onEnter.call(resetCall,[f.controller]));
+f.clock(0,0n);f.write(f.center.add(0x3c),2);
+dispatch(captureState('leave',true,resetPlan),()=>resetHook.onLeave.call(resetCall));
+assert.equal(vm.runInContext('autoChessRoundStart?.native_autochess_context.round',c),2);
+assert.equal(vm.runInContext('autoChessRoundStart?.native_fixed_time',c),'0');
 assert.equal(late,0);
 console.log(JSON.stringify({status:'PASS_COLD_SOURCE_REPLAY',fields:record.fields.length,segments:record.segments.length,late_reads:late,scope:binding.native_autochess_context.scope_key}));
