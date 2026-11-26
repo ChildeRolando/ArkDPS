@@ -78,23 +78,31 @@ send({ready:true,fixture:'owned-native-view-semantic'});
 
 
 def fresh_mark(pipe, fixture):
-    results = Queue()
-    def request():
-        try:
-            results.put(pipe.request('mark'))
-        except BaseException as error:
-            results.put(error)
-    pending = Thread(target=request)
-    pending.start()
-    time.sleep(.01)
-    result = fixture.command('call')
-    assert result['integer'] == 650 and result['nested'] == 687, result
-    pending.join(timeout=3)
-    assert not pending.is_alive(), 'fresh mark did not finish'
-    answer = results.get_nowait()
-    if isinstance(answer, BaseException):
-        raise answer
-    return answer
+    deadline = time.monotonic()+3
+    fresh_mark.last_nudges = 0
+    while time.monotonic() < deadline:
+        results = Queue()
+        def request():
+            try:
+                results.put(pipe.request('mark'))
+            except BaseException as error:
+                results.put(error)
+        pending = Thread(target=request)
+        pending.start()
+        time.sleep(.01)
+        # Existing driver operation, bounded to ONE original Integer call.
+        # Ignore elapsed_ns: this is a semantic nudge, not a throughput test.
+        result = fixture.command('benchmark', count=1)
+        fresh_mark.last_nudges += 1
+        assert result['count'] == 1 and result['total'] == 650, result
+        pending.join(timeout=3)
+        assert not pending.is_alive(), 'fresh mark did not finish'
+        answer = results.get_nowait()
+        if isinstance(answer, BaseException):
+            raise answer
+        if not answer.get('retry'):
+            return answer
+    raise AssertionError('later owned edges did not establish a fresh publication')
 
 
 def run(binary, case):
@@ -111,12 +119,14 @@ def run(binary, case):
                 assert mark.get('retry') is not True and mark.get('error') is None, mark
                 assert mark.get('source_assertion_errors') == [], mark
                 assert mark['owned_native_view'] is True, mark
-                assert mark['entries'] == mark['leaves'] >= 1 and mark['checks'] >= 29, mark
+                assert mark['entries'] == mark['leaves'] == fresh_mark.last_nudges >= 1, mark
+                assert mark['checks'] == 31*fresh_mark.last_nudges, mark
+                assert int(mark['native_publication']['closed_ticket']) == 2*fresh_mark.last_nudges, mark
                 assert mark['native_async_capture']['failure_code'] == 0, mark
                 token = mark['native_publication']['token']
                 batch = pipe.request('read', publication_token=token, after=0, through=0)
                 assert batch.get('error') is None and batch['events'] == [], batch
-                return {'result':'PASS','identity':fixture.identity,'ready':ready,'mark':mark}
+                return {'result':'PASS','identity':fixture.identity,'ready':ready,'nudges':fresh_mark.last_nudges,'mark':mark}
             result = fixture.command('call')
             assert result['integer'] == 650 and result['nested'] == 687, result
             rejected = False
