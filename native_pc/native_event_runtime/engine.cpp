@@ -10,6 +10,7 @@
 extern "C" {
 #include <quickjs.h>
 }
+#include "owned_replay_js.h"
 #include "bridge_source.h"
 #include "publication_source.h"
 #include "cold_plan_source.h"
@@ -66,10 +67,6 @@ struct Runtime {
     std::array<std::array<WorkerInvocation, 256>, 16> receivers{};
     std::array<unsigned, 16> replay_depth{};
     std::array<std::byte, arkdps::capture::record_capacity> consume_buffer{};
-    std::array<std::uint64_t, arkdps::capture::field_key_slots> field_status_keys{};
-    std::array<arkdps::capture::Error, arkdps::capture::field_key_slots> field_status_values{};
-    std::array<std::uint16_t, arkdps::capture::max_fields> field_status_used{};
-    std::uint16_t field_status_count=0;
     JSRuntime* runtime = nullptr;
     JSContext* context = nullptr;
     JSValue pointer = JS_UNDEFINED;
@@ -610,13 +607,6 @@ void configure_mode(const nlohmann::json& command) {
 void js_property(JSContext* c, JSValue object, const char* name, JSValue value) {
     if (JS_SetPropertyStr(c,object,name,value)<0) throw std::runtime_error(exception(c));
 }
-std::uint64_t status_key(std::uint16_t role, std::uint32_t checkpoint, std::uint16_t id) noexcept {
-    return (std::uint64_t(checkpoint)<<32)|(std::uint64_t(role)<<16)|id;
-}
-std::size_t status_slot(std::uint64_t key) noexcept {
-    key^=key>>33; key*=0xff51afd7ed558ccdULL; key^=key>>33;
-    return static_cast<std::size_t>(key)&(arkdps::capture::field_key_slots-1);
-}
 void replay_record(const std::byte* bytes, std::size_t length) {
     using namespace arkdps::capture;
     auto& runtime=state(); auto* c=runtime.context;
@@ -645,7 +635,8 @@ void replay_record(const std::byte* bytes, std::size_t length) {
                || header.parent!=(depth>1 ? runtime.receivers[header.lane][depth-2].id : 0))
         throw std::runtime_error("native capture leave topology mismatch");
     const char* edge=header.phase==Phase::entry ? "entry" : "leave";
-    auto record=JS_NewObject(c), segments=JS_NewArray(c), fields=JS_NewArray(c);
+    auto record=JS_NewObject(c);
+    js_property(c,record,"native_view",JS_TRUE);
     js_property(c,record,"version",JS_NewInt32(c,1));
     js_property(c,record,"hook_id",JS_NewUint32(c,header.hook_id));
     js_property(c,record,"edge",JS_NewString(c,edge));
@@ -685,58 +676,11 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     const auto segment_start=sizeof header+header.parent_checkpoint_count*sizeof(ParentCheckpoint);
     const auto field_start=segment_start+header.segment_count*sizeof(Segment);
     const auto payload=bytes+field_start+header.field_count*sizeof(FieldState);
-    for (unsigned i=0;i<runtime.field_status_count;++i) runtime.field_status_keys[runtime.field_status_used[i]]=0;
-    runtime.field_status_count=0;
-    for (unsigned i=0;i<header.field_count;++i) {
-        FieldState field;
-        std::memcpy(&field,bytes+field_start+i*sizeof field,sizeof field);
-        if (!field.id || !field.role || field.role>runtime.configurations.roles.size()
-            || structural_error(field.error))
-            throw std::runtime_error("native capture field has a structural failure");
-        const auto key=status_key(field.role,field.checkpoint,field.id);
-        auto slot=status_slot(key);
-        while (runtime.field_status_keys[slot] && runtime.field_status_keys[slot]!=key)
-            slot=(slot+1)&(field_key_slots-1);
-        if (runtime.field_status_keys[slot]) throw std::runtime_error("duplicate native capture field descriptor");
-        runtime.field_status_keys[slot]=key; runtime.field_status_values[slot]=field.error;
-        runtime.field_status_used[runtime.field_status_count++]=slot;
-    }
-
-    for (unsigned i=0;i<header.segment_count;++i) {
-        Segment segment;
-        std::memcpy(&segment,bytes+segment_start+i*sizeof segment,sizeof segment);
-        if (!segment.role || segment.role>runtime.configurations.roles.size()
-            || segment.offset>header.byte_count || segment.size>header.byte_count-segment.offset)
-            throw std::runtime_error("invalid captured segment");
-        auto value=JS_NewObject(c);
-        js_property(c,value,"field_id",JS_NewUint32(c,segment.field_id));
-        js_property(c,value,"role",JS_NewString(c,runtime.configurations.roles[segment.role-1].c_str()));
-        js_property(c,value,"checkpoint",JS_NewUint32(c,segment.checkpoint));
-        js_property(c,value,"address",JS_NewBigUint64(c,segment.address));
-        js_property(c,value,"bytes",JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(payload+segment.offset),segment.size));
-        const auto key=status_key(segment.role,segment.checkpoint,segment.field_id);
-        auto slot=status_slot(key);
-        while (runtime.field_status_keys[slot] && runtime.field_status_keys[slot]!=key)
-            slot=(slot+1)&(field_key_slots-1);
-        const auto field_error=runtime.field_status_keys[slot] ? runtime.field_status_values[slot] : Error::missing_plan_field;
-        if (field_error==Error::missing_plan_field) throw std::runtime_error("captured segment lacks a field descriptor");
-        js_property(c,value,"status",JS_NewString(c,field_error==Error::ok ? "ok" : field_error==Error::changed_guard ? "guard_changed" : "unreadable"));
-        JS_SetPropertyUint32(c,segments,i,value);
-    }
-    for (unsigned i=0;i<header.field_count;++i) {
-        FieldState field;
-        std::memcpy(&field,bytes+field_start+i*sizeof field,sizeof field);
-        if (!field.role || field.role>runtime.configurations.roles.size()) throw std::runtime_error("invalid captured field");
-        auto value=JS_NewObject(c);
-        js_property(c,value,"field_id",JS_NewUint32(c,field.id));
-        js_property(c,value,"role",JS_NewString(c,runtime.configurations.roles[field.role-1].c_str()));
-        js_property(c,value,"checkpoint",JS_NewUint32(c,field.checkpoint));
-        js_property(c,value,"status",JS_NewString(c,field.error==Error::ok ? "ok" : field.error==Error::changed_guard ? "guard_changed" : "unreadable"));
-        js_property(c,value,"attempted_address",JS_NewBigUint64(c,field.attempted_address));
-        js_property(c,value,"attempted_size",JS_NewUint32(c,field.attempted_size));
-        JS_SetPropertyUint32(c,fields,i,value);
-    }
-    js_property(c,record,"segments",segments); js_property(c,record,"fields",fields);
+    const auto view_error=arkdps::owned_js::begin(bytes+segment_start,header.segment_count,
+        bytes+field_start,header.field_count,payload,header.byte_count,
+        runtime.configurations.roles,header.ticket,header.error);
+    arkdps::owned_js::Lease view_lease;
+    if (view_error!=Error::ok) {JS_FreeValue(c,record);throw std::runtime_error("native owned view rejected structural capture");}
     runtime.replay_header=header; runtime.replay_active=true;
     auto entered=JS_Call(c,runtime.replay_begin,JS_UNDEFINED,1,&record);
     if (JS_IsException(entered)) { JS_FreeValue(c,record); runtime.replay_active=false; throw std::runtime_error(exception(c)); }
@@ -1041,6 +985,9 @@ void initialize_on_worker(const std::string& source) {
     function(c,global,"__publishCapturePublication",js_publish_publication,1);
     function(c,global,"__send",js_send,1);function(c,global,"__nativeActive",js_active,0);function(c,global,"__pid",js_pid,0);
     try {
+        arkdps::owned_js::install(c,[]() noexcept {
+            state().lanes->poison(arkdps::capture::LaneFault::replay_structure);
+        });
         evaluate(c, arkdps_bridge_source, "native-bridge.js");
         evaluate(c, arkdps_publication_source, "native-publication.js");
         evaluate(c, arkdps_cold_plan_source, "native-cold-plan.js");
