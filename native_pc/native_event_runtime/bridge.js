@@ -331,8 +331,8 @@ function __arkdpsNativeAddress(address){
  // addresses remain full uint64 BigInts; legacy providers never see Numbers.
  return __arkdpsReplay.native.__nativeOwnedNumericAddress&&typeof address==='bigint'&&address>=0n&&address<=9007199254740991n?Number(address):address;
 }
-// Immutable metadata handles are registered once before native installation is
-// sealed. They contain read geometry only; values always come from this lease.
+// Read geometry comes from the same immutable compiled capture contract;
+// there is no independent HP read-plan registry. Values belong to this lease.
 const __arkdpsHpObservationGeometry=new WeakMap(),__arkdpsPreparedHpObservations=new WeakMap();
 class __ArkDpsHpObservation {
  #replay;#packet;#geometry;#root;#attributes=null;
