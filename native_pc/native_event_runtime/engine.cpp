@@ -553,6 +553,17 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     js_property(c,record,"hook_id",JS_NewUint32(c,header.hook_id));
     js_property(c,record,"edge",JS_NewString(c,edge));
     js_property(c,record,"checkpoint",JS_NewUint32(c,header.checkpoint));
+    js_property(c,record,"ticket",JS_NewString(c,std::to_string(header.ticket).c_str()));
+    js_property(c,record,"invocation_id",JS_NewString(c,std::to_string(header.invocation).c_str()));
+    js_property(c,record,"parent_invocation_id",JS_NewString(c,std::to_string(header.parent).c_str()));
+    js_property(c,record,"activity_begin",JS_NewString(c,std::to_string(header.activity_begin).c_str()));
+    js_property(c,record,"activity_end",JS_NewString(c,std::to_string(header.activity).c_str()));
+    js_property(c,record,"active_at_capture",JS_NewUint32(c,header.active));
+    js_property(c,record,"active_after",JS_NewUint32(c,header.active_after));
+    js_property(c,record,"closed_after",JS_NewBool(c,header.closed_after));
+    js_property(c,record,"lane",JS_NewUint32(c,header.lane));
+    js_property(c,record,"thread_id",JS_NewUint32(c,header.thread_id));
+    js_property(c,record,"thread_birth",JS_NewString(c,std::to_string(header.thread_birth).c_str()));
     const auto segment_start=sizeof header;
     const auto field_start=segment_start+header.segment_count*sizeof(Segment);
     const auto payload=bytes+field_start+header.field_count*sizeof(FieldState);
@@ -614,6 +625,8 @@ void replay_record(const std::byte* bytes, std::size_t length) {
             JS_FreeValue(c,result);
         }
     } catch (...) { callback_failure=std::current_exception(); }
+    if (runtime.lanes->failure.load(std::memory_order_acquire))
+        callback_failure=std::make_exception_ptr(std::runtime_error("native replay violated the capture boundary"));
     std::string projection;
     if (!callback_failure && header.closed_after && JS_IsFunction(c,runtime.prefix_projection)) {
         auto frozen=JS_Call(c,runtime.prefix_projection,JS_UNDEFINED,1,&record);
@@ -670,12 +683,16 @@ void drain_captures() noexcept {
                 throw std::runtime_error("native capture record exceeds worker buffer");
             JS_UpdateStackTop(runtime.runtime);
             replay_record(runtime.consume_buffer.data(),size);
+            if (runtime.lanes->failure.load(std::memory_order_acquire))
+                throw std::runtime_error("native capture failed during replay");
         }
     } catch (const std::exception& error) {
+        runtime.captured_publication.clear(); runtime.published_ticket=0;
         runtime.lanes->poison(LaneFault::replay_structure);
         runtime.lanes->enabled.store(false,std::memory_order_release);
         fail(error.what());
     } catch (...) {
+        runtime.captured_publication.clear(); runtime.published_ticket=0;
         runtime.lanes->poison(LaneFault::replay_structure);
         runtime.lanes->enabled.store(false,std::memory_order_release);
         fail("native capture replay failed");
@@ -720,7 +737,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
     header.active=runtime.active.load(std::memory_order_acquire);
     header.activity=header.activity_begin; header.args=context.args; header.return_address=call.return_address;
-    header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId();
+    header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId(); header.thread_birth=lane->birth;
     for (unsigned i=0;i<lane_count;++i) if (lanes.lanes[i].get()==lane) header.lane=i;
     header.depth=lane->depth; header.phase=Phase::entry; header.arg_mask=context.args_valid;
     capture(hook->capture_plan.plan,Phase::entry,context,capture_read,nullptr,lane->snapshot);
@@ -748,7 +765,7 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     RecordHeader header{};
     header.ticket=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
     header.invocation=call.id; header.parent=call.parent;
-    header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId();
+    header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId(); header.thread_birth=lane->birth;
     for (unsigned i=0;i<lane_count;++i) if (lanes.lanes[i].get()==lane) header.lane=i;
     header.depth=lane->depth; header.phase=Phase::leave;
     header.args=call.context.args; header.arg_mask=call.context.args_valid;
@@ -938,7 +955,7 @@ std::string request(const std::string& json) {
     return state().worker.submit([json] { return request_on_worker(json); });
 }
 std::string captured_prefix_publication() {
-    return state().worker.submit([] { return state().captured_publication; });
+    return state().worker.submit([] { if (!state().fatal.empty()) throw std::runtime_error(state().fatal); return state().captured_publication; });
 }
 std::uint64_t timing_begin() noexcept {
     return timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;

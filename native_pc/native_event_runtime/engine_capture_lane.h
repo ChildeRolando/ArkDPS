@@ -19,7 +19,7 @@ struct InvocationState {
 };
 struct RecordHeader {
     std::uint64_t ticket = 0, invocation = 0, parent = 0, activity = 0, activity_begin = 0;
-    std::uint64_t return_value = 0;
+    std::uint64_t return_value = 0, thread_birth = 0;
     std::uintptr_t return_address = 0;
     std::array<std::uint64_t, 16> args{};
     std::uint32_t hook_id = 0, thread_id = 0, lane = 0, depth = 0;

@@ -88,6 +88,7 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         if (kind=="bytes") field.kind=Kind::bytes;
         else if (kind=="utf16") field.kind=Kind::utf16;
         else if (kind=="counted_bytes") field.kind=Kind::counted_bytes;
+        else if (kind=="utf16_array") field.kind=Kind::utf16_array;
         else throw std::runtime_error("invalid capture kind");
         field.guard_id=plan_uint(value.at("guard_id"), max_guards-1);
         const auto guard=value.at("guard_side").get<std::string>();
@@ -104,6 +105,12 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         field.count_field_id=plan_uint(value.value("count_field_id", nlohmann::json(0)), 65535);
         field.element_bytes=plan_uint(value.value("element_bytes", nlohmann::json(0)), 65535);
         field.max_count=plan_uint(value.value("max_count", nlohmann::json(0)), 65535);
+        field.element_pointer_offset=plan_uint(value.value("element_pointer_offset", nlohmann::json(0)), 65535);
+        if (value.contains("stop_utf16_literal")) {
+            if (value.at("stop_utf16_literal")!="dynamic")
+                throw std::runtime_error("unsupported capture UTF16 stop literal");
+            field.stop_at_dynamic=true;
+        }
     }
     // No named projection is implemented by this generic read-recipe compiler.
     // Producers must lower every operation to fields before declaring complete.

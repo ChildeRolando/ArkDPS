@@ -20,6 +20,20 @@ source=source.replace("hooks.push(Interceptor.attach(base.add(offset), {",r"""
 source=source.replace("if(name==='Slow')activity.writeU64(1);",'').replace("if(name==='Slow')activity.writeU64(0);",'')
 source=source.replace('this.serial = ++serial;',"this.serial = ++serial; if(serial===1){const until=Date.now()+400;while(Date.now()<until){}}")
 source=source.replace("if(name==='Sret')record.values=", "if(name==='Sret')__arkdpsReplayRole('leave',0,1); if(name==='Sret')record.values=")
+source += r"""
+let lastClosedRecord=null;
+globalThis.__arkdpsOnClosedRecord=record=>{
+ if(record.edge!=='leave'||record.closed_after!==true||record.active_after!==0
+    ||BigInt(record.activity_end)!==BigInt(record.activity_begin)+1n
+    ||typeof record.ticket!=='string'||typeof record.thread_birth!=='string')
+  throw new Error('invalid owned closed record fence');
+ lastClosedRecord=Object.freeze({ticket:record.ticket,activity_begin:record.activity_begin,
+  activity_end:record.activity_end,active_after:record.active_after,closed_after:record.closed_after});
+ return Object.freeze({error:null,retry:false,owned_fixture_closed_record:lastClosedRecord});
+};
+const originalMark=rpc.exports.mark;
+rpc.exports.mark=()=>({...originalMark(),owned_closed_record:lastClosedRecord});
+"""
 receipt={}
 with tempfile.TemporaryDirectory(prefix='arkdps-async-owned-') as temp:
  f=Fixture(Path(temp)/'valid',binary); pipe=None
@@ -39,6 +53,8 @@ with tempfile.TemporaryDirectory(prefix='arkdps-async-owned-') as temp:
   else:raise AssertionError('owned capture prefix did not drain')
   receipt['mark']=mark
   assert mark['native_async_capture']['failure_code']==0 and mark['native_async_capture']['closed_ticket']>0,mark
+  assert mark['native_async_capture']['publication_ready'] is True,mark
+  assert int(mark['owned_closed_record']['ticket'])==mark['native_async_capture']['published_ticket'],mark
   assert mark['retained_arguments']['values']==list(map(str,FULL_ARGUMENT_VALUES)),mark['retained_arguments']
   assert len(mark['records'])==12,mark['records']
   terminal=pipe.request('terminal_read',after=0,through=0); assert terminal['retry'] and terminal['events']==[],terminal
@@ -68,6 +84,25 @@ with tempfile.TemporaryDirectory(prefix='arkdps-async-incomplete-') as temp:
  finally:
   if pipe: pipe.close()
   f.close()
+# Calling the C++ primitives directly must still fail closed even if script
+# catches the JS exception. Native originals continue; next host reply fails.
+receipt['cpp_live_replay_bans']={}
+for name,operation in [('read','__read(1n,8)'),('native_call','__nativeCall(1n,[])')]:
+ with tempfile.TemporaryDirectory(prefix='arkdps-async-direct-'+name+'-') as temp:
+  f=Fixture(Path(temp)/name,binary); pipe=None
+  try:
+   hostile=source.replace('this.serial = ++serial;', 'try{'+operation+';}catch(ignored){} this.serial = ++serial;')
+   f.configure(source=hostile); f.command('load'); pipe=NativePipe(f.pipe_name,f.identity['pid'])
+   pipe.request('initialize',token=f.token)
+   result=f.command('call'); assert result['integer']==650 and result['nested']==687
+   rejected=False
+   try: pipe.request('mark')
+   except Exception: rejected=True
+   assert rejected,'C++ '+name+' bypassed replay isolation'
+   receipt['cpp_live_replay_bans'][name]='rejected despite JS catch; original ABI preserved'
+  finally:
+   if pipe:pipe.close()
+   f.close()
 options.receipt.parent.mkdir(parents=True,exist_ok=True)
 options.receipt.write_text(json.dumps(receipt,indent=2))
 print(receipt['result']); print('original call completed in',receipt['call_duration_seconds'],'seconds while worker callback busy400ms')
