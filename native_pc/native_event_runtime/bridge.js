@@ -624,7 +624,7 @@ const __argumentHandler={
   return descriptor;
  },
  defineProperty(array,key,descriptor){
-  if(descriptor.writable===false&&!__arkdpsProviderHasOwn(descriptor,'value')&&
+  if(descriptor.writable===false&&!Object.hasOwn(descriptor,'value')&&
      Reflect.getOwnPropertyDescriptor(array,key)?.value===__deferredArgument)
    __materializeArgument(array,key);
   return Reflect.defineProperty(array,key,descriptor);
