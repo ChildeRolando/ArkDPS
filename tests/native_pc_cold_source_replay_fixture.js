@@ -4,7 +4,7 @@
 // C++ capture ordering/budgets are independently exercised by native_capture_cold.
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const {world}=require('./native_pc_autochess_context_fixture.js');
-const f=world({fixtureOptions:{roundResetMethod:true,settlement:true}}),P=f.ptr(0).constructor,c=f.context;
+const f=world({fixtureOptions:{roundResetMethod:true,settlement:true,enemyHpState:true}}),P=f.ptr(0).constructor,c=f.context;
 f.write(f.character.add(0x58),f.unitClass);f.write(f.unitClass.add(0x58),f.entity);f.write(f.entity.add(0x58),f.bObject);f.write(f.bObject.add(0x58),f.ptr(0));
 f.klass('BattleCharacterData','Torappu.Battle',36,[[4,'prefabKey',0x50,14],[8,'uniqueId',0x6c,9],[14,'isToken',0x90,2],[15,'isPredefined',0x91,2],[18,'tokenOrHostKey',0x98,14],[19,'tokenOrHostUniqueId',0xa0,9]],f.ptr(0),f.characterData);
 for(const data of f.roleData)f.write(data,f.characterData);
@@ -147,6 +147,24 @@ assert(actorEvents.some(e=>e.proof?.native_autochess_character_form),JSON.string
 assert(actorEvents.some(e=>e.proof?.native_autochess_token_host),JSON.stringify(actorEvents));
 const badForm=actorHit('char_002_amiya','char_1037_amiya3',102,false,'data_uid');assert(badForm.every(e=>!e.proof?.native_autochess_character_form));
 const badToken=actorHit('token_owned','token_owned',998,true,'side');assert(badToken.every(e=>!e.proof?.native_autochess_token_host));
+// A claimed leave of an ignored Character contains no HP body fields. The
+// real no-write handler still allows a fresh full publication graph endpoint.
+const ignored=f.unit('char_ignored_owned',800);f.write(ignored.add(0x148),f.text('char_ignored_owned'));
+const hpPlan=vm.runInContext('nativeCapturePlan("Entity.SetHpInternal",ptr(1),planMetadata)',c),hpHook=f.callback('SetHpInternal',f.entity),ignoredCall={threadId:1};
+dispatch(captureState('entry',false,hpPlan,[ignored]),()=>hpHook.onEnter.call(ignoredCall,[ignored]));assert.equal(ignoredCall.write,undefined);
+c.latestBinding=vm.runInContext('nativeBinding(null,true)',c);
+vm.runInContext('globalThis.ownedScopeGraph=nativeCaptureScopeGraph(nativeAutoCache,nativeAutoStage,clock,1);nativeCaptureScopes.set(1,ownedScopeGraph);globalThis.ownedPublicationGuards=nativeAutoBodyCache.body.read.guards;nativeCapturePublications.set(1,{mode_epoch:0,binding:JSON.parse(JSON.stringify(latestBinding)),guards:ownedPublicationGuards});globalThis.ownedPublicationGraph=publicationGuardFields(ownedPublicationGuards,planMetadata.string_class,1);',c);
+const publicationFields=[...c.ownedScopeGraph.fields,...c.ownedPublicationGraph.chunks.flatMap(x=>x.fields)].map(field=>({...field,phase:'leave'}));
+const clockFields=hpPlan.fields.filter(field=>field.phase==='leave'&&['clock_open','clock_close'].includes(field.role));
+const ignoredRecord=captureState('leave',false,{fields:[...clockFields,...publicationFields]},[ignored]);ignoredRecord.closed_after=true;ignoredRecord.active_after=0;ignoredRecord.facts.scope_revision=1;ignoredRecord.facts.publication_revision=1;
+assert(!ignoredRecord.fields.some(field=>field.role==='body'));
+dispatch(ignoredRecord,()=>{hpHook.onLeave.call(ignoredCall);c.ignoredProjection=c.__arkdpsOnClosedRecord(ignoredRecord);});
+assert(c.ignoredProjection);assert.equal(c.ignoredProjection.mark.sequence,actorEvents.length+badForm.length+badToken.length);assert.equal(vm.runInContext('readThroughSequence',c),0);
+const dirtyHook=f.callback('OnAttributeDirty',f.entity),dirtyCall={threadId:1},emptyEntry={version:1,edge:'entry',checkpoint:0,segments:[],fields:[],facts:{mode_epoch:0,scope_mode_epoch:0}};
+dispatch(emptyEntry,()=>dirtyHook.onEnter.call(dirtyCall,[ignored,f.ptr(1),f.ptr(0)]));assert.equal(dirtyCall.write,undefined);
+const dirtyLeave={...ignoredRecord,facts:{...ignoredRecord.facts}};dispatch(dirtyLeave,()=>{dirtyHook.onLeave.call(dirtyCall);c.ignoredDirtyProjection=c.__arkdpsOnClosedRecord(dirtyLeave);});
+assert(c.ignoredDirtyProjection);assert.equal(c.ignoredDirtyProjection.mark.sequence,c.ignoredProjection.mark.sequence);assert.equal(vm.runInContext('readThroughSequence',c),0);
+
 // Destroy entry owns the full old binding; leave owns the released singleton
 // and independently copied old views. No normal live binding is available.
 f.write(f.controller.add(0x228),3);
