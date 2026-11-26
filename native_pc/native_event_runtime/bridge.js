@@ -72,7 +72,8 @@ function __arkdpsCapturedAssignable(base,klass){
    const owned=__arkdpsColdMetadataRead(current.add(0x58),8);
    if(!(owned instanceof ArrayBuffer)||owned.byteLength!==8)__arkdpsReplayGap('invalid frozen class parent');
    current=ptr(new DataView(owned).getBigUint64(0,true));
-  }else current=current.add(0x58).readPointer();
+  }else if(__arkdpsReplay.native)__arkdpsReplayGap('native replay class metadata not frozen');
+  else current=current.add(0x58).readPointer();
  }
  if(current.isNull())return false;
  __arkdpsReplayGap('captured class ancestry limit');
