@@ -1150,7 +1150,7 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
             auto& lane=*runtime.lanes->lanes[index];
             const auto owner=lane.owner.load(std::memory_order_acquire);
             if (!owner || owner==MAXDWORD) continue;
-            const auto snapshot=capture::lane_metric_snapshot(lane,age,ticks_now());
+            const auto snapshot=capture::lane_metric_snapshot(lane,age,age ? ticks_now() : 0);
             auto optional=[](std::optional<std::uint64_t> value) { return value ? nlohmann::json(*value) : nlohmann::json(); };
             nlohmann::json row{{"lane",index},{"captured_records",snapshot.submitted},{"consumed_records",snapshot.consumed},
                 {"captured_bytes",snapshot.submitted_bytes},{"consumed_bytes",snapshot.consumed_bytes},
