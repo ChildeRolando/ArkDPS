@@ -35,6 +35,8 @@ def run(stage, output, count=10000, source_root=ROOT, native_root=ROOT, bridge_r
         command.insert(1,'-DARKDPS_CAPTURE_GRAPH_CHECK')
     if 'inline JSValue hook_point' in (native/'owned_replay_js.h').read_text(encoding='utf-8'):
         command.insert(1,'-DARKDPS_CAPTURE_HOOK_POINT')
+    if 'inline JSValue hp_observation' in (native/'owned_replay_js.h').read_text(encoding='utf-8'):
+        command.insert(1,'-DARKDPS_CAPTURE_HP_OBSERVATION')
     build=subprocess.run(command,cwd=ROOT,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=60)
     if build.returncode:
         raise RuntimeError(build.stdout+build.stderr)

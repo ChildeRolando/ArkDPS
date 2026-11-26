@@ -1,0 +1,7 @@
+{
+  "binary_sha256": "e490e5db57c929939ba3f5dcd3198ab8e37b91c0b98108084668cc00bf1831ed",
+  "script_sha256": "27cb7b527c5268e5ff957b08c708043c4bddb62256d0dc5d4fe66e9baf69251e",
+  "mutation": "owned actor+B0 pointer set0 before native capture; failed count/slot expected missing_root4",
+  "comparison": "all raw_events and all edge unreadable/structural summaries exactlyequal",
+  "semantic_exception": "normal maxHpknown coalescer2event assertion not applicable; old/null expected8 rawheals and compared exactly"
+}

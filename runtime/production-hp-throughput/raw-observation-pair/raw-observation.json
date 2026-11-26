@@ -1,0 +1,301 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 0,
+        "hp_observation_calls": 0,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 0,
+        "registered_plans": 0,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 3.155000001192093,
+      "setters_per_second": 633914.4213135706,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 0.5924000144004822,
+        "scope_inside_pub_ms": 0.5924000144004822,
+        "prefix_ms": 6.304199993610382,
+        "journal_ms": 0.6091000139713287
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 2.2143999999998947,
+        "capture_read_bytes": 522886,
+        "capture_read_count": 32238,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 0,
+        "hp_observation_calls": 4000,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 7,
+        "registered_plans": 0,
+        "scalar_calls": 5,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 1.0959999999999537
+      },
+      "branch": "unchanged",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 143.683100014925,
+      "setters_per_second": 13919.521501082947,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 145.9580002129078,
+        "scope_inside_pub_ms": 0.07319998741149902,
+        "prefix_ms": 58.28889998793602,
+        "journal_ms": 39.450100004673004
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 6.794100000000201,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 0,
+        "hp_observation_calls": 4000,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 2007,
+        "registered_plans": 0,
+        "scalar_calls": 2005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 6.11180000000023
+      },
+      "branch": "changed_damage",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 437.3187000155449,
+      "setters_per_second": 4573.3237566308235,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 2000,
+      "event_kinds": {
+        "enemy_hp": 2000
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 156.75170010328293,
+        "scope_inside_pub_ms": 0.1112000048160553,
+        "prefix_ms": 4.085299998521805,
+        "journal_ms": 0.6376999914646149
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 8.728000000000126,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 0,
+        "hp_observation_calls": 4000,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 2007,
+        "registered_plans": 0,
+        "scalar_calls": 2005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 7.433700000000118
+      },
+      "branch": "heal_coalesced",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 377.26469999551773,
+      "setters_per_second": 5301.317616049851,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 149.62629979848862,
+        "scope_inside_pub_ms": 0.08750000596046448,
+        "prefix_ms": 5.397100001573563,
+        "journal_ms": 1.6749999821186066
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 8.039700000000188,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 0,
+        "hp_observation_calls": 4000,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 2007,
+        "registered_plans": 0,
+        "scalar_calls": 2005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 6.988200000000152
+      },
+      "branch": "maxhp_dirty",
+      "setters": 2000,
+      "dirty": 20,
+      "elapsed_ms": 360.1836999952793,
+      "setters_per_second": 5552.7221249218455,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 41,
+      "event_kinds": {
+        "enemy_hp": 41
+      }
+    }
+  ],
+  "provenance": {
+    "source": "9b8be77",
+    "source_sha256": {
+      "event_probe_native_pc.js": "64e3e5c0c965a5268cd69599c6bbc4642d467641a77e9819bbbc1b30bec636bf",
+      "event_probe_runtime.js": "59f40198a207859521aa698543468b452398a74a4c813f8f907926acd3fab19e",
+      "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc",
+      "native_pc/native_event_runtime/cold_plan.js": "4b9e7615b5dfc5e9dbc6030323cb56ba6b789aa682116114bc77ffd3634dce33",
+      "native_pc/native_event_runtime/publication.js": "5a83506f7f1ba64afbcd8592522d8f9b84f71a60ab7596ce1f718932ba545577",
+      "native_pc/native_event_runtime/bridge.js": "e05e33f2760f8dfd5707450b27573ed9bd039c667408a6d78f974dcd4d048e03"
+    },
+    "bridge_sha256": "73579927b1be0f65e5f2b1b56d3fed9bd61019e9dd70fa22f5eeaad342c8d5ff",
+    "binary_sha256": "e490e5db57c929939ba3f5dcd3198ab8e37b91c0b98108084668cc00bf1831ed",
+    "script_sha256": "a518b51545eba7bc2e992c4cea7efc939ec73de0b3f42c6b07cdde01bf518694",
+    "flags": [],
+    "native_build_receipt": "../raw-observation-smoke/receipt.json"
+  }
+}

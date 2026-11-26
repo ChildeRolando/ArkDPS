@@ -11,7 +11,7 @@ not a substitute for native owned-provider tests.
 Forty cases cover native PC and MuMu, compact/raw, first heal/unchanged, XOR and
 MaxHP dirty, damage→heal→direct setters, nested same/different thread, UID change,
 frame/fixed change, zero frame, and ACK prefix immutability. Self-comparison smoke
-passes all40. Actual candidate parity is pending its first source commit.
+passes all40. a12ded694449210fd174be5bda82aa272a349655 versus its parent passed all40 exact envelopes; sourceSHA and full golden batches are retained under runtime/production-hp-throughput/provider-parity/receipt. Source9b8be77 helper-absent acquisition also passed all40. Native API/owned proof parity and performance are separate gates.
 
 Additional mandatory native proof checks remain in existing owned tests/new
 provider tests: optional absence with no read; requested absence poisons even

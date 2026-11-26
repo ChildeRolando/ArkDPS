@@ -48,9 +48,9 @@ static JSValue configure(JSContext *c, JSValueConst, int argc,
     auto j = J::parse(text);
     JS_FreeCString(c, text);
     plan = std::make_unique<CompiledPlan>(compile_plan(j.at("plan"), 0x9000));
+    configurations = std::make_unique<CaptureConfigurations>();
+    configurations->intern(*plan);
     if (j.contains("scope")) {
-      configurations = std::make_unique<CaptureConfigurations>();
-      configurations->intern(*plan);
       configurations->publish(j.at("scope"), false);
       configurations->publish(j.at("publication"), true);
       capture_lane = std::make_unique<Lane>(CaptureQueue::Config{2, 4096}, 1);
@@ -117,6 +117,19 @@ struct SampleTimer {
   }
 };
 static Profile profile;
+static std::uint64_t hp_observation_calls = 0, hp_failure_calls = 0;
+#ifdef ARKDPS_CAPTURE_HP_OBSERVATION
+static JSValue owned_hp_observation(JSContext *c, JSValueConst self, int n,
+                                    JSValueConst *args) {
+  ++hp_observation_calls;
+  return arkdps::owned_js::hp_observation(c, self, n, args);
+}
+static JSValue owned_hp_failure(JSContext *c, JSValueConst self, int n,
+                                JSValueConst *args) {
+  ++hp_failure_calls;
+  return arkdps::owned_js::consume_hp_failure(c, self, n, args);
+}
+#endif
 static std::uint64_t hook_point_calls = 0, missing_hook_calls = 0;
 #ifdef ARKDPS_CAPTURE_HOOK_POINT
 static JSValue owned_hook_point(JSContext *c, JSValueConst self, int n,
@@ -197,7 +210,7 @@ static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
   if (argc > 1 && JS_ToBool(c, argv[1]))
     raw_header.publication_request = serial + 1;
   Error error = Error::ok;
-  if (configurations) {
+  if (capture_lane) {
     capture_lane->calls[0].id = raw_header.invocation;
     capture_scope_point(*plan, raw_header.phase, input, configurations->pin(0),
                         read_memory, nullptr, snapshot, raw_header,
@@ -226,6 +239,11 @@ static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
     exact = nullptr;
   arkdps::owned_js::bind_graphs(exact, raw_header.scope_revision,
                                 raw_header.publication_revision, 0);
+#endif
+#ifdef ARKDPS_CAPTURE_HP_OBSERVATION
+  arkdps::owned_js::bind_hp_observation(plan.get(), raw_header.phase,
+                                        input.args[0], raw_header.checkpoint,
+                                        raw_header.mode_epoch);
 #endif
 #ifdef ARKDPS_CAPTURE_HOOK_POINT
   arkdps::owned_js::bind_hook(plan.get(), raw_header.phase, input.args[0],
@@ -259,6 +277,7 @@ static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
 static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
   if (n && JS_ToBool(c, args[0])) {
     profile = {};
+    hp_observation_calls = hp_failure_calls = 0;
     hook_timing = {};
     graph_timing = {};
     hook_point_calls = missing_hook_calls = 0;
@@ -284,6 +303,8 @@ static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
                      {"sampled_us", t.sampled_us},
                      {"max_us", t.max_us}};
   }
+  j["hp_observation_calls"] = hp_observation_calls;
+  j["hp_failure_calls"] = hp_failure_calls;
   j["hook_point_calls"] = hook_point_calls;
   j["missing_hook_calls"] = missing_hook_calls;
   j["graph_calls"] = graph_calls;
@@ -423,6 +444,14 @@ int main(int argc, char **argv) {
                     JS_NewCFunction(c, owned_missing_hook,
                                     "__nativeOwnedMissingHookSlot", 1));
 #endif
+#ifdef ARKDPS_CAPTURE_HP_OBSERVATION
+  JS_SetPropertyStr(c, g, "__nativeOwnedHpObservation",
+                    JS_NewCFunction(c, owned_hp_observation,
+                                    "__nativeOwnedHpObservation", 2));
+  JS_SetPropertyStr(
+      c, g, "__nativeOwnedConsumeHpFailure",
+      JS_NewCFunction(c, owned_hp_failure, "__nativeOwnedConsumeHpFailure", 1));
+#endif
   for (int i = 2; i < argc; i++) {
     if (std::string(argv[i]) == "--sample-functions")
       sample_functions = true;
@@ -430,6 +459,10 @@ int main(int argc, char **argv) {
       JS_SetPropertyStr(c, g, "__nativeOwnedUtf16Ascii", JS_UNDEFINED);
     if (std::string(argv[i]) == "--disable-graph")
       JS_SetPropertyStr(c, g, "__nativeOwnedGraphReadBatch", JS_UNDEFINED);
+    if (std::string(argv[i]) == "--disable-hp-observation") {
+      JS_SetPropertyStr(c, g, "__nativeOwnedHpObservation", JS_UNDEFINED);
+      JS_SetPropertyStr(c, g, "__nativeOwnedConsumeHpFailure", JS_UNDEFINED);
+    }
     if (std::string(argv[i]) == "--disable-batch") {
       JS_SetPropertyStr(c, g, "__nativeOwnedReadBatch", JS_UNDEFINED);
       JS_SetPropertyStr(c, g, "__nativeOwnedReadPlanRegister", JS_UNDEFINED);
