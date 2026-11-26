@@ -1261,6 +1261,10 @@ void initialize(const std::string& source) {
     runtime.worker.start([source] {
         capture::CaptureLanes::Config lane_config;
         lane_config.lane_queue={2048,2*1024*1024};
+        // The actual owned HP recipe is 907/6208 bytes for enter/heal-leave.
+        // 30k setters/s and a 500ms consumer pause need ~107MB, before a
+        // publication burst. One hot lane may borrow all four 32MiB banks.
+        lane_config.spill={32768,32*1024*1024};
         state().lanes=std::make_unique<capture::CaptureLanes>(lane_config);
         state().ingress.store(state().lanes.get(),std::memory_order_release);
         initialize_on_worker(source);
