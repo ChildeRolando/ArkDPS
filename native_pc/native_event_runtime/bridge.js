@@ -249,7 +249,14 @@ function __arkdpsReplayRole(role,checkpoint=0,fieldId=0){
 }
 function __arkdpsReplayActive(){return __arkdpsReplay!==null;}
 function __arkdpsReplayRecord(){if(__arkdpsReplay===null)throw new Error('no replay active');const record=__arkdpsReplay.record;return record instanceof __ArkDpsLazyCaptureRecord?record.materialize():record;}
-function __arkdpsReplayModeRecord(){if(__arkdpsReplay===null)throw new Error('no replay active');const record=__arkdpsReplay.record;return record instanceof __ArkDpsLazyCaptureRecord?record.modeRecord:record;}
+function __arkdpsReplayModeRecord(){
+ if(__arkdpsReplay===null)throw new Error('no replay active');
+ const replay=__arkdpsReplay,record=replay.record;
+ if(record instanceof __ArkDpsLazyCaptureRecord)return record.modeRecord;
+ // An offline caller may replay the same input object more than once. The
+ // mode view is an immutable identity of THIS Begin, not of that input object.
+ return replay.modeRecord??(replay.modeRecord=Object.freeze({edge:record.edge,facts:Object.freeze({mode_epoch:record.facts?.mode_epoch})}));
+}
 function __arkdpsCapturedAssignable(base,klass){
  if(__arkdpsReplay===null)throw new Error('captured ancestry outside replay');
  if(typeof __arkdpsColdAssignable==='function')return __arkdpsColdAssignable(base,klass);

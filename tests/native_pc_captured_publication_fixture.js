@@ -166,6 +166,12 @@ const reused=sampleScope();globalThis.sameItemClockReuse=reused.value?.phase===4
 const legacy=sampleScope(true);globalThis.legacyClockRead=legacy.value?.phase===4&&legacy.reads===1;
 const cross=checkRecordView(autoRecord());__arkdpsReplayBegin(cross);
 try{const before=fixedReads;globalThis.crossRecordClockRead=capturedNativeScopePoint(reused.sample)?.phase===4&&fixedReads-before===1;}finally{__arkdpsReplayEnd();}
+// Even the exact same retained input object starts a new replay lease.
+const repeated=checkRecordView(autoRecord());let repeatedSample,priorToken;
+__arkdpsReplayBegin(repeated);
+try{repeatedSample=validatedClockValues(10,5n*4294967296n,10,false,false,5n*4294967296n);captureValidatedClockSample(repeatedSample,5n*4294967296n);priorToken=__arkdpsReplayModeRecord();}finally{__arkdpsReplayEnd();}
+__arkdpsReplayBegin(repeated);
+try{const before=fixedReads;globalThis.sameInputNewLeaseClockRead=priorToken!==__arkdpsReplayModeRecord()&&Object.isFrozen(__arkdpsReplayModeRecord())&&capturedNativeScopePoint(repeatedSample)?.phase===4&&fixedReads-before===1;}finally{__arkdpsReplayEnd();}
 const changed=checkRecordView(autoRecord());
 for(const segment of changed.segments)if(segment.role==='scope.clock_close')new DataView(segment.bytes).setBigInt64(4,6n*4294967296n,true);
 __arkdpsReplayBegin(changed);
@@ -211,7 +217,7 @@ globalThis.publicationMetadataFrozen=Object.isFrozen(saved.guards)&&Object.isFro
 globalThis.publicationOriginalOwnerMutable=!Object.isFrozen(originalGuards)&&!Object.isFrozen(originalAddress)&&!Object.isFrozen(originalExpected)&&!Object.isFrozen(originalRows)&&!Object.isFrozen(originalRows[0]);
 
 `,context);
-for(const key of ['sameItemClockReuse','legacyClockRead','crossRecordClockRead','reusedClockFreshGuardRejected','oldModeHelperRead','clockRememberNoPublicRecord'])assert(context[key],key);
+for(const key of ['sameItemClockReuse','legacyClockRead','crossRecordClockRead','sameInputNewLeaseClockRead','reusedClockFreshGuardRejected','oldModeHelperRead','clockRememberNoPublicRecord'])assert(context[key],key);
 if(context.graphPrimitiveSource){assert(context.codecOwnership);assert(context.unsupportedBlockKeepsFallback);assert(context.primitiveCalls>0);assert(context.classRoleReads>0);if(context.primitiveFlatSource){assert(context.primitiveFlatCalls>0);assert.equal(context.primitiveValuesCalls,0);}else assert(context.primitiveValuesCalls>0);}else assert(context.oldGraphWithoutCodecs);
 if(context.graphCheckSource){assert(context.forgedProofRejected);assert.equal(context.forgedSummary.complete,false);}assert(context.predicateDefinitionsSealed);assert(context.surrogatePredicateJSONSafe);assert(context.good);assert(context.changedBlock12);assert(context.publicationMetadataOwned);assert(context.publicationMetadataFrozen);assert(context.publicationOriginalOwnerMutable);assert(context.noDuplicateScopeWitness);assert(context.scopeGeometryFrozen);assert(context.compiledScopeReused);assert(context.cacheArrayNotFrozen);assert(context.manualOwnerNotFrozen);assert(context.scopeReadsRepeat);assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
 for(const key of ['notClosed','wrongRevision','wrongGeneration','coldRejected','wrongRoots','wrongStateProjected','wrongGraphClockProjected','wrongPhaseProjected','wrongRoundProjected','wrongAutoStateProjected','wrongAutoClassProjected'])assert.equal(context[key],null,key);
