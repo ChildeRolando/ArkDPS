@@ -875,20 +875,20 @@ function compileCapturedScopeReads(graph){
  Object.defineProperty(all,'dynamic',{value:Object.freeze(all.filter(field=>field.projection===true))});reads=Object.freeze(all);
  nativeCaptureScopeReads.set(graph,reads);return reads;
 }
-function decodeCapturedScopeField(field,when,raw,primitive=null){
+function decodeCapturedScopeField(field,when,raw,primitive=null,primitiveOffset=0){
  let address=field.address;
  if(primitive===null&&!raw&&address===null){address=field.base;for(const offset of field.path)address=address.add(offset).readPointer();address=address.add(field.offset);}
  if(field.comparison){if(primitive===null&&!matchesRawGuard(raw??rawGuardView(address,field.kind===0?'utf16':'bytes',field.bytes),field.comparison))throw new Error('captured scope guard changed');return null;}
  if(field.kind===0){const value=raw?capturedUtf16(raw):str(address);if(value!==field.expected)throw new Error('captured stage text changed');return value;}
  if(field.kind===1){
   const view=primitive===null?(raw??checkedNativeView(address,12)):null;
-  const frame=primitive===null?view.getUint32(0,true):primitive[0],fixed=primitive===null?view.getBigInt64(4,true):primitive[1];
+  const frame=primitive===null?view.getUint32(0,true):primitive[primitiveOffset],fixed=primitive===null?view.getBigInt64(4,true):primitive[primitiveOffset+1];
   if(frame!==when.frame||Number(fixed)/4294967296!==when.game_time)throw new Error('captured scope clock mismatch');
   return null;
  }
  if(field.kind===2){if(raw)scopeBlockView(raw,field.bytes,field.expected,'captured scope guard changed');else scopeBlock(address,field.bytes,field.expected,'captured scope guard changed');return null;}
- if(field.kind===3){const current=primitive!==null?primitive[0]:raw?raw.getInt32(0,true):address.readS32();if(field.expected!==null&&field.expected!==undefined&&current!==field.expected)throw new Error('captured scope integer changed');return current;}
- const current=primitive!==null?ptr(primitive[0]):raw?ptr(raw.getBigUint64(0,true)):address.readPointer();
+ if(field.kind===3){const current=primitive!==null?primitive[primitiveOffset]:raw?raw.getInt32(0,true):address.readS32();if(field.expected!==null&&field.expected!==undefined&&current!==field.expected)throw new Error('captured scope integer changed');return current;}
+ const current=primitive!==null?ptr(primitive[primitiveOffset]):raw?ptr(raw.getBigUint64(0,true)):address.readPointer();
  if(field.expectedPointer!==null&&!current.equals(field.expectedPointer))throw new Error('captured scope pointer changed');
  if(field.classCheck===1&&className(current)!=='BattleLogger'||field.classCheck===2&&className(current)!=='BattleStats')throw new Error('captured scope class changed');
  return current;
@@ -907,10 +907,11 @@ function capturedNativeScopePoint(when){
  const graph=nativeCaptureScopes.get(revision);
  if(!graph?.available||graph.mode_epoch!==record.facts?.mode_epoch)return null;
  let phase=null,round=null,state=null;const chunks=nativeGraphChunks(),primitives=checkedScopePrimitives(graph),proof=primitives===null?checkedGraphProof('scope',graph):null,compiled=compileCapturedScopeReads(graph);
+ const flat=primitives!==null&&typeof primitives.flat==='function'?primitives.flat():null;
  for(const field of primitives===null&&proof===null?compiled:compiled.dynamic){
   const value=primitives!==null?(field.classCheck
-   ?__arkdpsReplayCheckpoint(field.role,record.checkpoint??0,()=>decodeCapturedScopeField(field,when,null,primitives.values(field.slot)))
-   :decodeCapturedScopeField(field,when,null,primitives.values(field.slot)))
+   ?__arkdpsReplayCheckpoint(field.role,record.checkpoint??0,()=>decodeCapturedScopeField(field,when,null,flat===null?primitives.values(field.slot):flat.packet,flat===null?0:flat.offsets[field.slot]))
+   :decodeCapturedScopeField(field,when,null,flat===null?primitives.values(field.slot):flat.packet,flat===null?0:flat.offsets[field.slot]))
    :capturedGraphField('scope',graph,field.slot,chunks,field.role,raw=>decodeCapturedScopeField(field,when,raw),proof);
   if(field.output===1)phase=value;
   if(field.output===2)round=value;
