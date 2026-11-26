@@ -68,6 +68,27 @@ def test_pressure_reason_and_identity_are_not_taken_from_arbitrary_text():
     assert _performance_fields('native_capture_pressure', data)['async_capture']['available'] is False
 
 
+def test_healthy_native_counters_are_sparse_and_do_not_enable_callback_timing(monkeypatch):
+    from native_pc import native_hook_source as module
+    from event_observer import ObserverStatus
+    probe = module.NativeHookEventProbe(SimpleNamespace(process=SimpleNamespace(process_alive=lambda: True)))
+    probe.status = ObserverStatus.READY
+    probe._owned_process_instance = (123, 99)
+    result = dict(native_async_capture=untimed_async())
+    state, records, calls = [0.0], [], []
+    def request(operation, **arguments):
+        calls.append((operation, arguments))
+        return result
+    probe._pipe = SimpleNamespace(request=request)
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    monkeypatch.setattr(module.time, 'perf_counter', lambda: state[0])
+    for now in (0., .1, 1., 4.99, 5., 5.1):
+        state[0] = now
+        assert probe._raw_request('mark') is result
+    assert [data['phase'] for _, data in records] == ['steady', 'steady']
+    assert all('native_timing' not in arguments for _, arguments in calls)
+
+
 def raw_async():
     return dict(version=1, reserved_ticket=20, processed_ticket=18, closed_ticket=18, published_ticket=16,
         desired_mode_epoch=1, published_mode_epoch=1, publication_ready=True, activity_generation=40,

@@ -46,7 +46,7 @@ def _performance_fields(kind, data):
                     if type(async_data) is dict else None)
         result['async_capture'] = sanitize_native_async_capture(async_data, native=native, identity=identity)
     if kind == 'native_capture_pressure':
-        if (source != 'native_runtime' or data.get('phase') not in ('pending', 'recovered')
+        if (source != 'native_runtime' or data.get('phase') not in ('pending', 'recovered', 'steady')
                 or type(data.get('reason')) is not str or data['reason'] not in NATIVE_CAPTURE_RETRY_REASONS):
             return None
         result.update(phase=data['phase'], reason=data['reason'])

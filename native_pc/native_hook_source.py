@@ -728,6 +728,7 @@ class NativeHookEventProbe:
         self._pressure_since = None
         self._pressure_next = 0.0
         self._pressure_reported = False
+        self._capture_status_next = 0.0
 
     def set_request_timing_audit(self, sink=None, *, enabled=None):
         self._timing_sink, self._timing_enabled = sink, enabled
@@ -751,15 +752,17 @@ class NativeHookEventProbe:
                 self._pressure_since = now
             if now - self._pressure_since < 2.0 or now < self._pressure_next:
                 return
-        elif not self._pressure_reported:
+        else:
             self._pressure_since = None
-            return
+            if not self._pressure_reported and now < self._capture_status_next:
+                return
         reason = result.get('mark_retry_reason') if pending else 'none'
         if type(reason) is not str or reason not in NATIVE_CAPTURE_RETRY_REASONS:
             reason = 'other'
         try:
             self._timing_sink('native_capture_pressure', dict(
-                schema=1, source='native_runtime', phase='pending' if pending else 'recovered',
+                schema=1, source='native_runtime',
+                phase='pending' if pending else 'recovered' if self._pressure_reported else 'steady',
                 reason=reason, utc=datetime.now(timezone.utc).isoformat(),
                 async_capture=sanitize_native_async_capture(result['native_async_capture'],
                     identity=self._owned_process_instance)))
@@ -769,6 +772,7 @@ class NativeHookEventProbe:
         self._pressure_reported = pending
         if not pending:
             self._pressure_since = None
+            self._capture_status_next = now + 5.0
 
     def start(self):
         if self.status != ObserverStatus.STOPPED or self._attempted:
