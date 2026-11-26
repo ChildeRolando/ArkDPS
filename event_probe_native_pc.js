@@ -549,13 +549,81 @@ function finalizeNativeCapturePlan(plan,metadata,capabilities){
   plan.required_projections.every(name=>lowered.has(name))};
 }
 // copies both live observations; no cached HP/phase/round value is evidence.
+function rawGuardComparison(kind,expected,size){
+ const words=[];const u32=value=>Number.isInteger(value)&&value>=0&&value<=0xffffffff;
+ const word=(offset,type,value)=>{if(!Number.isInteger(offset)||offset<0||offset+(type==='u8'?1:type==='u64_number'?8:4)>size)return false;words.push(Object.freeze({offset,kind:type,value}));return words.length<=64;};
+ try{
+  if(kind==='text'){
+   if(typeof expected!=='string'||expected.length>200)return null;
+   const units=[];for(let i=0;i<expected.length;i++)units.push(expected.charCodeAt(i));
+   return Object.freeze({version:1,words:Object.freeze([]),utf16:Object.freeze(units)});
+  }
+  if(kind==='block'){
+   if(!Array.isArray(expected))return null;
+   for(const [type,offset,low,high]of expected){
+    if(type==='p'){if(!u32(low)||!u32(high)||!word(offset,'u32',low)||!word(offset+4,'u32',high))return null;}
+    else if(type==='i'){if(!Number.isInteger(low)||low< -2147483648||low>2147483647||!word(offset,'u32',low>>>0))return null;}
+    else return null;
+   }
+  }else if(kind==='p'){
+   const value=BigInt(expected.toString());if(value<0n||value>0xffffffffffffffffn)return null;
+   if(!word(0,'u32',Number(value&0xffffffffn))||!word(4,'u32',Number(value>>32n)))return null;
+  }else if(kind==='i'){
+   if(!Number.isInteger(expected)||expected< -2147483648||expected>2147483647||!word(0,'u32',expected>>>0))return null;
+  }else if(kind==='u'){
+   if(!u32(expected)||!word(0,'u32',expected))return null;
+  }else if(kind==='b'){
+   if(!Number.isInteger(expected)||expected<0||expected>255||!word(0,'u8',expected))return null;
+  }else if(kind==='n'){
+   if(!Number.isInteger(expected)||expected<0||expected>Number(0xffffffffffffffffn)||!word(0,'u64_number',expected))return null;
+  }else return null;
+  return words.length?Object.freeze({version:1,words:Object.freeze(words)}):null;
+ }catch(error){return null;}
+}
+function matchesRawGuard(view,comparison){
+ if(comparison?.version!==1||!Array.isArray(comparison.words))throw new Error('invalid raw guard comparison');
+ for(const word of comparison.words){
+  const after=word.kind==='u8'?view.getUint8(word.offset):word.kind==='u32'?view.getUint32(word.offset,true):word.kind==='u64_number'?Number(view.getBigUint64(word.offset,true)):NaN;
+  if(after!==word.value)return false;
+ }
+ if(comparison.utf16!==undefined){
+  const units=comparison.utf16;if(view.byteLength!==12+units.length*2||view.getInt32(8,true)!==units.length)return false;
+  for(let i=0;i<units.length;i++)if(view.getUint16(12+i*2,true)!==units[i])return false;
+ }
+ return true;
+}
+function rawGuardView(address,kind,size){
+ if(kind!=='utf16')return checkedNativeView(address,size);
+ const n=address.add(16).readS32();if(n<0||n>200)throw new Error('bad string');
+ const bytes=new ArrayBuffer(12+n*2),view=new DataView(bytes);view.setInt32(8,n,true);
+ const text=new Uint8Array(address.add(20).readByteArray(n*2));new Uint8Array(bytes,12).set(text);return view;
+}
+function scopeFieldProjection(field){
+ if(field.role==='scope.clock_open'||field.role==='scope.clock_close'||field.role.includes('logger.class')||field.role.includes('stats.class')||field.expected===undefined||field.expected===null)return {projection:true};
+ const kind=field.kind==='utf16'?'text':Array.isArray(field.expected)?'block':field.bytes===4?'i':field.bytes===8?'p':null;
+ const comparison=rawGuardComparison(kind,field.expected,field.bytes);
+ return {comparison,projection:comparison===null};
+}
+function checkedGraphProof(kind,graph){
+ if(typeof __arkdpsOwnedGraphCheck!=='function'||!__arkdpsReplayActive()||__arkdpsReplayRecord().native_view!==true)return null;
+ const proof=__arkdpsOwnedGraphCheck(kind,graph);if(proof===null)return null;
+ if(typeof __arkdpsVerifiedGraphProof!=='function'||__arkdpsVerifiedGraphProof(proof,kind,graph)!==true)__arkdpsReplayGap('unverified native graph proof');
+ return proof;
+}
+function sealRawComparison(comparison){
+ if(comparison===null||comparison===undefined)return comparison;
+ if(typeof comparison!=='object'||!Array.isArray(comparison.words)||(comparison.utf16!==undefined&&!Array.isArray(comparison.utf16)))throw new Error('invalid raw guard comparison');
+ return Object.freeze({...comparison,words:Object.freeze(comparison.words.map(word=>Object.freeze({...word}))),
+  ...(comparison.utf16!==undefined?{utf16:Object.freeze([...comparison.utf16])}:{})});
+}
 function scopeReadGeometry(fields){
  return Object.freeze(fields.map(field=>Object.freeze({...field,
   pointer_offsets:Object.freeze([...field.pointer_offsets]),
+  ...(Object.prototype.hasOwnProperty.call(field,'comparison')?{comparison:sealRawComparison(field.comparison)}:{}),
   ...(Array.isArray(field.expected)?{expected:Object.freeze(field.expected.map(row=>Array.isArray(row)?Object.freeze([...row]):row))}:{})})));
 }
 function sealNativeScopeGraph(graph){
- return Object.freeze({...graph,fields:scopeReadGeometry(graph.fields),
+ return Object.freeze({...graph,fields:scopeReadGeometry(graph.fields.map(field=>({...field,...scopeFieldProjection(field)}))),
   ...(graph.context?{context:Object.freeze({...graph.context,identity:Object.freeze({...graph.context.identity})})}:{})});
 }
 function nativeCaptureScopeGraph(cache,stage,clockAddress,revision){
@@ -613,11 +681,11 @@ const nativePublicationReadGeometry=new WeakMap();
 function publicationReadGeometry(owned,revision){
  let geometry=nativePublicationReadGeometry.get(owned);if(geometry)return geometry;
  const graph=owned.graph??sealNativePublicationGraph({...publicationGuardFields(owned.guards,nativeCaptureMetadata.string_class,revision),mode_epoch:owned.mode_epoch});
- const slots=Object.create(null);let index=0;
+ const slots=Object.create(null),fields=[];let index=0;
  for(const chunk of graph.chunks)for(const field of chunk.fields){
-  if(slots[field.role]!==undefined)throw new Error('duplicate publication read role');slots[field.role]=index++;
+  if(slots[field.role]!==undefined)throw new Error('duplicate publication read role');slots[field.role]=index++;fields.push(field);
  }
- geometry=Object.freeze({graph,slots:Object.freeze(slots)});nativePublicationReadGeometry.set(owned,geometry);return geometry;
+ geometry=Object.freeze({graph,slots:Object.freeze(slots),fields:Object.freeze(fields)});nativePublicationReadGeometry.set(owned,geometry);return geometry;
 }
 function nativeGraphChunks(){
  return typeof __arkdpsOwnedGraphReadBatch==='function'&&__arkdpsReplayActive()&&__arkdpsReplayRecord().native_view===true?[]:null;
@@ -627,7 +695,8 @@ function nativeGraphSlot(kind,graph,index,chunks){
  const chunk=Math.floor(index/32);if(chunks[chunk]===undefined)chunks[chunk]=__arkdpsOwnedGraphReadBatch(kind,graph,chunk);
  return chunks[chunk]===null?null:chunks[chunk].slot(index%32);
 }
-function capturedGraphField(kind,graph,index,chunks,role,read){
+function capturedGraphField(kind,graph,index,chunks,role,read,proof=null){
+ if(proof!==null)return __arkdpsReplayCheckpoint(role,__arkdpsReplayRecord().checkpoint??0,()=>read(proof.slot(index)));
  if(chunks===null)return __arkdpsReplayWitness(role,()=>read(null));
  // Native GraphBatch already checks the exact field/unique status. Retain the
  // JS role/checkpoint for errors and canonical comparisons without a second FFI.
@@ -646,8 +715,9 @@ function publicationGuardFields(guards,stringClass,revision){
    fields.push({field_id:id++,phase:'checkpoint',role:'publication.'+(side==='before'?'open.':'close.')+(start+i),root:'absolute',root_index:0,absolute_address:address.toString(),pointer_offsets:[],offset:0,
     bytes:text?0:kind==='block'?size:kind==='b'?1:kind==='i'||kind==='u'?4:8,
     kind:text?'utf16':'bytes',...(text?{expected_class:stringClass,max_units:Math.max(1,before.length)}:{}),
-    required:true,guard_id:i+1,guard_side:side});
+    required:true,guard_id:i+1,guard_side:side,comparison:rawGuardComparison(kind,before,text?0:kind==='block'?size:kind==='b'?1:kind==='i'||kind==='u'?4:8),projection:false});
   }
+  for(const field of fields)if(field.comparison===null)field.projection=true;
   chunks.push({schema_version:1,fields,max_bytes:131072,max_reads:4096});
  }
  return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,raw_collection:'all',available:true,chunks};
@@ -682,10 +752,12 @@ function publishNativeCapturePublication(binding){
  nativeCapturePublications.set(revision,value);
  __publishCapturePublication(graph);
 }
-function capturedGuardValue(guard,role,geometry=null,chunks=null){
- const slot=geometry?.slots[role];
+function capturedGuardValue(guard,role,geometry=null,chunks=null,proof=null){
+ const slot=geometry?.slots[role],field=geometry?.fields[slot];
+ if(proof!==null&&field?.projection===false)return true;
  return capturedGraphField('publication',geometry?.graph,slot,chunks,role,raw=>{
   const [kind,address,before,size]=guard;
+  if(field?.comparison){if(!matchesRawGuard(raw??rawGuardView(address,field.kind,field.bytes),field.comparison))throw new Error('captured publication guard changed');return true;}
   if(kind==='block'){
    if(raw)scopeBlockView(raw,size,before,'captured publication guard changed');else scopeBlock(address,size,before,'captured publication guard changed');
    return true;
@@ -701,7 +773,7 @@ function capturedGuardValue(guard,role,geometry=null,chunks=null){
    if(kind==='p'?!after.equals(before):after!==before)throw new Error('captured publication input changed');
   }
   return true;
- });
+ },proof);
 }
 function nativeCapturedPublicationBinding(forCallback=false){
  if(__arkdpsReplayActive()&&__arkdpsReplayRecord().facts?.cold_revision!==undefined){
@@ -713,8 +785,8 @@ function nativeCapturedPublicationBinding(forCallback=false){
  if((!forCallback&&(record.edge!=='leave'||record.closed_after!==true))||!facts||!Number.isSafeInteger(facts.publication_revision))return null;
  const owned=nativeCapturePublications.get(facts.publication_revision);
  if(!owned||owned.mode_epoch!==record.facts.mode_epoch)return null;
- const chunks=nativeGraphChunks(),geometry=chunks===null?null:publicationReadGeometry(owned,facts.publication_revision);
- for(const side of ['open','close'])owned.guards.forEach((guard,index)=>capturedGuardValue(guard,'publication.'+side+'.'+index,geometry,chunks));
+ const chunks=nativeGraphChunks(),geometry=publicationReadGeometry(owned,facts.publication_revision),proof=checkedGraphProof('publication',geometry.graph);
+ for(const side of ['open','close'])owned.guards.forEach((guard,index)=>capturedGuardValue(guard,'publication.'+side+'.'+index,geometry,chunks,proof));
  // Scope/root/stage/state/clock proofs have their own roles. Membership graph
  // success does not replace them, and cached values never supply a new clock.
  const stamp=time(true,false);if(!stamp)return null;
@@ -739,15 +811,17 @@ function compileCapturedScopeReads(graph){
  // Geometry/expected values are setup metadata. Copy nested block tuples so
  // sealing a graph never freezes a mutable AutoChess cache owned elsewhere.
  const fields=Object.isFrozen(graph.fields)?graph.fields:scopeReadGeometry(graph.fields);
- reads=Object.freeze(fields.map((field,index)=>{
+ const all=fields.map((field,index)=>{
   const base=Object.freeze(ptr(field.absolute_address)),path=field.pointer_offsets;
   const kind=field.kind==='utf16'?0:(field.role==='scope.clock_open'||field.role==='scope.clock_close')?1:Array.isArray(field.expected)?2:field.bytes===4?3:4;
   const expectedPointer=kind===4&&field.expected!==undefined&&field.expected!==null?Object.freeze(ptr(field.expected)):null;
-  return Object.freeze({role:field.role,slot:index,base,path,offset:field.offset,
+  const classification=Object.prototype.hasOwnProperty.call(field,'projection')?{comparison:field.comparison,projection:field.projection}:scopeFieldProjection(field);
+  return Object.freeze({role:field.role,slot:index,...classification,base,path,offset:field.offset,
    address:path.length?null:Object.freeze(base.add(field.offset)),kind,bytes:field.bytes,expected:field.expected,expectedPointer,
    classCheck:field.role.includes('logger.class')?1:field.role.includes('stats.class')?2:0,
    output:field.role==='scope.open.3'?1:field.role==='scope.open.4'?2:field.role==='scope.controller.state.open'?3:0});
- }));
+ });
+ Object.defineProperty(all,'dynamic',{value:Object.freeze(all.filter(field=>field.projection===true))});reads=Object.freeze(all);
  nativeCaptureScopeReads.set(graph,reads);return reads;
 }
 function capturedNativeScopePoint(when){
@@ -763,11 +837,12 @@ function capturedNativeScopePoint(when){
  const record=__arkdpsReplayRecord(),revision=record.facts?.scope_revision;
  const graph=nativeCaptureScopes.get(revision);
  if(!graph?.available||graph.mode_epoch!==record.facts?.mode_epoch)return null;
- let phase=null,round=null,state=null;const chunks=nativeGraphChunks();
- for(const field of compileCapturedScopeReads(graph)){
+ let phase=null,round=null,state=null;const chunks=nativeGraphChunks(),proof=checkedGraphProof('scope',graph),compiled=compileCapturedScopeReads(graph);
+ for(const field of proof===null?compiled:compiled.dynamic){
   const value=capturedGraphField('scope',graph,field.slot,chunks,field.role,raw=>{
    let address=field.address;
    if(!raw&&address===null){address=field.base;for(const offset of field.path)address=address.add(offset).readPointer();address=address.add(field.offset);}
+   if(field.comparison){if(!matchesRawGuard(raw??rawGuardView(address,field.kind===0?'utf16':'bytes',field.bytes),field.comparison))throw new Error('captured scope guard changed');return null;}
    if(field.kind===0){const value=raw?capturedUtf16(raw):str(address);if(value!==field.expected)throw new Error('captured stage text changed');return value;}
    if(field.kind===1){
     const view=raw??checkedNativeView(address,12);
@@ -780,7 +855,7 @@ function capturedNativeScopePoint(when){
    if(field.expectedPointer!==null&&!current.equals(field.expectedPointer))throw new Error('captured scope pointer changed');
    if(field.classCheck===1&&className(current)!=='BattleLogger'||field.classCheck===2&&className(current)!=='BattleStats')throw new Error('captured scope class changed');
    return current;
-  });
+  },proof);
   if(field.output===1)phase=value;
   if(field.output===2)round=value;
   if(field.output===3)state=value;

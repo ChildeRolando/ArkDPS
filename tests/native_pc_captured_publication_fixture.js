@@ -7,7 +7,8 @@ const adapter=fs.readFileSync('event_probe_native_pc.js','utf8');vm.runInContext
 const shared=fs.readFileSync('event_probe_runtime.js','utf8');vm.runInContext(shared.slice(shared.indexOf('function capturedUtf16('),shared.indexOf('function buff(')),context);
 const autoSource=fs.readFileSync('event_probe_autochess.js','utf8');vm.runInContext(autoSource.slice(autoSource.indexOf('function scopeBlock('),autoSource.indexOf('function scopeGuardGroup(')),context);
 vm.runInContext(shared.slice(shared.indexOf('function __arkdpsPublicationServed('),shared.indexOf('function receiveEventRequest(')),context);
-context.graphBatchSource=process.env.ARKDPS_SOURCE_GRAPH_BATCH==='1';
+context.graphCheckSource=process.env.ARKDPS_SOURCE_GRAPH_CHECK==='1';
+context.graphBatchSource=process.env.ARKDPS_SOURCE_GRAPH_BATCH==='1'||context.graphCheckSource;
 vm.runInContext(`
 const mem=new Map();
 function write(address,bytes){new Uint8Array(bytes).forEach((b,i)=>mem.set(BigInt(address)+BigInt(i),b));}
@@ -68,13 +69,33 @@ if(graphBatchSource){
   });
  }});
 }
-function attempt(change){const r=record();if(change)change(r);__arkdpsReplayBegin(r);let result;try{result=__arkdpsOnClosedRecord(r);}finally{__arkdpsReplayEnd();}return result;}
+if(graphCheckSource){
+ const proofOwners=new WeakMap();globalThis.forgeGraphProof=false;
+ globalThis.__arkdpsVerifiedGraphProof=(proof,kind,graph)=>{const owner=proofOwners.get(proof);return !!owner&&owner.kind===kind&&owner.graph===graph&&owner.record===__arkdpsReplayRecord();};
+ globalThis.__arkdpsOwnedGraphCheck=(kind,graph)=>{
+  const fields=kind==='scope'?graph.fields:graph.chunks.flatMap(chunk=>chunk.fields);
+  if(fields.some(field=>field.comparison===null||typeof field.projection!=='boolean'))return null;
+  const values=new Map();
+  for(let index=0;index<fields.length;index++){
+   const field=fields[index],raw=__arkdpsOwnedGraphReadBatch(kind,graph,Math.floor(index/32)).slot(index%32);
+   if(field.comparison&&!matchesRawGuard(raw,field.comparison))return __arkdpsReplayCheckpoint(field.role,0,()=>__arkdpsNativeReadFailure(8));
+   if(field.projection)values.set(index,raw);
+  }
+  const proof=Object.freeze({slot(index){if(!values.has(index))__arkdpsReplayGap('unprojected fixture field');return values.get(index);}});
+  if(!forgeGraphProof)proofOwners.set(proof,{kind,graph,record:__arkdpsReplayRecord()});return proof;
+ };
+}
+function checkRecordView(record){if(graphCheckSource)Object.defineProperty(record,'native_view',{get:()=>__arkdpsReplayActive()});return record;}
+function attempt(change){const r=checkRecordView(record());if(change)change(r);__arkdpsReplayBegin(r);let result;try{result=__arkdpsOnClosedRecord(r);}finally{globalThis.lastNormalSummary=__arkdpsReplayEnd();}return result;}
 let scopeReadCount=0;const originalWitness=__arkdpsReplayWitness;__arkdpsReplayWitness=(role,body)=>{if(role.startsWith('scope.'))scopeReadCount++;return originalWitness(role,body);};
 globalThis.good=attempt();const firstScopeReads=scopeReadCount;globalThis.noDuplicateScopeWitness=firstScopeReads===graph.fields.length+1;attempt();globalThis.scopeReadsRepeat=firstScopeReads>=graph.fields.length&&scopeReadCount===firstScopeReads*2;__arkdpsReplayWitness=originalWitness;
 queue[0].future='changed-after-publication';
 __arkdpsPublicationJournal={publishedThrough:2};globalThis.delta=attempt();__arkdpsPublicationJournal={publishedThrough:3};globalThis.emptyDelta=attempt();delete globalThis.__arkdpsPublicationJournal;
 globalThis.changedBlock12=attempt(r=>{const segment=r.segments.find(item=>item.role==='scope.close.3'&&BigInt(item.address)===0x17000n);if(!segment)throw Error('12byte block absent');new DataView(segment.bytes).setUint32(8,1,true);})===null;
+if(graphCheckSource){forgeGraphProof=true;globalThis.forgedProofRejected=attempt()===null;globalThis.forgedSummary=lastNormalSummary;forgeGraphProof=false;}
 globalThis.notClosed=attempt(r=>r.closed_after=false);
+globalThis.wrongStateProjected=attempt(r=>{for(const segment of r.segments)if(segment.role==='scope.controller.state.open'||segment.role==='scope.controller.state.close')new DataView(segment.bytes).setInt32(0,1,true);});
+globalThis.wrongGraphClockProjected=attempt(r=>{for(const segment of r.segments)if(segment.role==='scope.clock_open'||segment.role==='scope.clock_close')new DataView(segment.bytes).setUint32(0,11,true);});
 globalThis.wrongRevision=attempt(r=>r.facts.scope_revision=99);
 nativeGeneration=3;globalThis.wrongGeneration=attempt();nativeGeneration=2;
 setClock(0,0n);globalThis.coldRejected=attempt();setClock(10,5n*4294967296n);
@@ -98,8 +119,10 @@ function autoRecord(){const r=record();r.facts={mode_epoch:0,scope_mode_epoch:0,
  for(const chunk of publication.chunks)for(const f of chunk.fields){const address=BigInt(f.absolute_address);if(f.kind==='utf16'){own(f,address,8);own(f,address+16n,4);own(f,address+20n,new DataView(read(address+16n,4)).getUint32(0,true)*2);}else own(f,address,f.bytes);}
  return r;
 }
-function autoAttempt(change){const r=autoRecord();if(change)change(r);__arkdpsReplayBegin(r);try{return __arkdpsOnClosedRecord(r);}finally{globalThis.lastAutoSummary=__arkdpsReplayEnd();}}
+function autoAttempt(change){const r=checkRecordView(autoRecord());if(change)change(r);__arkdpsReplayBegin(r);try{return __arkdpsOnClosedRecord(r);}finally{globalThis.lastAutoSummary=__arkdpsReplayEnd();}}
 globalThis.autoGood=autoAttempt();
+globalThis.wrongPhaseProjected=autoAttempt(r=>{for(const segment of r.segments)if(segment.role==='scope.open.3'||segment.role==='scope.close.3')new DataView(segment.bytes).setInt32(0,11,true);});
+globalThis.wrongRoundProjected=autoAttempt(r=>{for(const segment of r.segments)if(segment.role==='scope.open.4'||segment.role==='scope.close.4')new DataView(segment.bytes).setInt32(0,-1,true);});
 globalThis.autoMissingMembershipRejected=false;
 globalThis.autoMissingMembershipRejected=autoAttempt(r=>r.segments=r.segments.filter(s=>!s.role.startsWith('publication.')))===null;globalThis.missingSummary=lastAutoSummary;
 globalThis.autoChangedMembershipRejected=false;
@@ -109,17 +132,19 @@ globalThis.autoCrossChunkRejected=autoAttempt(r=>{const segment=r.segments.find(
 // Exercise the production publication helper: cache-owner pointer/value changes
 // after publish cannot alter either the CPP geometry or JS expected witnesses.
 const originalAddress=ptr(0x18000),originalExpected=ptr(0x19000),originalRows=[['i',0,7]];
-const originalGuards=[['p',originalAddress,originalExpected],['block',ptr(0x1a000),originalRows,4]];
+const originalGuards=[['p',originalAddress,originalExpected],['block',ptr(0x1a000),originalRows,4],['text',ptr(0x1c000),'x\ud800z']];
 arkdpsNativeAsyncCapture=true;nativeAutoBodyCache={body:{allInputsGuarded:true,read:{guards:originalGuards}}};
 globalThis.__publishCapturePublication=graph=>{globalThis.publishedGuardGraph=graph;};
 publishNativeCapturePublication(autoBinding);
 const saved=nativeCapturePublications.get(nativeCapturePublicationRevision);
 originalAddress.value=0x28000n;originalExpected.value=0x29000n;originalRows[0][2]=99;
+globalThis.predicateDefinitionsSealed=publishedGuardGraph.chunks.every(chunk=>chunk.fields.every(field=>Object.isFrozen(field.comparison)&&Object.isFrozen(field.comparison.words)&&field.comparison.words.every(Object.isFrozen)&&(field.comparison.utf16===undefined||Object.isFrozen(field.comparison.utf16))));
+globalThis.surrogatePredicateJSONSafe=!JSON.stringify(publishedGuardGraph).includes('\\ud800');
 globalThis.publicationMetadataOwned=saved.guards[0][1].toString()==='0x18000'&&saved.guards[0][2].toString()==='0x19000'&&saved.guards[1][2][0][2]===7&&publishedGuardGraph.chunks[0].fields[0].absolute_address==='0x18000';
 globalThis.publicationMetadataFrozen=Object.isFrozen(saved.guards)&&Object.isFrozen(saved.guards[0])&&Object.isFrozen(saved.guards[0][1])&&Object.isFrozen(saved.guards[0][2])&&Object.isFrozen(saved.guards[1][2])&&Object.isFrozen(saved.guards[1][2][0]);
 globalThis.publicationOriginalOwnerMutable=!Object.isFrozen(originalGuards)&&!Object.isFrozen(originalAddress)&&!Object.isFrozen(originalExpected)&&!Object.isFrozen(originalRows)&&!Object.isFrozen(originalRows[0]);
 
 `,context);
-assert(context.good);assert(context.changedBlock12);assert(context.publicationMetadataOwned);assert(context.publicationMetadataFrozen);assert(context.publicationOriginalOwnerMutable);assert(context.noDuplicateScopeWitness);assert(context.scopeGeometryFrozen);assert(context.compiledScopeReused);assert(context.cacheArrayNotFrozen);assert(context.manualOwnerNotFrozen);assert(context.scopeReadsRepeat);assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
-for(const key of ['notClosed','wrongRevision','wrongGeneration','coldRejected','wrongRoots'])assert.equal(context[key],null,key);
+if(context.graphCheckSource){assert(context.forgedProofRejected);assert.equal(context.forgedSummary.complete,false);}assert(context.predicateDefinitionsSealed);assert(context.surrogatePredicateJSONSafe);assert(context.good);assert(context.changedBlock12);assert(context.publicationMetadataOwned);assert(context.publicationMetadataFrozen);assert(context.publicationOriginalOwnerMutable);assert(context.noDuplicateScopeWitness);assert(context.scopeGeometryFrozen);assert(context.compiledScopeReused);assert(context.cacheArrayNotFrozen);assert(context.manualOwnerNotFrozen);assert(context.scopeReadsRepeat);assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
+for(const key of ['notClosed','wrongRevision','wrongGeneration','coldRejected','wrongRoots','wrongStateProjected','wrongGraphClockProjected','wrongPhaseProjected','wrongRoundProjected'])assert.equal(context[key],null,key);
 assert(context.autoCrossChunkRejected);assert(context.autoGood);assert.equal(context.autoGood.mark.native_autochess_context.frame,10);assert.equal(context.autoGood.mark.native_autochess_context.memberships[0].player_uid,'account-one');assert.equal(context.autoMissingMembershipRejected,true);assert.equal(context.autoChangedMembershipRejected,true);assert.equal(context.missingSummary.complete,false);assert.equal(context.changedMemberInjected,true);assert.equal(context.readThroughSequence,0);assert.equal(context.good.events[0].future,undefined);assert.equal(context.delta.events_after,2);assert.equal(context.delta.events_through,3);assert.equal(context.delta.events.length,1);assert.equal(context.delta.events[0].sequence,3);assert.equal(context.emptyDelta.events.length,0);assert.equal(live,0);console.log('PASS_CAPTURED_PUBLICATION normal closed-prefix + five negative fences; no live read/call');
