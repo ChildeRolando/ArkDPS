@@ -115,7 +115,7 @@ def build(output=DEFAULT_OUTPUT, *, compiler='g++', c_compiler=None, cache=None,
         stage = Path(temporary)
         source_files = ('engine.cpp', 'engine.h', 'engine_worker.h', 'engine_capture_lane.h',
                         'engine_capture_plan.h', 'capture_queue.h', 'native_capture.cpp', 'native_capture.h',
-                        'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'build.py')
+                        'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'cold_plan.js', 'build.py')
         snapshots = {name: (SOURCE / name).read_bytes() for name in source_files}
         for name, contents in snapshots.items():
             (stage / name).write_bytes(contents)
@@ -142,6 +142,12 @@ def build(output=DEFAULT_OUTPUT, *, compiler='g++', c_compiler=None, cache=None,
         (stage / 'publication_source.h').write_text(
             'static constexpr const char* arkdps_publication_source = R"ARKDPS_PUB('
             + publication + ')ARKDPS_PUB";\n', encoding='utf-8')
+        cold = snapshots['cold_plan.js'].decode('utf-8')
+        if ')ARKDPS_COLD"' in cold:
+            raise ValueError('cold source conflicts with embedding delimiter')
+        (stage / 'cold_plan_source.h').write_text(
+            'static constexpr const char* arkdps_cold_plan_source = R"ARKDPS_COLD('
+            + cold + ')ARKDPS_COLD";\n', encoding='utf-8')
         objects = []
         cflags = ['-O2', '-fwrapv', '-D_GNU_SOURCE', '-D__USE_MINGW_ANSI_STDIO',
                   '-DCONFIG_VERSION="2025-09-13"', '-I', str(quickjs), '-I', str(minhook / 'include')]

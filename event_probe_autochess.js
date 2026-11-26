@@ -277,16 +277,31 @@ function autoRead(check=null){
 }
 function autoGeneric(data,name,namespace,read){
  if(data.isNull())throw new Error('AutoChess generic metadata');
- const k=read.p(data.add(24));
+ const k=autoMetadataPointer(data.add(24),read);
  if(!autoIdentity(k,name,namespace))throw new Error('AutoChess generic class '+name);
  return k;
 }
+// These helpers are used only for setup-verified, immutable IL2CPP metadata.
+// Gameplay object fields still require the current owned capture record.
+function autoMetadataView(address,size){
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()){
+  if(typeof probeAdapter.captureImmutableMetadata!=='function')__arkdpsReplayGap('immutable metadata closure unavailable');
+  return new DataView(probeAdapter.captureImmutableMetadata(address,size));
+ }
+ return new DataView(address.readByteArray(size));
+}
+function autoMetadataPointer(address,read=null){return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()?
+ ptr(autoMetadataView(address,8).getBigUint64(0,true)):read?read.p(address):address.readPointer();}
+function autoMetadataU16(address){return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()?
+ autoMetadataView(address,2).getUint16(0,true):address.readU16();}
+function autoMetadataU32(address){return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()?
+ autoMetadataView(address,4).getUint32(0,true):address.readU32();}
 function autoList(address,maximum,read,listdict=false){
  let k=read.p(address);
  if(listdict){
-  if(!autoIdentity(k,'ListDict`2','Torappu')||!probeAdapter.autoChessReflected&&k.add(0x124).readU16()!==1)
+  if(!autoIdentity(k,'ListDict`2','Torappu')||!probeAdapter.autoChessReflected&&autoMetadataU16(k.add(0x124))!==1)
    throw new Error('AutoChess ListDict class');
-  k=read.p(k.add(0x58));
+  k=autoMetadataPointer(k.add(0x58),read);
  }
  const typed=autoLayout(k,'List`1','System.Collections.Generic',6,
   [[1,'_items',0x10,[29]],[2,'_size',0x18,[8]],[3,'_version',0x1c,[8]]]);
@@ -299,8 +314,8 @@ function autoList(address,maximum,read,listdict=false){
 }
 function autoPairs(address,maximum,read,kinds){
  const list=autoList(address,maximum,read,true),element=list.typed._items.data;
- if(element.isNull()||((element.add(8).readU32()>>>16)&255)!==21)throw new Error('AutoChess pair metadata');
- const pair=autoGeneric(element.readPointer(),'KeyValuePair`2','System.Collections.Generic',read);
+ if(element.isNull()||((autoMetadataU32(element.add(8))>>>16)&255)!==21)throw new Error('AutoChess pair metadata');
+ const pair=autoGeneric(autoMetadataPointer(element),'KeyValuePair`2','System.Collections.Generic',read);
  autoLayout(pair,'KeyValuePair`2','System.Collections.Generic',2,
   [[0,'key',0x10,[8]],[1,'value',0x18,kinds]]);
  if(!list.items.isNull()&&!autoIdentity(read.p(list.items),'KeyValuePair`2[]','System.Collections.Generic'))
@@ -333,8 +348,8 @@ function autoHeader(identity,read){
  const typed=read.object(dict,'Dictionary`2','System.Collections.Generic',14,
   [[1,'_entries',0x18,[29]],[2,'_count',0x20,[8]],[4,'_freeCount',0x28,[8]],[5,'_version',0x2c,[8]]]);
  const element=typed._entries.data;
- if(element.isNull()||((element.add(8).readU32()>>>16)&255)!==21)throw new Error('AutoChess dictionary metadata');
- const entry=autoGeneric(element.readPointer(),'Entry','',read);
+ if(element.isNull()||((autoMetadataU32(element.add(8))>>>16)&255)!==21)throw new Error('AutoChess dictionary metadata');
+ const entry=autoGeneric(autoMetadataPointer(element),'Entry','',read);
  autoLayout(entry,'Entry','',4,[[0,'hashCode',0x10,[8]],[1,'next',0x14,[8]],[2,'key',0x18,[18]],[3,'value',0x20,[28,18]]]);
  const entries=read.p(read.at(dict,'_entries')),count=read.i(read.at(dict,'_count')),free=read.i(read.at(dict,'_freeCount'));
  const dictVersion=read.i(read.at(dict,'_version'));
@@ -570,7 +585,7 @@ function readAutoChess(identity,frame,fixed){
       if(seen.has(k.toString()))throw new Error('AutoChess token lineage cycle');seen.add(k.toString());
       if(autoIdentity(k,'Character','Torappu.Battle'))character=k;
       if(autoIdentity(k,'BObject','Torappu.Battle')){bObject=k;break;}
-      k=read.p(k.add(0x58));
+      k=autoMetadataPointer(k.add(0x58),read);
      }
      if(!character){liveCharacterDataUids=null;lifecycleInstances=null;continue;}
      read.layout(unit,autoLayout(character,'Character','Torappu.Battle',356,[[78,'<data>k__BackingField',0x538,[18]]]));
@@ -765,7 +780,7 @@ function autoPresenceLineage(klass,check){
    if(autoPresenceLineages.size<128)autoPresenceLineages.set(key,lineage);
    return lineage;
   }
-  current=current.add(0x58).readPointer();
+  current=autoMetadataPointer(current.add(0x58));
  }
  throw new Error('AutoChess presence lineage');
 }
