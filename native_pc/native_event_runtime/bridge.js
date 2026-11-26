@@ -10,6 +10,7 @@ function __integer(value) {
 // Replay never dereferences a game address. A role is an independently captured
 // observation point, not a last-value cache keyed by pointer.
 let __arkdpsReplay=null;
+function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read'].includes(status);}
 function __arkdpsReplayBegin(record){
  if(__arkdpsReplay!==null)throw new Error('replay already active');
  if(record?.version!==1||!Array.isArray(record.segments)||typeof record.edge!=='string')
@@ -34,7 +35,17 @@ function __arkdpsReplayBegin(record){
   }
   return {...field,checkpoint:point,attempted_address,attempted_size};
  });
- __arkdpsReplay={record,segments,fields,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};
+ const points=new Map();
+ const point=(role,at)=>{
+  const key=role+'\0'+at;
+  let value=points.get(key);
+  if(!value){value={segments:[],states:new Map(),ids:new Set(),maxSpan:0n};points.set(key,value);}
+  return value;
+ };
+ for(const segment of segments){const owned=point(segment.role,segment.checkpoint);owned.segments.push(segment);owned.ids.add(segment.field_id);const size=BigInt(segment.bytes.byteLength);if(size>owned.maxSpan)owned.maxSpan=size;}
+ for(const field of fields){const owned=point(field.role,field.checkpoint);if(owned.states.has(field.field_id))throw new Error('duplicate captured field state');owned.states.set(field.field_id,field);owned.ids.add(field.field_id);}
+ for(const value of points.values())value.segments.sort((a,b)=>a.address<b.address?-1:a.address>b.address?1:0);
+ __arkdpsReplay={record,segments,fields,points,role:record.edge,checkpoint,fieldId:0,structural:fields.filter(f=>__arkdpsStructuralCaptureStatus(f.status)).map(f=>'invalid captured field '+f.role+':'+f.field_id+':'+f.status),unreadable:0};
 }
 function __arkdpsReplayRole(role,checkpoint=0,fieldId=0){
  if(__arkdpsReplay===null||typeof role!=='string'||!Number.isSafeInteger(checkpoint)||checkpoint<0||!Number.isInteger(fieldId)||fieldId<0||fieldId>65535)
@@ -74,7 +85,7 @@ function __arkdpsReplayCheckpoint(role,checkpoint,body){
 function __arkdpsReplayWitness(role,body){
  if(__arkdpsReplay===null)return body();
  const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId,replay.checkpoint],checkpoint=replay.record.checkpoint??0;
- const ids=new Set([...replay.segments,...replay.fields].filter(f=>f.role===role&&f.checkpoint===checkpoint).map(f=>f.field_id));
+ const ids=replay.points.get(role+'\0'+checkpoint)?.ids??new Set();
  if(ids.size!==1)__arkdpsReplayGap('missing or ambiguous witness '+role);
  replay.role=role;replay.fieldId=[...ids][0];replay.checkpoint=checkpoint;
  try{return body();}finally{[replay.role,replay.fieldId,replay.checkpoint]=previous;}
@@ -82,10 +93,10 @@ function __arkdpsReplayWitness(role,body){
 function __arkdpsReplayOptional(role,read){
  if(__arkdpsReplay===null)return {available:true,value:read()};
  const replay=__arkdpsReplay,checkpoint=replay.record.checkpoint??0;
- const states=replay.fields.filter(field=>field.role===role&&field.checkpoint===checkpoint);
+ const states=[...(replay.points.get(role+'\0'+checkpoint)?.states.values()??[])];
  if(states.length!==1)__arkdpsReplayGap('missing optional capture field '+role);
  if(states[0].status!=='ok'){
-  if(['missing_plan_field','invalid_plan','missing_field'].includes(states[0].status))__arkdpsReplayGap('invalid optional capture field '+role);
+  if(__arkdpsStructuralCaptureStatus(states[0].status))__arkdpsReplayGap('invalid optional capture field '+role);
   replay.unreadable++;return {available:false,value:null};
  }
  return {available:true,value:__arkdpsReplayWitness(role,read)};
@@ -106,22 +117,30 @@ function __arkdpsOwnedRead(address,size){
  }
  const replay=__arkdpsReplay;
  if(replay===null)return __read(address,size);
- let matches=replay.segments.filter(s=>s.role===replay.role&&s.checkpoint===replay.checkpoint&&(replay.fieldId===null||s.field_id===replay.fieldId)&&
-  address>=s.address&&address+BigInt(size)<=s.address+BigInt(s.bytes.byteLength));
- const failedMatching=replay.fields.filter(f=>f.role===replay.role&&f.checkpoint===replay.checkpoint&&f.status!=='ok'&&
-  matches.some(s=>s.field_id===f.field_id));
+ const point=replay.points.get(replay.role+'\0'+replay.checkpoint);
+ if(!point)__arkdpsReplayGap('missing captured point '+replay.role);
+ // Most reads are scalars inside short object blocks. Binary search the
+ // same-point interval index, then inspect only possible covering segments.
+ const end=address+BigInt(size),segments=point.segments;let low=0,high=segments.length;
+ while(low<high){const middle=(low+high)>>>1;if(segments[middle].address<=address)low=middle+1;else high=middle;}
+ let matches=[];
+ for(let index=low-1;index>=0;index--){
+  const segment=segments[index];if(segment.address+point.maxSpan<end)break;
+  if((replay.fieldId===null||segment.field_id===replay.fieldId)&&address>=segment.address&&end<=segment.address+BigInt(segment.bytes.byteLength))matches.push(segment);
+ }
+ const failedMatching=[...new Set(matches.map(s=>s.field_id))].map(id=>point.states.get(id)).filter(field=>field&&field.status!=='ok');
  if(failedMatching.length){
-  if(failedMatching.some(f=>['missing_plan_field','invalid_plan','missing_field'].includes(f.status)))__arkdpsReplayGap('invalid captured plan field '+replay.role);
+  if(failedMatching.some(f=>__arkdpsStructuralCaptureStatus(f.status)))__arkdpsReplayGap('invalid captured plan field '+replay.role);
   // A failed field cannot lend its already-read links. In auto-ID mode an
   // independently successful field may still own the exact requested bytes.
   if(replay.fieldId===null)matches=matches.filter(s=>!failedMatching.some(f=>f.field_id===s.field_id));
   if(matches.length===0||replay.fieldId!==null){replay.unreadable++;throw new Error('captured field failed '+replay.role);}
  }
  if(matches.length===0){
-  const failed=replay.fields.filter(f=>f.role===replay.role&&f.checkpoint===replay.checkpoint&&(replay.fieldId===null||f.field_id===replay.fieldId)&&f.status!=='ok'&&
+  const failed=[...point.states.values()].filter(f=>(replay.fieldId===null||f.field_id===replay.fieldId)&&f.status!=='ok'&&
    (replay.fieldId!==null||f.attempted_address!==undefined&&Number.isSafeInteger(f.attempted_size)&&f.attempted_size>=0&&
     address>=__integer(f.attempted_address)&&address+BigInt(size)<=__integer(f.attempted_address)+BigInt(f.attempted_size)));
-  if(failed.length===1){if(['missing_plan_field','invalid_plan','missing_field'].includes(failed[0].status))__arkdpsReplayGap('invalid captured plan field '+replay.role);replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
+  if(failed.length===1){if(__arkdpsStructuralCaptureStatus(failed[0].status))__arkdpsReplayGap('invalid captured plan field '+replay.role);replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
  }
  if(matches.length===0)__arkdpsReplayGap('missing captured read '+replay.role);
  if(matches.some(s=>s.status!=='ok')){replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}

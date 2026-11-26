@@ -472,7 +472,7 @@ function nativeCapturePlan(name,address,metadata){
  }
  return {schema_version:1,complete:false,name:normalized,address:address.toString(),abi:'win64-gp',profile,arg_count:argCount,arg_mask:argMask,
   globals,fields,max_bytes:profile==='shield'?131072:65536,max_reads:4096,
-  ...(profile==='hp'?{hp_filter:{receiver_arg:0,attribute_index_arg:normalized==='Entity.OnAttributeDirty'?1:null,max_hp_attribute:0,enemy_class:metadata.classes.Enemy??null,enemy_base_class:metadata.classes.BObject??null,normal_setter:normalized==='Entity.SetHpInternal',nochange_preserve_epoch:true}}:{}),
+  ...(profile==='hp'?{hp_filter:{receiver_arg:0,attribute_index_arg:normalized==='Entity.OnAttributeDirty'?1:null,max_hp_attribute:0,enemy_class:metadata.classes.Enemy??null,enemy_base_class:metadata.classes.BObject??null,normal_setter:normalized==='Entity.SetHpInternal',nochange_preserve_epoch:true,preserve_nested_max_hp_dirty:true}}:{}),
   metadata:{classes:metadata.classes,skill_offsets:metadata.skill_offsets,attack_type_offset:metadata.attack_type_offset},
   ...(profile==='boundary'?{entry_roots:[{slot:8,root:'arg',root_index:0,pointer_offsets:[0xe0]},{slot:9,root:'arg',root_index:0,pointer_offsets:[0x160]},{slot:10,root:'arg',root_index:0,pointer_offsets:[0x10]},{slot:11,root:'arg',root_index:0,pointer_offsets:[0xe0,0x30]}]}:{}),
   ...(metadata.cold_plan?{cold_plan:metadata.cold_plan}:{}),
