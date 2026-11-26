@@ -81,7 +81,7 @@ def run(binary):
             first=mark_with_one_call();assert first.get('retry') is True,first
             second=mark_with_one_call();assert second.get('retry') is True,second
             third=mark_with_one_call()
-            assert third.get('retry') is False and third.get('error') is None,third
+            assert not third.get('retry') and third.get('error') is None,third
             assert third['coldAttempts']==2 and third['warmFailures']==1,third
             candidates=third['candidates'];assert [x['cold'] for x in candidates]==[False,True,True],candidates
             assert len({x['request'] for x in candidates})==3,candidates
