@@ -959,3 +959,22 @@ def test_replay_gap_audit_is_numeric_bounded_and_keeps_failure(suffix, accepted)
         assert data['metadata_read_size'] == 8
         assert data['replay_reason_codes'] == '1'
         assert data['replay_script_lines'] == '1:123.2:456'
+
+
+@pytest.mark.parametrize('suffix, accepted', [('4', True), ('10', False), ('4; token=private', False)])
+def test_native_failure_code_is_recorded_without_debug(suffix, accepted):
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; native capture failed: code=' + suffix)
+    def request(*_args, **_kwargs):
+        raise failure
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure and probe.status == ObserverStatus.FAILED
+    assert (records[0][1].get('code') == 'native_capture_failed') is accepted
+    assert 'private' not in repr(records)
+    if accepted:
+        assert records[0][1]['native_failure_code'] == 4

@@ -13,7 +13,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path, PurePosixPath
-from metrics import timed, sanitize_native_async_capture
+from metrics import timed, sanitize_native_async_capture, NATIVE_CAPTURE_RETRY_REASONS
 import re
 import secrets
 from threading import Lock
@@ -725,6 +725,9 @@ class NativeHookEventProbe:
         self._native_timing_may_be_enabled = False
         self._native_timing_confirmed = False
         self._publication_token = None
+        self._pressure_since = None
+        self._pressure_next = 0.0
+        self._pressure_reported = False
 
     def set_request_timing_audit(self, sink=None, *, enabled=None):
         self._timing_sink, self._timing_enabled = sink, enabled
@@ -735,6 +738,37 @@ class NativeHookEventProbe:
 
     def set_autochess_setting(self, enabled):
         self._autochess_enabled = enabled
+
+    def _audit_capture_pressure(self, result):
+        # Counts already travel with each reply. This does not enable callback
+        # timers, issue extra requests, or enter the statistics stream.
+        if self._timing_sink is None or not isinstance(result.get('native_async_capture'), dict):
+            return
+        now = time.perf_counter()
+        pending = result.get('retry') is True
+        if pending:
+            if self._pressure_since is None:
+                self._pressure_since = now
+            if now - self._pressure_since < 2.0 or now < self._pressure_next:
+                return
+        elif not self._pressure_reported:
+            self._pressure_since = None
+            return
+        reason = result.get('mark_retry_reason') if pending else 'none'
+        if type(reason) is not str or reason not in NATIVE_CAPTURE_RETRY_REASONS:
+            reason = 'other'
+        try:
+            self._timing_sink('native_capture_pressure', dict(
+                schema=1, source='native_runtime', phase='pending' if pending else 'recovered',
+                reason=reason, utc=datetime.now(timezone.utc).isoformat(),
+                async_capture=sanitize_native_async_capture(result['native_async_capture'],
+                    identity=self._owned_process_instance)))
+        except Exception:
+            pass  # Diagnostic failures cannot change native delivery or ACK.
+        self._pressure_next = now + 1.0
+        self._pressure_reported = pending
+        if not pending:
+            self._pressure_since = None
 
     def start(self):
         if self.status != ObserverStatus.STOPPED or self._attempted:
@@ -873,6 +907,11 @@ class NativeHookEventProbe:
                                           response_limit=int(oversized[2]))
                         if oversized[3] is not None:
                             diagnostic['requested_event_count'] = int(oversized[3])
+                    capture_failure = re.search(
+                        r'(?:^|; )native capture failed: code=([0-9])$', str(exc))
+                    if capture_failure:
+                        diagnostic.update(code='native_capture_failed',
+                                          native_failure_code=int(capture_failure[1]))
                     replay_gap = re.search(
                         r'(?:^|; )native_replay_gap:v1,h=([0-9]{1,5}),e=([01]),t=([0-9]{1,20}),'
                         r'r=([0-9]{1,5}),p=([0-9]{1,5}),f=(-1|[0-9]{1,5}),g=([0-9]{1,2}),'
@@ -894,6 +933,7 @@ class NativeHookEventProbe:
                     pass  # Failure reporting cannot replace the transport error.
             raise
         if operation == 'mark' and isinstance(result, dict):
+            self._audit_capture_pressure(result)
             control = result.get('native_timing_control')
             if isinstance(control, dict) and control.get('version') == 1 and type(control.get('enabled')) is bool:
                 self._native_timing_confirmed = control['enabled']

@@ -10,7 +10,7 @@ import time
 from uuid import uuid4
 
 from log_context import LogContext
-from metrics import sanitize_native_async_capture
+from metrics import sanitize_native_async_capture, NATIVE_CAPTURE_RETRY_REASONS
 
 
 ENEMY_STATE_DELTA = 'desktop_enemy_state_delta_v1'
@@ -45,6 +45,14 @@ def _performance_fields(kind, data):
         identity = ((async_data.get('pid'), async_data.get('process_created_filetime'))
                     if type(async_data) is dict else None)
         result['async_capture'] = sanitize_native_async_capture(async_data, native=native, identity=identity)
+    if kind == 'native_capture_pressure':
+        if (source != 'native_runtime' or data.get('phase') not in ('pending', 'recovered')
+                or type(data.get('reason')) is not str or data['reason'] not in NATIVE_CAPTURE_RETRY_REASONS):
+            return None
+        result.update(phase=data['phase'], reason=data['reason'])
+        if 'async_capture' in result:
+            result['async_capture'].pop('callback_timing', None)
+        return result
     result['available'] = data.get('available') is True and type(native) is dict
     if not result['available']:
         return result
@@ -226,6 +234,7 @@ def sanitize_native_hook_startup(record, *, event=None):
 KEY_EVENTS = {
     'performance_timing': None,
     'native_performance_timing': None,
+    'native_capture_pressure': None,
     'worker_started': ('platform', 'event_observation'),
     'worker_stopped': ('pending_history_count', 'cleanup_ok'),
     'connection_attempt': ('revision', 'platform', 'event_observation'),
@@ -246,7 +255,8 @@ KEY_EVENTS = {
     'native_hook_request_failed': ('op', 'error_type', 'win32_error', 'code', 'response_bytes',
                                    'response_limit', 'requested_event_count', 'replay_hook_id', 'replay_edge',
                                    'replay_ticket', 'replay_role_id', 'replay_checkpoint', 'replay_field_id',
-                                   'replay_gap_count', 'metadata_read_size', 'replay_reason_codes', 'replay_script_lines'),
+                                   'replay_gap_count', 'metadata_read_size', 'replay_reason_codes', 'replay_script_lines',
+                                   'native_failure_code'),
     'lifecycle_state': ('previous', 'state'),
     'capture_health': None,  # Sanitized before the journal mode is applied.
     'event_gap': ('error_type', 'code'),
@@ -427,7 +437,7 @@ class DesktopCaptureJournal:
                 data = sanitize_native_hook_startup(data, event=kind)
                 if data is None:
                     return
-            elif kind in ('performance_timing', 'native_performance_timing'):
+            elif kind in ('performance_timing', 'native_performance_timing', 'native_capture_pressure'):
                 data = _performance_fields(kind, data)
                 if data is None:
                     return

@@ -114,6 +114,12 @@ def observation_age(sample, now=None):
         return float('inf')
     return max(0.0,(time.monotonic() if now is None else now)-sample['captured_monotonic'])
 
+NATIVE_CAPTURE_RETRY_REASONS = frozenset((
+    'native_fresh_publication_not_ready', 'native_publication_not_ready',
+    'native_publication_token_expired', 'native_publication_range_unavailable',
+    'native_publication_unserved_prefix', 'native_terminal_publication_not_ready',
+    'other', 'none'))
+
 # Native async profiling is a separate log lane, never an input to statistics.
 # Keep this dependency-free allowlist shared by acquisition and journal output.
 _ASYNC_HOOK_LABELS = frozenset((

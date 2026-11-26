@@ -8,6 +8,66 @@ from metrics import sanitize_native_async_capture
 from desktop_audit import _performance_fields
 
 
+def untimed_async():
+    raw = raw_async()
+    raw['queue_age_available'] = False
+    raw['callback_timing'].update(enabled=False, samples=[])
+    for lane in raw['lane_metrics']:
+        lane.update(queue_age_available=False, age_sample_count=0,
+                    last_capture_to_replay_qpc=None, maximum_capture_to_replay_qpc=None,
+                    observed_pending_age_lower_bound_qpc=None)
+    return raw
+
+
+def test_pressure_counts_survive_without_debug_or_callback_timing(monkeypatch, tmp_path):
+    from native_pc import native_hook_source as module
+    from event_observer import ObserverStatus
+    from desktop_audit import DesktopCaptureJournal
+    from capture_cli import json_value
+    probe = module.NativeHookEventProbe(SimpleNamespace(process=SimpleNamespace(process_alive=lambda: True)))
+    probe.status = ObserverStatus.READY
+    probe._owned_process_instance = (123, 99)
+    state, calls, records = [0.0], [], []
+    result = dict(retry=True, mark_retry_reason='native_fresh_publication_not_ready',
+                  native_async_capture=untimed_async())
+    def request(operation, **arguments):
+        calls.append((operation, arguments))
+        return result
+    probe._pipe = SimpleNamespace(request=request)
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    monkeypatch.setattr(module.time, 'perf_counter', lambda: state[0])
+    for now in (0., 1.99, 2., 2.01, 2.99, 3.):
+        state[0] = now
+        assert probe._raw_request('mark') is result
+    assert [kind for kind, _ in records] == ['native_capture_pressure'] * 2
+    assert all('native_timing' not in args for _, args in calls)
+    result['retry'] = False
+    state[0] = 3.1
+    probe._raw_request('mark')
+    probe._raw_request('mark')
+    assert [data['phase'] for _, data in records] == ['pending', 'pending', 'recovered']
+    assert all(data['async_capture']['available'] for _, data in records)
+    assert all(data['async_capture']['queue_age_available'] is False for _, data in records)
+    assert all(data['async_capture']['lane_metrics'][0]['maximum_capture_to_replay_qpc'] is None
+               for _, data in records)
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+        header=lambda *a, **k: dict(kind='log_header', data=dict(debug_mode=False))) as journal:
+        for kind, data in records:
+            journal.write(kind, dict(data, private='hidden'))
+    rows = [json.loads(s) for s in next(tmp_path.glob('wpf-*.jsonl')).read_text(encoding='utf-8').splitlines()]
+    assert [r['data']['phase'] for r in rows[1:]] == ['pending', 'pending', 'recovered']
+    assert all('private' not in r['data'] and 'callback_timing' not in r['data']['async_capture'] for r in rows[1:])
+    assert all(r['data']['async_capture']['captured_prefix_lag_records'] == 2 for r in rows[1:])
+
+
+def test_pressure_reason_and_identity_are_not_taken_from_arbitrary_text():
+    data = dict(schema=1, source='native_runtime', phase='pending', reason='C:/private', async_capture=clean())
+    assert _performance_fields('native_capture_pressure', data) is None
+    data['reason'] = 'native_fresh_publication_not_ready'
+    data['async_capture']['process_created_filetime'] = -1
+    assert _performance_fields('native_capture_pressure', data)['async_capture']['available'] is False
+
+
 def raw_async():
     return dict(version=1, reserved_ticket=20, processed_ticket=18, closed_ticket=18, published_ticket=16,
         desired_mode_epoch=1, published_mode_epoch=1, publication_ready=True, activity_generation=40,
