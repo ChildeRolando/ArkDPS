@@ -681,6 +681,9 @@ class NativeHookEventProbe:
     contract = NATIVE_PC_CONTRACT
     transfers_event_records = True
     provides_autochess_context = True
+    # stop closes the process-lifetime runtime. A different battle or a rejected
+    # sample cannot authorize rebuilding that input in the same game process.
+    can_restart_in_process = False
     # Opt in to the existing guarded PC paths; neither capability bypasses
     # opening-mark/independent-root proof or the host's typed retry budget.
     native_autochess_identity_sampling = True

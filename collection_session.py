@@ -304,11 +304,23 @@ class CollectionSession:
         generation = observation.generation
         previous, self._observer_generation = self._observer_generation, generation
         error = (observation.events or {}).get('error')
-        observer_ready = (self.observer is not None
-                          and getattr(self.observer, 'status', ObserverStatus.READY) == ObserverStatus.READY)
         if (self.event_status == WAITING_GAME_INIT or
-                previous is None or previous == generation or not self._observer_requested() or
-                (observer_ready and not error)):
+                previous is None or previous == generation or not self._observer_requested()):
+            return False, self.observer
+        status = getattr(self.observer, 'status', None)
+        # Sampling admission and transport lifetime are independent. A guarded
+        # read can fail while the producer, cursor and queued prefix remain live.
+        # An untyped external provider has no positive transport-health proof.
+        observer_ready = self.observer is not None and (
+            status == ObserverStatus.READY or (status is None and not error))
+        process_owned = self.observer is not None and not getattr(
+            self.observer, 'can_restart_in_process', True)
+        if observer_ready or process_owned:
+            if error or not observer_ready:
+                self.audit('observer_recovery_deferred', dict(
+                    generation=generation, observer_status=status,
+                    code='sample_rejected' if observer_ready else 'observer_unavailable',
+                    can_restart_in_process=not process_owned))
             return False, self.observer
         # The feed has confirmed a different battle. A failed attempt belongs
         # to this generation even when its first event barrier needs a retry.

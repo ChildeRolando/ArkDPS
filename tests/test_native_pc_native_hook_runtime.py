@@ -378,6 +378,48 @@ def test_adopted_resources_are_only_released_by_observer(env, monkeypatch):
     assert prepared.close_calls == 0  # Already transferred; startup must not clean observer resources.
 
 
+def test_sampling_rejection_keeps_the_claimed_process_input_ready(env, monkeypatch):
+    from collection_session import CollectionSession
+    runtime = arm(env)
+    lease = ready(env, runtime)
+    collector = SimpleNamespace(
+        diagnostics=SimpleNamespace(platform='native_pc'),
+        process=SimpleNamespace(pid=lease['pid'], process_instance=(lease['pid'], lease['created'])))
+    observer = runtime.observer_factory(collector)
+    stopped = []
+    def start(self):
+        self.prepared.claimed = True
+        self.hook_disable_confirmed = False
+        self.status = ObserverStatus.READY
+    def stop(self):
+        stopped.append(self)
+        self.hook_disable_confirmed = True
+        self.cleanup_errors = {}
+        self.status = ObserverStatus.STOPPED
+    monkeypatch.setattr(module.NativeHookEventProbe, 'start', start)
+    monkeypatch.setattr(module.NativeHookEventProbe, 'stop', stop)
+    observer.start()
+    session = CollectionSession(None, None, collector=collector, frida_remote=None,
+                                observer_factory=runtime.observer_factory)
+    session.runtime = SimpleNamespace(observer_retired=lambda _observer: None)
+    session.observer, session._observer_generation = observer, 53
+    try:
+        for generation in (54, 54, 55):
+            retried, preserved = session._prepare_battle_observer(SimpleNamespace(
+                generation=generation, events={'error': 'temporary sampling scope rejection'}))
+            assert not retried and preserved is observer
+        assert not stopped and observer in runtime._observers
+        assert runtime.describe()['status'] == 'ready'
+        assert len(env.factory.loads) == 1 and observer.prepared.claimed
+        session._retire_observer()
+        assert stopped == [observer] and observer not in runtime._observers
+        assert runtime.describe()['code'] == 'restart_required'
+    finally:
+        if observer in runtime._observers:
+            observer.stop()
+        runtime.close()
+
+
 def test_wait_ready_checks_external_cancel_even_if_already_ready(env):
     runtime = arm(env)
     ready(env, runtime)
