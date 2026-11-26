@@ -43,3 +43,18 @@ slots but still validates all required owned fields. Excluded: IPC/native hook
 trampoline, real game scheduling/FPS, and native E/L snapshots of the nested dirty
 callback. Dirty business callbacks execute. Results remain
 `NOT_FULL_WORKER_ACCEPTANCE`; this is an owned workload, not live acceptance.
+
+To reproduce the pure-HP ownbatch negative control with one binary and source,
+first generate/build the lite bundle using `--count 2000` (omit `--full-scope`).
+Run its `production-hp.exe production-hp.js --disable-batch`, then the same
+command without the flag. The flag removes both native register/read entrypoints
+before source prepare, so source takes its original independent reads. Require
+`batch_calls == 0` for control and nonzero calls plus two registered plans for
+treatment; do not compare different native/bridge builds. Reverse order if a
+small improvement needs confirmation. Frozen `predicate-profile/mini-*.json`
+records the completed pair; no improvement was observed.
+
+For a replacement HookPoint implementation, record its native entry calls
+separately from underlying owned field reads. A legal unrequested slot may be
+absent; actually requesting an absent slot must preserve native structural
+poison and JS replay-gap. Do not count a fallback path as an active treatment.
