@@ -1,0 +1,373 @@
+{
+  "root_head": "d107f11e883adbc6d4209c8be9c3279a4ef1c6ef",
+  "binary_sha256": "4bffb2f0eaebdcdd847af7dd19ac1bcb3460df4ffb874eddafbb2728e396f9ab",
+  "count": 5000,
+  "sampling": "per-owner counter 1/128, phase1; only selected calls invoke clock",
+  "arms": {
+    "control": {
+      "queue": null,
+      "kind": "actual_shared_hp_callback_quickjs_native_owned",
+      "includes": [
+        "actual HP field plan and compile_plan",
+        "native capture and strict OwnedReplayView",
+        "actual bridge fused packed dispatch and argument proxy",
+        "actual adapter withCapturedMode wrapper",
+        "actual shared HP callback",
+        "real prepared full scope graph",
+        "785-guard publication graph and actual source prefix/journal"
+      ],
+      "excluded": [
+        "IPC/queue",
+        "native dirty callback snapshots"
+      ],
+      "results": [
+        {
+          "segments": {},
+          "segment_calls": {},
+          "dispatch_counters": {
+            "graph_format0": 5,
+            "graph_format1": 5005,
+            "args_proxy": 0,
+            "direct_entry": 5000,
+            "direct_leave": 4995,
+            "hp_adopt_requests": 9995,
+            "hp_ordinary_requests": 5,
+            "fallback_reasons": {
+              "cold_or_publication": 5
+            }
+          },
+          "native_request_counts": {
+            "__nativeOwnedHpObservation": 10000,
+            "__nativeOwnedGraphCheck": 5010,
+            "__nativeOwnedPoint": 5035,
+            "__nativeOwnedScalar": 5025,
+            "__nativeOwnedRead": 10
+          },
+          "js_profile": {
+            "scope_ms": 324.68239867687225,
+            "scope_inside_pub_ms": 0.45509999990463257,
+            "prefix_ms": 18.424800038337708,
+            "journal_ms": 3.997699946165085
+          },
+          "native_profile": {
+            "batch_calls": null,
+            "batch_output_bytes": null,
+            "byte_read_calls": null,
+            "capture_ms": 0,
+            "capture_read_bytes": 7543230,
+            "capture_read_count": 505770,
+            "cpp_io_counters_available": false,
+            "cpp_timing_enabled": false,
+            "edges": 10000,
+            "graph_calls": null,
+            "graph_check_calls": null,
+            "graph_check_timing": {
+              "calls": 0,
+              "max_us": 0,
+              "sampled_us": 0,
+              "samples": 0
+            },
+            "graph_output_bytes": null,
+            "hook_point_calls": null,
+            "hook_point_timing": {
+              "calls": 0,
+              "max_us": 0,
+              "sampled_us": 0,
+              "samples": 0
+            },
+            "hp_failure_calls": null,
+            "hp_observation_calls": null,
+            "missing_hook_calls": null,
+            "owned_view_internal_read_calls": "not_measured",
+            "plans_sealed": false,
+            "point_calls": null,
+            "prepared_issue_attempts": 9995,
+            "prepared_packets": 9995,
+            "registered_plans": 0,
+            "scalar_calls": null,
+            "sealed_owner": true,
+            "selected_field_slots": null,
+            "view_initialize_ms": 0
+          },
+          "branch": "heal_coalesced",
+          "setters": 5000,
+          "dirty": 0,
+          "elapsed_ms": 845.5541000068188,
+          "setters_per_second": 5913.282189702207,
+          "publication_count": 5,
+          "scope_stamps": 5000,
+          "sequence_delta": 6,
+          "event_kinds": {
+            "enemy_hp": 6
+          },
+          "business_events_sha256": "03055ecd0fb2c60eab831337aa6e609ac73175359ed6b81253890ab6cd7a4c32"
+        }
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "b8280ed762527a85f5241f81b2f6dba9c21441406b1c4ff2812cf38c90a77c37",
+        "event_probe_runtime.js": "035f8f2a39bcba53236d296f5c5687aa17cc1b45af45b4cf4108e31f2e4238f4",
+        "event_probe_autochess.js": "3ee8014bb1de459c1a312327326bd238924fa1d92ebb92d1f59fb19207fb7b89",
+        "native_pc/native_event_runtime/cold_plan.js": "b9819936b72aa4fa422e477486a642220acf165cd3676fd2e42aa3979b87991c",
+        "native_pc/native_event_runtime/bridge.js": "03b49a479644fabd3558f00bd5c3ea2df26963edbfff7cb2c04aef9bd0084b0c",
+        "native_pc/native_event_runtime/publication.js": "65c27e8a8d9197c686c3f97322b06d2923fb7172c2328d4d3f1153d42787cb29"
+      },
+      "execute_sha256": "e23e78c1bb13aefc7487f26330c453f370d960699b48727e791a1350863811ee"
+    },
+    "sampled": {
+      "queue": null,
+      "kind": "actual_shared_hp_callback_quickjs_native_owned",
+      "includes": [
+        "actual HP field plan and compile_plan",
+        "native capture and strict OwnedReplayView",
+        "actual bridge fused packed dispatch and argument proxy",
+        "actual adapter withCapturedMode wrapper",
+        "actual shared HP callback",
+        "real prepared full scope graph",
+        "785-guard publication graph and actual source prefix/journal"
+      ],
+      "excluded": [
+        "IPC/queue",
+        "native dirty callback snapshots"
+      ],
+      "results": [
+        {
+          "segments": {
+            "factory.preamble_geometry_lease": {
+              "samples": 40,
+              "sum_us": 204.6000361442566,
+              "max_us": 153.69999408721924,
+              "mean_us": 5.115000903606415
+            },
+            "factory.native_call": {
+              "samples": 40,
+              "sum_us": 382.79998302459717,
+              "max_us": 18.299996852874756,
+              "mean_us": 9.56999957561493
+            },
+            "factory.packet_header_index_type_width": {
+              "samples": 40,
+              "sum_us": 620.0000643730164,
+              "max_us": 24.30000901222229,
+              "mean_us": 15.500001609325409
+            },
+            "factory.freeze_mint": {
+              "samples": 40,
+              "sum_us": 233.9998483657837,
+              "max_us": 47.40002751350403,
+              "mean_us": 5.849996209144592
+            },
+            "factory.total": {
+              "samples": 40,
+              "sum_us": 1490.3000593185425,
+              "max_us": 196.29999995231628,
+              "mean_us": 37.25750148296356
+            },
+            "scope.preamble_including_factory": {
+              "samples": 40,
+              "sum_us": 2277.100086212158,
+              "max_us": 774.1999924182892,
+              "mean_us": 56.927502155303955
+            },
+            "scope.field_canonical_loop_and_semantic_validation": {
+              "samples": 40,
+              "sum_us": 839.0999138355255,
+              "max_us": 39.200007915496826,
+              "mean_us": 20.977497845888138
+            },
+            "scope.tail_captureClockFixed": {
+              "samples": 40,
+              "sum_us": 394.4000005722046,
+              "max_us": 125.69999694824219,
+              "mean_us": 9.860000014305115
+            },
+            "scope.tail_autoScope": {
+              "samples": 40,
+              "sum_us": 121.79991602897644,
+              "max_us": 9.000003337860107,
+              "mean_us": 3.044997900724411
+            },
+            "scope.tail_collectionMode_and_result": {
+              "samples": 40,
+              "sum_us": 187.40016222000122,
+              "max_us": 13.500005006790161,
+              "mean_us": 4.6850040555000305
+            },
+            "scope.total": {
+              "samples": 40,
+              "sum_us": 3854.900062084198,
+              "max_us": 963.8000130653381,
+              "mean_us": 96.37250155210495
+            }
+          },
+          "segment_calls": {
+            "scope": 5005,
+            "factory": 5005
+          },
+          "dispatch_counters": {
+            "graph_format0": 5,
+            "graph_format1": 5005,
+            "args_proxy": 0,
+            "direct_entry": 5000,
+            "direct_leave": 4995,
+            "hp_adopt_requests": 9995,
+            "hp_ordinary_requests": 5,
+            "fallback_reasons": {
+              "cold_or_publication": 5
+            }
+          },
+          "native_request_counts": {
+            "__nativeOwnedHpObservation": 10000,
+            "__nativeOwnedGraphCheck": 5010,
+            "__nativeOwnedPoint": 5035,
+            "__nativeOwnedScalar": 5025,
+            "__nativeOwnedRead": 10
+          },
+          "js_profile": {
+            "scope_ms": 351.2140000164509,
+            "scope_inside_pub_ms": 0.39659997820854187,
+            "prefix_ms": 18.165100008249283,
+            "journal_ms": 3.6692999601364136
+          },
+          "native_profile": {
+            "batch_calls": null,
+            "batch_output_bytes": null,
+            "byte_read_calls": null,
+            "capture_ms": 0,
+            "capture_read_bytes": 7543230,
+            "capture_read_count": 505770,
+            "cpp_io_counters_available": false,
+            "cpp_timing_enabled": false,
+            "edges": 10000,
+            "graph_calls": null,
+            "graph_check_calls": null,
+            "graph_check_timing": {
+              "calls": 0,
+              "max_us": 0,
+              "sampled_us": 0,
+              "samples": 0
+            },
+            "graph_output_bytes": null,
+            "hook_point_calls": null,
+            "hook_point_timing": {
+              "calls": 0,
+              "max_us": 0,
+              "sampled_us": 0,
+              "samples": 0
+            },
+            "hp_failure_calls": null,
+            "hp_observation_calls": null,
+            "missing_hook_calls": null,
+            "owned_view_internal_read_calls": "not_measured",
+            "plans_sealed": false,
+            "point_calls": null,
+            "prepared_issue_attempts": 9995,
+            "prepared_packets": 9995,
+            "registered_plans": 0,
+            "scalar_calls": null,
+            "sealed_owner": true,
+            "selected_field_slots": null,
+            "view_initialize_ms": 0
+          },
+          "branch": "heal_coalesced",
+          "setters": 5000,
+          "dirty": 0,
+          "elapsed_ms": 906.3046000003815,
+          "setters_per_second": 5516.908995052982,
+          "publication_count": 5,
+          "scope_stamps": 5000,
+          "sequence_delta": 6,
+          "event_kinds": {
+            "enemy_hp": 6
+          },
+          "business_events_sha256": "03055ecd0fb2c60eab831337aa6e609ac73175359ed6b81253890ab6cd7a4c32"
+        }
+      ],
+      "source_sha256": {
+        "event_probe_native_pc.js": "18260bbc2577a3f1a4f586f30dca2414ef4a77af1df3b80ed5501c22dd28d95c",
+        "event_probe_runtime.js": "035f8f2a39bcba53236d296f5c5687aa17cc1b45af45b4cf4108e31f2e4238f4",
+        "event_probe_autochess.js": "3ee8014bb1de459c1a312327326bd238924fa1d92ebb92d1f59fb19207fb7b89",
+        "native_pc/native_event_runtime/cold_plan.js": "b9819936b72aa4fa422e477486a642220acf165cd3676fd2e42aa3979b87991c",
+        "native_pc/native_event_runtime/bridge.js": "e0bc53ea7bdf4a9000837c79a92e58e293b93047691c03adc1de7bab131fa430",
+        "native_pc/native_event_runtime/publication.js": "65c27e8a8d9197c686c3f97322b06d2923fb7172c2328d4d3f1153d42787cb29"
+      },
+      "execute_sha256": "f49b8fa3d03c0d1075a790aae19b88c951c55d01640c0b6b5d1fa8e32c6a52d6"
+    }
+  },
+  "driver_sha256": "8d91bc55b79b22f9e60ae5e17d6d88424c357da0749fc3376bb685307effa748",
+  "summary": {
+    "factory.preamble_geometry_lease": {
+      "samples": 40,
+      "sum_us": 204.6000361442566,
+      "max_us": 153.69999408721924,
+      "mean_us": 5.115000903606415
+    },
+    "factory.native_call": {
+      "samples": 40,
+      "sum_us": 382.79998302459717,
+      "max_us": 18.299996852874756,
+      "mean_us": 9.56999957561493
+    },
+    "factory.packet_header_index_type_width": {
+      "samples": 40,
+      "sum_us": 620.0000643730164,
+      "max_us": 24.30000901222229,
+      "mean_us": 15.500001609325409
+    },
+    "factory.freeze_mint": {
+      "samples": 40,
+      "sum_us": 233.9998483657837,
+      "max_us": 47.40002751350403,
+      "mean_us": 5.849996209144592
+    },
+    "factory.total": {
+      "samples": 40,
+      "sum_us": 1490.3000593185425,
+      "max_us": 196.29999995231628,
+      "mean_us": 37.25750148296356
+    },
+    "scope.preamble_including_factory": {
+      "samples": 40,
+      "sum_us": 2277.100086212158,
+      "max_us": 774.1999924182892,
+      "mean_us": 56.927502155303955
+    },
+    "scope.field_canonical_loop_and_semantic_validation": {
+      "samples": 40,
+      "sum_us": 839.0999138355255,
+      "max_us": 39.200007915496826,
+      "mean_us": 20.977497845888138
+    },
+    "scope.tail_captureClockFixed": {
+      "samples": 40,
+      "sum_us": 394.4000005722046,
+      "max_us": 125.69999694824219,
+      "mean_us": 9.860000014305115
+    },
+    "scope.tail_autoScope": {
+      "samples": 40,
+      "sum_us": 121.79991602897644,
+      "max_us": 9.000003337860107,
+      "mean_us": 3.044997900724411
+    },
+    "scope.tail_collectionMode_and_result": {
+      "samples": 40,
+      "sum_us": 187.40016222000122,
+      "max_us": 13.500005006790161,
+      "mean_us": 4.6850040555000305
+    },
+    "scope.total": {
+      "samples": 40,
+      "sum_us": 3854.900062084198,
+      "max_us": 963.8000130653381,
+      "mean_us": 96.37250155210495
+    }
+  },
+  "control_matches_fixed_git_source_after_line_ending_normalization": {
+    "event_probe_native_pc.js": true,
+    "event_probe_runtime.js": true,
+    "event_probe_autochess.js": true,
+    "native_pc/native_event_runtime/cold_plan.js": true,
+    "native_pc/native_event_runtime/bridge.js": true,
+    "native_pc/native_event_runtime/publication.js": true
+  }
+}
