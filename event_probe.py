@@ -192,13 +192,53 @@ class EventProbe(Protocol):
     error: str | None
     probe_modes: dict
     cleanup_errors: dict
+    capture_pause_supported: bool
+    capture_paused: bool
 
     def start(self): ...
     def mark(self) -> dict: ...
     def read_terminal_mark(self) -> dict: ...
     def read_through(self, sequence: int) -> dict: ...
     def commit_events(self, sequence: int) -> bool | None: ...
+    def set_capture_paused(self, paused: bool, revision: int) -> dict: ...
     def stop(self): ...
+
+
+def request_capture_pause(observer, paused, revision):
+    """Confirm control independently of battle marks; never advance an ACK."""
+    if type(paused) is not bool or type(revision) is not int or not 1 <= revision <= 2147483647:
+        raise ValueError('invalid capture pause request')
+    if not observer.capture_pause_supported:
+        raise RuntimeError('当前事件组件不支持临时暂停，请更新后重启游戏')
+    result = observer._request('capture_control', paused=paused, revision=revision)
+    if not isinstance(result, dict) or result.get('error') or result.get('stopped'):
+        raise RuntimeError((result.get('error') if isinstance(result, dict) else None)
+                           or '事件暂停控制未确认')
+    if (type(result.get('capture_pause_version')) is not int or result['capture_pause_version'] != 1
+            or type(result.get('revision')) is not int or result['revision'] != revision
+            or type(result.get('paused')) is not bool
+            or type(result.get('capture_generation')) is not int or result['capture_generation'] < 0
+            or type(result.get('sequence')) is not int or result['sequence'] < 0
+            or type(result.get('epoch')) is not int or result['epoch'] < 0
+            or any(result[key] > 9007199254740991 for key in ('sequence', 'epoch', 'capture_generation'))
+            or type(result.get('retry')) is not bool):
+        raise RuntimeError('事件暂停控制回复不匹配')
+    if result['retry']:
+        raise ObserverReadRetry('事件回调正在结束，等待暂停控制确认')
+    previous_revision = getattr(observer, '_capture_control_revision', 0)
+    previous_generation = getattr(observer, '_capture_control_generation', 0)
+    if (result['paused'] is not paused or revision < previous_revision
+            or result['capture_generation'] < previous_generation
+            or (paused is not observer.capture_paused and result['capture_generation'] <= previous_generation)
+            or (paused and (type(result.get('active')) is not int or result['active'] != 0
+                            or result.get('active_hooks') != []))
+            or ('native_paused' in result and result['native_paused'] is not paused)
+            or (paused and 'native_quiet' in result and result['native_quiet'] is not True)):
+        raise RuntimeError('事件采集尚未达到请求的暂停状态')
+    observer.capture_paused = paused
+    observer._capture_control_revision = revision
+    observer._capture_control_generation = result['capture_generation']
+    return result
 
 
 def event_processing_payload(record):
@@ -1202,6 +1242,8 @@ def ready_probe_modes(payload):
     result = {key: payload[key] for key in booleans if type(payload.get(key)) is bool}
     if type(payload.get('terminal_read_version')) is int and payload['terminal_read_version'] == 1:
         result['terminal_read_version'] = 1
+    if type(payload.get('capture_pause_version')) is int and payload['capture_pause_version'] == 1:
+        result['capture_pause_version'] = 1
     result.update({key: payload[key] for key in errors if key in payload
                    and (payload[key] is None or isinstance(payload[key], str))})
     raw = payload.get('mitigation_diagnostics')

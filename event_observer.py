@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from connection import VersionStatus
 from event_probe import (MUMU_CONTRACT, NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry,
                          ready_probe_modes, assemble_probe_source, acquire_native_terminal_tail,
+                         request_capture_pause,
                          reset_probe_cursor, commit_probe_prefix, check_round_start_range, read_probe_range)
 
 
@@ -49,6 +50,8 @@ class FridaEventObserver:
         self.script = None
         self.ready = Event()
         self.probe_modes = {}
+        self.capture_paused = False
+        self._capture_control_revision = self._capture_control_generation = 0
         self._probe_source_manifest = {}
         self.cleanup_errors = {}
         self._request_lock = Lock()
@@ -136,6 +139,8 @@ class FridaEventObserver:
         self.error = None
         self.ready.clear()
         self.probe_modes = {}
+        self.capture_paused = False
+        self._capture_control_revision = self._capture_control_generation = 0
         self._probe_source_manifest = {}
         reset_probe_cursor(self)
         try:
@@ -201,6 +206,14 @@ class FridaEventObserver:
 
     def mark(self):
         return self._request('mark', **self._mark_options())
+
+    @property
+    def capture_pause_supported(self):
+        version = self.probe_modes.get('capture_pause_version')
+        return type(version) is int and version == 1
+
+    def set_capture_paused(self, paused, revision):
+        return request_capture_pause(self, paused, revision)
 
     def mark_with_presence(self):
         return self._request('mark', with_presence=True, **self._mark_options())

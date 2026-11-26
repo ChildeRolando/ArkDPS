@@ -370,6 +370,31 @@ let acknowledgedSequence=0,readThroughSequence=0,hpContextDropped=0;
 let autoChessRoundStart=null,autoChessUnclaimedZero=null;
 const AUTOCHESS_ROUND_START_EVENT_LIMIT=2048;
 const stacks=new Map(), hooks=[];
+// Temporary capture control owns listeners, never the event queue or ACK cursor.
+const captureHooks=[];
+let capturePaused=false,captureBlocked=false,captureInterrupted=false;
+let captureRevision=0,captureGeneration=0,captureCallbacks=0;
+function attachEventHook(address,callbacks){
+ const entry={address,callbacks:null,listener:null,detached:false};
+ entry.callbacks={
+  onEnter(args){
+   this.arkdpsCaptureAdmitted=!captureBlocked&&!stopped;
+   if(!this.arkdpsCaptureAdmitted)return;
+   captureCallbacks++;
+   try{callbacks.onEnter?.call(this,args);}
+   catch(e){this.arkdpsCaptureAdmitted=false;captureCallbacks--;throw e;}
+  },
+  onLeave(result){
+   if(!this.arkdpsCaptureAdmitted)return;
+   try{callbacks.onLeave?.call(this,result);}
+   finally{this.arkdpsCaptureAdmitted=false;captureCallbacks--;}
+  }
+ };
+ if(!captureBlocked||globalThis.__arkdpsNativeCaptureControl===true)
+  entry.listener=Interceptor.attach(address,entry.callbacks);
+ captureHooks.push(entry);
+ return {detach(){entry.detached=true;if(entry.listener){entry.listener.detach();entry.listener=null;}}};
+}
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
 function fp(p){return p.readS64().toNumber()/4294967296;}
 function entityId(p){if(p.isNull())throw new Error('missing source entity');const id=str(p.add(0x148).readPointer());if(!id)throw new Error('missing source identity');return id;}
@@ -2302,7 +2327,7 @@ function installMitigationHooks(){
  if(!mitigationMethods)return;
  const attached=[];
  function observe(address,name,enter,leave,cleanup,barrier=false){
-  attached.push(Interceptor.attach(address,{
+  attached.push(attachEventHook(address,{
    onEnter(args){
     this.tid=this.threadId;
     if(barrier){
@@ -2480,7 +2505,7 @@ function installEnemyEntryHooks() {
   for(const [method,address] of [['_UpdatePlayerSideAndMapLayer',enemyEntryConfig.layer],['Born',enemyEntryConfig.born]]){
    const label='enemy entry '+method;
    const isBorn=method==='Born';
-   installed.push(Interceptor.attach(address,{
+   installed.push(attachEventHook(address,{
     onEnter(args){
      if(stopped||fatal||!enemyEntryReady)return;
      try{
@@ -2539,7 +2564,7 @@ function installEnemyEntryHooks() {
     }
    }));
   }
-  installed.push(Interceptor.attach(enemyEntryConfig.recycle,{
+  installed.push(attachEventHook(enemyEntryConfig.recycle,{
    onEnter(args){
      if(!awaitingEnemyTile.size&&!enemyBirthProofs.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size
         &&!enemyHpBirths.size)return;
@@ -2571,7 +2596,7 @@ function installEnemyPhaseHook() {
  const label='enemy phase DoReborn';
  const installed=[];
  try{
-  installed.push(Interceptor.attach(enemyPhaseMethods.fakeDeath,{
+  installed.push(attachEventHook(enemyPhaseMethods.fakeDeath,{
    onEnter(args){
     if(stopped||fatal)return;
     try{
@@ -2592,7 +2617,7 @@ function installEnemyPhaseHook() {
      if(this.started)endEnemyHook('Enemy.DoFakeDeath');
    }
   }));
-  installed.push(Interceptor.attach(enemyPhaseMethods.reborn,{
+  installed.push(attachEventHook(enemyPhaseMethods.reborn,{
    onEnter(args){
     if(stopped||fatal)return;
     try{
@@ -2725,7 +2750,7 @@ function installEnemyStateHooks() {
     }
    };
    try{
-    installed.push(Interceptor.attach(address,callbacks));
+    installed.push(attachEventHook(address,callbacks));
     if(attributeChange)enemyMaxHpReady=enemyAttributesReady;
    }catch(e){
     if(!attributeChange)throw e;
@@ -2733,7 +2758,7 @@ function installEnemyStateHooks() {
    }
   }
   const label='Enemy.OnFinish';
-  installed.push(Interceptor.attach(enemyStateMethods.finish,{
+  installed.push(attachEventHook(enemyStateMethods.finish,{
    onEnter(args){
     if(stopped||fatal)return;
     try{
@@ -2769,7 +2794,7 @@ function installEnemyStateHooks() {
   if(enemyStateMethods.trapFinish){
    const label='Entity.OnFinish';
    try{
-    installed.push(Interceptor.attach(enemyStateMethods.trapFinish,{
+    installed.push(attachEventHook(enemyStateMethods.trapFinish,{
      onEnter(args){
       if(stopped||fatal)return;
       try{
@@ -2843,7 +2868,7 @@ function installCharacterBornHook(){
  if(!characterLifecycleMethods)return;
  const label='Character.Born';
  try{
- const hook=Interceptor.attach(characterLifecycleMethods.born,{
+ const hook=attachEventHook(characterLifecycleMethods.born,{
   onEnter(args){
    if(stopped||fatal)return;
    // Born may allocate instanceUid inside the call. Capture receiver/data and the raw clock first.
@@ -2903,7 +2928,7 @@ function installSkillCastStateHook(){
  if(!skillCastStateMethods)return;
  const label='BasicSkill.OnCastFinish';
  try{
-  const hook=Interceptor.attach(skillCastStateMethods.address,{
+  const hook=attachEventHook(skillCastStateMethods.address,{
    onEnter(args){
     if(stopped||fatal)return;
     this.started=true;beginEnemyHook(label);
@@ -2949,7 +2974,7 @@ function shouldObserveCallback({owner,name}){
    ||owner==='Unit'&&name==='OnAfterOutputDamage');
 }
 for(const m of cfg.methods.filter(shouldObserveCallback)){
- hooks.push(Interceptor.attach(ptr(m.address),{
+ hooks.push(attachEventHook(ptr(m.address),{
   onEnter(args){
    active++;epoch++;this.callbackEpoch=epoch;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
    activeHooks.set(this.name,(activeHooks.get(this.name)||0)+1);
@@ -3428,7 +3453,7 @@ function currentTerminalBoundary(candidate=terminalBoundary){
 function installTerminalHooks(){
  if(!terminalMethods)return;
  try{
-  hooks.push(Interceptor.attach(terminalMethods.state,{
+  hooks.push(attachEventHook(terminalMethods.state,{
    onEnter(args){
     probeAdapter.enterTerminalStateHook(this,args);
     const state=args[1].toInt32();
@@ -3447,7 +3472,7 @@ function installTerminalHooks(){
     probeAdapter.leaveTerminalStateHook(this);
    }
   }));
-  hooks.push(Interceptor.attach(terminalMethods.destroy,{
+  hooks.push(attachEventHook(terminalMethods.destroy,{
    onEnter(args){
     countTerminalDiagnostic('destroy_entered');
     this.generation=++terminalGeneration;
@@ -3540,7 +3565,7 @@ function installAutoChessRoundResetHook(){
  const label='BattleController.ClearRunTimeData';
  const otherCallbacks=()=>active>0||(probeAdapter.pendingMarkCallbacks?.()??0)>1;
  try{
-  hooks.push(Interceptor.attach(autoChessRoundResetMethod,{
+  hooks.push(attachEventHook(autoChessRoundResetMethod,{
    onEnter(args){
     if(!probeHooksReady||stopped||fatal)return;
     const unclaimed=autoChessUnclaimedZero;
@@ -3594,6 +3619,51 @@ function installAutoChessRoundResetHook(){
  }catch(e){cfg.autoChessRoundResetError=String(e);}
 }
 installAutoChessRoundResetHook();
+function captureControlStatus(){
+ return {capture_pause_version:1,paused:capturePaused,revision:captureRevision,
+  capture_generation:captureGeneration,sequence,epoch,active:Math.max(active,captureCallbacks),
+  active_hooks:[...activeHooks.keys()],retry:false,error:fatal,stopped};
+}
+function resetCaptureContexts(){
+ // Preserve every queued record and its old settlement provenance. Only state
+ // that could bridge an unobserved interval is discarded at the new segment.
+ resetEnemyHpCoalescing();resetDamageSettlementScope();
+ stacks.clear();nativeSkillCastCalls.clear();activeModifiers.clear();activeApplyScopes.clear();
+ formulaScopes.clear();pendingFormulaDamage.clear();activeDamageFactories.clear();
+ shieldByFrame.clear();shieldUnknownByFrame.clear();enemyHpWrites.clear();
+ awaitingEnemyTile.clear();enemyBirthProofs.clear();enemyHealthPhases.clear();pendingEnemyRebirth.clear();
+ enemyEntryFrame=null;terminalBoundary=null;autoChessRoundStart=null;autoChessUnclaimedZero=null;
+ if(typeof probeAdapter.discardInitialBoundary==='function')probeAdapter.discardInitialBoundary('manual_capture_pause');
+}
+function setCapturePaused(paused,revision){
+ const rejected=error=>({...captureControlStatus(),error});
+ if(typeof paused!=='boolean'||!Number.isInteger(revision)||revision<1||revision>2147483647)
+  return rejected('invalid capture control request');
+ if(stopped||fatal)return rejected(fatal||'event probe stopped');
+ if(revision<captureRevision||(revision===captureRevision&&paused!==capturePaused))
+  return rejected('stale capture control revision');
+ if(revision===captureRevision)return captureControlStatus();
+ // Frida callbacks are serialized with this control. Gate new invocations,
+ // allow admitted onLeave work to finish, then physically detach listeners.
+ if(paused&&!capturePaused)captureInterrupted=true;
+ captureBlocked=true;
+ if(captureCallbacks||active||activeHooks.size)
+  return {...captureControlStatus(),revision,retry:true};
+ if(paused){
+  if(globalThis.__arkdpsNativeCaptureControl!==true)
+   for(const entry of captureHooks)if(!entry.detached&&entry.listener){entry.listener.detach();entry.listener=null;}
+  if(coalesceEnemyHp)flushCoalescedEnemyHp();
+ }else{
+  if(capturePaused||captureInterrupted)resetCaptureContexts();
+  if(globalThis.__arkdpsNativeCaptureControl!==true)
+   for(const entry of captureHooks)if(!entry.detached&&!entry.listener)
+    entry.listener=Interceptor.attach(entry.address,entry.callbacks);
+ }
+ if(globalThis.__arkdpsNativeCaptureControl!==true&&typeof Interceptor.flush==='function')Interceptor.flush();
+ if(capturePaused!==paused||!paused&&captureInterrupted)captureGeneration++;
+ capturePaused=paused;captureRevision=revision;captureBlocked=paused;captureInterrupted=false;
+ return captureControlStatus();
+}
 function markEvents(withPresence=false){
  const pending=probeAdapter.markEntryCallbacks?.()??probeAdapter.pendingMarkCallbacks?.()??0;
  if(pending>0&&!fatal&&!stopped)
@@ -3639,6 +3709,7 @@ function receiveEventRequest(){
     case 'read':result=readEvents(request.after,request.through);break;
     case 'terminal_read':result=readTerminalEvents(request.after,request.through);break;
     case 'ack':result=ackEvents(request.sequence);break;
+    case 'capture_control':result=setCapturePaused(request.paused,request.revision);break;
     default:result={error:'unknown event transport operation'};
    }
   }catch(e){result={error:String(e)};}
@@ -3650,12 +3721,14 @@ rpc.exports={
  readEvents,
  readTerminalEvents,
  ackEvents,
+ setCapturePaused,
+ captureControlStatus,
  stop(){stopped=true;if(typeof probeAdapter.discardInitialBoundary==='function')probeAdapter.discardInitialBoundary('stopped');
   for(const h of hooks)h.detach();return {active,error:fatal};}
 };
 probeHooksReady=true;
 receiveEventRequest();
-send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
+send({ready:true,arch:Process.arch,capture_pause_version:1,skill_ready:!skillUnknown&&cfg.skillReady,
  ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),
  autochess_round_start_ready:!!autoChessRoundResetMethod&&!cfg.autoChessRoundResetError,
  autochess_round_start_error:cfg.autoChessRoundResetError||null,
