@@ -83,6 +83,9 @@ internal sealed class BridgeClient : IAsyncDisposable
     private const int MaxMessage = 32 * 1024 * 1024;
     private static readonly UTF8Encoding WireEncoding = new(false, true);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(10);
+    // A new worker must import and validate its package before reading hello.
+    // This budget applies to both initial startup and replacement workers.
+    internal static readonly TimeSpan StartupTimeout = TimeSpan.FromSeconds(30);
     // Bounded so a worker that stops answering cannot keep the UI alive:
     // quit must be answered in QuitSeconds, and the process must exit in ExitSeconds.
     internal const int QuitSeconds = 5;
@@ -160,9 +163,10 @@ internal sealed class BridgeClient : IAsyncDisposable
             throw;
         }
     }
-    public async Task ConnectAsync(TimeSpan? timeoutOverride = null)
+    public async Task ConnectAsync(TimeSpan? timeoutOverride = null, CancellationToken cancellationToken = default)
     {
-        var hello=await RequestAsync("hello",timeoutOverride:timeoutOverride);Hello=hello.Get("result");
+        var hello=await RequestAsync("hello",timeoutOverride:timeoutOverride ?? StartupTimeout,
+            cancellationToken:cancellationToken);Hello=hello.Get("result");
     }
     private void ReadReplies()
     {
@@ -214,9 +218,10 @@ internal sealed class BridgeClient : IAsyncDisposable
     }
 
     public async Task<JsonElement> RequestAsync(string op, Dictionary<string, object?>? fields = null,
-                                                TimeSpan? timeoutOverride = null)
+                                                TimeSpan? timeoutOverride = null,
+                                                CancellationToken cancellationToken = default)
     {
-        await gate.WaitAsync().ConfigureAwait(false);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             if (firstFault is { } fault)
@@ -224,11 +229,12 @@ internal sealed class BridgeClient : IAsyncDisposable
             if (!CanSend)
                 throw new BridgeTransportException(closing ? "采集进程正在关闭" : "Python 采集进程已退出");
             TimeSpan timeout = timeoutOverride ?? (op is "detect" or "export" ? TimeSpan.FromSeconds(90) : RequestTimeout);
-            return await ExchangeAsync(op, fields, timeout).ConfigureAwait(false);
+            return await ExchangeAsync(op, fields, timeout, cancellationToken).ConfigureAwait(false);
         }
         finally { gate.Release(); }
     }
-    private async Task<JsonElement> ExchangeAsync(string op, Dictionary<string, object?>? fields, TimeSpan timeout)
+    private async Task<JsonElement> ExchangeAsync(string op, Dictionary<string, object?>? fields, TimeSpan timeout,
+                                                 CancellationToken cancellationToken = default)
     {
         var command = fields == null ? new Dictionary<string, object?>() : new(fields);
         int id = ++sequence;
@@ -248,9 +254,11 @@ internal sealed class BridgeClient : IAsyncDisposable
             string json;
             while (true)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 TimeSpan remaining = (retried ? timeout : firstWait) - Stopwatch.GetElapsedTime(started);
                 if (remaining <= TimeSpan.Zero) throw new TimeoutException();
-                using var deadline = new CancellationTokenSource(remaining);
+                using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                deadline.CancelAfter(remaining);
                 phase = "write";
                 Task write = Task.Run(() =>
                 {
@@ -275,7 +283,8 @@ internal sealed class BridgeClient : IAsyncDisposable
                     json = await ReceiveReply(id, deadline.Token).ConfigureAwait(false);
                     break;
                 }
-                catch (OperationCanceledException) when (canReplay && !retried && deadline.IsCancellationRequested)
+                catch (OperationCanceledException) when (canReplay && !retried && deadline.IsCancellationRequested &&
+                                                         !cancellationToken.IsCancellationRequested)
                 {
                     retried = true;
                     WriteDiagnostic("bridge", $"op={op} id={id} phase=read event=retry " +
@@ -316,14 +325,18 @@ internal sealed class BridgeClient : IAsyncDisposable
         catch (Exception ex)
         {
             double elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            Exception cause = ex is OperationCanceledException ? new TimeoutException("等待采集进程超时", ex) :
+            bool cancelled = ex is OperationCanceledException && cancellationToken.IsCancellationRequested;
+            Exception cause = ex is OperationCanceledException && !cancelled ? new TimeoutException("等待采集进程超时", ex) :
                 ex is ChannelClosedException { InnerException: { } pipeError } ? pipeError : ex;
-            string reason = cause is TimeoutException ? "等待采集进程超时" : cause.Message;
+            string reason = cancelled ? "采集进程请求已取消" : cause is TimeoutException ? "等待采集进程超时" : cause.Message;
             var fault = new BridgeTransportException(reason + $"（{op} #{id}）", cause);
             firstFault = fault;
             WriteDiagnostic("bridge", $"op={op} id={id} phase={phase} " +
                 $"elapsed_ms={elapsed:F0} request_bytes={request.Length} " +
                 $"reply_bytes={Interlocked.Read(ref bytesRead) - previousBytes} error={cause.GetType().Name}");
+            // A cancelled request may still produce a late reply. Retire this
+            // channel before releasing the gate; its owner must close/dispose it.
+            if (cancelled) throw new OperationCanceledException(fault.Message, ex, cancellationToken);
             throw fault;
         }
     }
