@@ -37,6 +37,8 @@ struct CompiledPlan {
     bool apply_modifier=false, buff_damage=false, parent_checkpoint_fields=false;
     bool hp_profile=false, hp_dirty=false, hp_normal=false, hp_defer_scope=false;
     std::uintptr_t hp_enemy_class=0;
+    std::array<std::uintptr_t,16> hp_non_enemy_classes{};
+    std::uint8_t hp_non_enemy_count=0;
     std::array<std::uint8_t,max_fields> hp_field_kind{};
     std::unique_ptr<CompiledPlan> cold;
     bool force_cold_leave=false, force_full_entry=false, force_cold_conditional=false;
@@ -206,6 +208,16 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         if (plan_uint(filter.at("receiver_arg"),15)!=0 || plan_uint(filter.at("max_hp_attribute"),UINT32_MAX)!=0)
             throw std::runtime_error("unsupported HP early filter layout");
         if (!filter.at("enemy_class").is_null()) result.hp_enemy_class=plan_address(filter.at("enemy_class"));
+        const auto non_enemy=filter.value("hp_non_enemy_classes",nlohmann::json::array());
+        if(!non_enemy.is_array() || non_enemy.size()>result.hp_non_enemy_classes.size()
+            ||(!non_enemy.empty()&&!result.hp_enemy_class))throw std::runtime_error("invalid exact non-enemy HP classes");
+        for(const auto& value:non_enemy) {
+            const auto klass=plan_address(value);
+            if(!klass || klass==result.hp_enemy_class)throw std::runtime_error("non-enemy HP class overlaps Enemy");
+            for(unsigned i=0;i<result.hp_non_enemy_count;++i)
+                if(result.hp_non_enemy_classes[i]==klass)throw std::runtime_error("duplicate non-enemy HP class");
+            result.hp_non_enemy_classes[result.hp_non_enemy_count++]=klass;
+        }
         result.hp_normal=filter.at("normal_setter").get<bool>();
         result.hp_defer_scope=filter.value("defer_entry_scope",nlohmann::json(false)).get<bool>();
         if (result.hp_defer_scope && (!result.hp_normal || result.hp_dirty))
@@ -213,9 +225,28 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         for (unsigned i=0;i<source.at("fields").size();++i) {
             const auto& field=source.at("fields")[i];
             const auto name=field.value("name",std::string());
-            result.hp_field_kind[i]=name=="hp.identity" ? 1 : name=="hp.born" ? 2
+            result.hp_field_kind[i]=name=="hp.id" ? 6 : name=="hp.identity" ? 1 : name=="hp.born" ? 2
                 : name=="hp.before" ? 3 : name=="hp.closing" ? 4
                 : field.value("tier",std::string())=="changed" ? 5 : 0;
+        }
+        if(result.hp_non_enemy_count) {
+            unsigned identities=0,ids=0;
+            for(unsigned i=0;i<result.plan->field_count;++i) {
+                const auto& field=result.plan->fields[i];
+                if(result.hp_field_kind[i]==1) {
+                    ++identities;
+                    if(field.phase!=Phase::entry||field.root!=Root::arg||field.root_index||field.depth
+                        ||field.kind!=Kind::bytes||field.offset||field.bytes!=0x1c)
+                        throw std::runtime_error("non-enemy HP filter lacks same-point class/UID");
+                }
+                if(result.hp_field_kind[i]==6) {
+                    ++ids;
+                    if(field.phase!=Phase::entry||field.root!=Root::arg||field.root_index||field.depth!=1
+                        ||field.pointer_offsets[0]!=0x148||field.offset||field.kind!=Kind::utf16||!field.expected_class)
+                        throw std::runtime_error("non-enemy HP filter lacks typed same-object ID");
+                }
+            }
+            if(identities!=1||ids!=1)throw std::runtime_error("non-enemy HP filter identity/ID is not unique");
         }
     }
     result.terminal_destroy=source.value("name",std::string())=="BattleController.Destroy";
