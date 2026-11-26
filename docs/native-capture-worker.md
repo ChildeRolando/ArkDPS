@@ -319,3 +319,44 @@ replay lease, kind and graph object, and source checks it using
 fields retain the shared JS canonical clock/state/phase/class interpretation.
 Failure-only native field index maps back to the fixed role/current checkpoint;
 no addresses or mutable facts are added to diagnostics. Existing graph raw-batch paths keep their prior contracts.
+
+
+### HP raw primitive observations
+
+Each actual HP capture field may declare
+`observation:{name:field.name,values:[{kind,offset},...]}`. Kinds are u8, u32,
+u64, signed i64 and exact UTF16. The compiled hook validates every projection
+inside its original field and derives the per-phase program after role interning.
+There is no separately registered read plan, tier registry or second SDK layout.
+
+`__arkdpsOwnedHpObservation(contract,receiver)` acquires one flat immutable
+primitive packet through the pinned native provider. The native binding uses
+this record's compiled hook, original arg0, phase, checkpoint and captured mode;
+the contract's installation mode is not a new-record identity. The array header
+is version/count/phase/checkpoint/mode, followed by each descriptor's status and
+raw values. Missing values are undefined, never zero. UTF16 is mechanically
+encoded unit-by-unit as CESU8 into the pinned QuickJS string constructor; empty,
+NUL, non-ASCII, isolated surrogates and pairs retain their original code units.
+
+The exact same OwnedReplayView reader supplies graph and HP observations. Body
+reads stay auto and can use independently successful overlapping evidence even
+when a nominal primary field is absent or failed; failed prefixes lend no facts.
+Clocks require the original unique point and expected field ID. The separate
+trap eight-byte read remains a body-auto observation at its original branch.
+
+HP prefetch records every read outcome locally, including structural outcomes;
+it does not commit errors from unused facts. This deliberately differs from the
+already explicit whole-graph NativeCheck operation. Only actual IO getter demand
+calls ConsumeHpFailure(index), which selects the saved native status from the
+same current lease and independently poisons structural errors. JS cannot supply
+or downgrade the error code. Existing malformed view initialization still rejects
+immediately. A count-zero branch never demands attribute words. Existing native
+missing-root attributes remain truthful unknown and follow the canonical catch;
+failed copied links cannot become a normal null witness.
+
+The IO object has a private state and shared prototype methods, not per-edge
+method closures or a replay-to-IO reference cycle. All values and metadata are
+lease-bound; receiver values are rechecked, not inferred from object identity.
+The source owns Q32 conversion, clock/range/UID checks, XOR, scope and eligibility,
+HP state transitions and statistics. Ordinary pointer IO uses that same source
+state reducer. No raw edge, parent topology, first heal, epoch or ACK is skipped.

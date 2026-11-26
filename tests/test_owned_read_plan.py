@@ -15,7 +15,11 @@ def test_graph_program_js_provider_contract():
     assert 'PASS owned graph batch facade:' in result.stdout
 
 
-def test_owned_graph_program_native_boundaries(tmp_path):
+@pytest.mark.parametrize(('fixture','marker'),[
+    ('owned_read_plan_test.cpp','PASS owned graph programs:'),
+    ('owned_hp_observation_test.cpp','PASS_RAW_HP_OBSERVATION'),
+])
+def test_owned_graph_program_native_boundaries(tmp_path,fixture,marker):
     compiler=shutil.which('g++');configured=os.environ.get('ARKDPS_NATIVE_QJS_STAGE')
     if compiler is None or not configured:
         pytest.skip('set ARKDPS_NATIVE_QJS_STAGE to verified existing QuickJS cache; no download')
@@ -28,9 +32,16 @@ def test_owned_graph_program_native_boundaries(tmp_path):
     binary=tmp_path/'owned-read-plan.exe'
     built=subprocess.run([compiler,'-std=c++17','-static','-O2','-pthread','-Wall','-Wextra','-Werror',
         '-I',str(ROOT/'native_pc/native_event_runtime'),'-isystem',str(headers),'-isystem',str(stage),
-        str(ROOT/'tests/owned_read_plan_test.cpp'),str(ROOT/'native_pc/native_event_runtime/native_capture.cpp'),*[str(p) for p in objects],'-o',str(binary)],
+        str(ROOT/'tests'/fixture),str(ROOT/'native_pc/native_event_runtime/native_capture.cpp'),*[str(p) for p in objects],'-o',str(binary)],
         capture_output=True,text=True,timeout=60)
     assert built.returncode==0,built.stdout+built.stderr
     run=subprocess.run([str(binary)],capture_output=True,text=True,timeout=10)
     assert run.returncode==0,(run.returncode,run.stdout,run.stderr)
-    assert 'PASS owned graph programs:' in run.stdout
+    assert marker in run.stdout
+
+
+def test_hp_observation_js_provider_contract():
+    result=subprocess.run(['node',str(ROOT/'tests/native_pc_hp_observation_fixture.js')],cwd=ROOT,
+                          capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert 'PASS_RAW_HP_JS' in result.stdout

@@ -30,6 +30,9 @@ struct OwnedReadField {
 };
 struct OwnedReadProgram {unsigned tiers=0;std::vector<OwnedReadField> fields;};
 
+struct ObservationValue {std::uint16_t offset=0;std::uint8_t kind=0;};
+struct ObservationSpec {std::uint16_t source_index=0;std::string name;std::vector<ObservationValue> values;};
+struct ObservationField {OwnedReadField raw;std::uint16_t presence_id=0;std::string name;std::vector<ObservationValue> values;};
 struct SavedEntryRoot {
     std::uint8_t slot=0, index=0;
     Root root=Root::arg;
@@ -42,6 +45,9 @@ struct CompiledPlan {
     std::array<std::uintptr_t, max_roots> globals{};
     std::uint16_t globals_valid = 0;
     std::vector<std::string> roles;
+    std::vector<ObservationSpec> observation_specs;
+    std::array<std::vector<ObservationField>,2> hp_observations;
+    bool hp_observations_ready=false;std::uintptr_t hook_address=0;
     // Initialized once; callback dispatch never reads the mutable role registry.
     std::array<std::uint8_t,max_fields> field_stage{};
     std::array<SavedEntryRoot, max_roots> entry_roots{};
@@ -91,7 +97,7 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         || source.value("abi", "")!="win64-gp"
         || plan_address(source.at("address"))!=hook_address)
         throw std::runtime_error("native async capture plan is absent, incomplete or unbound");
-    CompiledPlan result;
+    CompiledPlan result;result.hook_address=hook_address;
     result.plan->arg_count=plan_uint(source.at("arg_count"), 16);
     result.plan->arg_mask=plan_uint(source.at("arg_mask"), 65535);
     result.plan->max_bytes=plan_uint(source.at("max_bytes"), max_bytes);
@@ -227,6 +233,25 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         field.max_count=plan_uint(value.value("max_count", nlohmann::json(0)), 65535);
         field.element_pointer_offset=plan_uint(value.value("element_pointer_offset", nlohmann::json(0)), 65535);
         field.projection_root=plan_uint(value.value("projection_root", nlohmann::json(0)),max_projection_nodes-1);
+        if(value.contains("observation")) {
+            const auto& descriptor=value.at("observation");
+            if(!descriptor.is_object()||descriptor.size()!=2||!descriptor.at("values").is_array()
+                ||descriptor.at("values").empty()||descriptor.at("values").size()>4)
+                throw std::runtime_error("invalid HP observation descriptor");
+            ObservationSpec spec;spec.source_index=result.plan->field_count-1;spec.name=descriptor.at("name").get<std::string>();
+            if(spec.name.empty()||spec.name.size()>96||spec.name!=value.at("name").get<std::string>())throw std::runtime_error("unbound HP observation name");
+            for(const auto& codec:descriptor.at("values")) {
+                if(!codec.is_object()||codec.size()!=2)throw std::runtime_error("invalid HP observation codec");
+                ObservationValue output;output.offset=plan_uint(codec.at("offset"),128);const auto kind=codec.at("kind").get<std::string>();
+                output.kind=kind=="u8"?0:kind=="u32"?1:kind=="u64"?2:kind=="i64"?3:kind=="utf16"?4:255;
+                const unsigned bytes=output.kind==0?1:output.kind==1?4:8;
+                if(output.kind==255||(output.kind==4?(field.kind!=Kind::utf16||output.offset||descriptor.at("values").size()!=1)
+                    :(field.kind!=Kind::bytes||output.offset>field.bytes||bytes>field.bytes-output.offset)))
+                    throw std::runtime_error("HP observation codec exceeds original field");
+                spec.values.push_back(output);
+            }
+            result.observation_specs.push_back(std::move(spec));
+        }
         if (value.contains("stop_utf16_literal")) {
             if (value.at("stop_utf16_literal")!="dynamic")
                 throw std::runtime_error("unsupported capture UTF16 stop literal");

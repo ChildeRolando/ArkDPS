@@ -690,6 +690,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
         bytes+field_start,header.field_count,payload,header.byte_count,
         runtime.configurations.roles,header.ticket,header.error,header.capture_concurrent);
     arkdps::owned_js::Lease view_lease;
+    arkdps::owned_js::bind_hp_observation(&hook->capture_plan,header.phase,header.args[0],header.checkpoint,header.mode_epoch);
     arkdps::owned_js::bind_graphs(runtime.configurations.find(header.configuration_id),header.scope_revision,header.publication_revision,header.mode_epoch,header.checkpoint);
     if (view_error!=Error::ok) {JS_FreeValue(c,packed_bytes);throw std::runtime_error("native owned view rejected structural capture");}
     runtime.replay_header=header; runtime.replay_active=true;

@@ -44,6 +44,28 @@ public:
             compiled.field_stage[i]=role=="clock_open" ? 1 : role=="clock_close" ? 2 : 0;
             field.role=intern_role(role);
         }
+        if(compiled.hp_profile&&!compiled.observation_specs.empty()) {
+            unsigned fields=0;for(unsigned i=0;i<compiled.plan->field_count;++i)fields+=compiled.plan->fields[i].phase!=Phase::checkpoint;
+            if(fields!=compiled.observation_specs.size())throw std::runtime_error("partial HP observation metadata");
+            for(const auto& spec:compiled.observation_specs) {
+                const auto& field=compiled.plan->fields[spec.source_index];
+                if(field.phase==Phase::checkpoint||(field.kind!=Kind::bytes&&field.kind!=Kind::utf16)
+                    ||(field.kind==Kind::bytes&&(!field.bytes||field.bytes>128)))throw std::runtime_error("unsupported HP observation field");
+                ObservationField output;output.presence_id=field.id;output.name=spec.name;output.values=spec.values;
+                auto& raw=output.raw;raw.role_id=field.role;raw.current_checkpoint=true;
+                raw.selector=compiled.field_stage[spec.source_index]? -2:-1;raw.expected_field_id=raw.selector==-2?field.id:0;
+                if(field.root==Root::global_slot&&(compiled.globals_valid&(1u<<field.root_index))){raw.absolute_root=true;raw.absolute=compiled.globals[field.root_index];}
+                else if(field.root==Root::absolute){raw.absolute_root=true;raw.absolute=field.absolute_address;}
+                else if((field.root!=Root::arg&&field.root!=Root::entry_ref)||field.root_index)throw std::runtime_error("HP observation root is not the current receiver");
+                raw.path=field.pointer_offsets;raw.depth=field.depth;raw.offset=field.offset;raw.bytes=field.bytes;
+                raw.kind=field.kind==Kind::utf16?1:0;raw.max_units=field.max_units;
+                auto& edge=compiled.hp_observations[field.phase==Phase::entry?0:1];
+                for(const auto& existing:edge)if(existing.name==output.name)throw std::runtime_error("duplicate HP observation name");
+                if(edge.size()>=16)throw std::runtime_error("HP observation field budget exceeded");
+                edge.push_back(std::move(output));
+            }
+            compiled.hp_observations_ready=true;
+        }
     }
     const CaptureConfiguration* pin(std::uint64_t epoch) const noexcept {
         return epoch<capture_mode_slots ? current_[epoch].load(std::memory_order_acquire) : nullptr;

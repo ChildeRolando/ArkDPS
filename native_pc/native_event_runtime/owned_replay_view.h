@@ -108,6 +108,12 @@ public:
         }
         return {Error::ok, count, 0, Error::missing_plan_field};
     }
+    bool field_present(std::uint16_t role,std::uint32_t checkpoint,std::uint16_t id) const noexcept {
+        if(failure_!=Error::ok)return false;
+        const auto* point=lookup_point(role,checkpoint);if(!point)return false;
+        for(std::size_t i=point->field_begin;i<point->field_end;++i)if(field_at(field_order_[i]).id==id)return true;
+        return false;
+    }
     ReadResult read(std::uint16_t role, std::uint32_t checkpoint, std::optional<std::uint16_t> field_id,
                     std::uintptr_t address, std::size_t size) const noexcept {
         if (failure_ != Error::ok) return {failure_, nullptr};

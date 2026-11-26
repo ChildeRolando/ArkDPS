@@ -31,6 +31,11 @@ struct Binding {
     std::uint64_t scope_revision=0,publication_revision=0,graph_mode=0;
     std::uint32_t graph_checkpoint=0;
     std::uint32_t graph_failure=UINT32_MAX;
+    const capture::CompiledPlan* hp_plan=nullptr;
+    capture::Phase hp_phase=capture::Phase::checkpoint;
+    std::uintptr_t hp_root=0;std::uint32_t hp_checkpoint=0;
+    std::uint64_t hp_mode=0;bool hp_issued=false;
+    std::array<std::uint16_t,16> hp_status{};
 };
 inline Binding& binding() { static auto* value = new Binding; return *value; }
 inline void error(capture::Error value) noexcept {
@@ -43,7 +48,7 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
                            const std::vector<std::string>& roles,std::uint64_t ticket,
                            capture::Error record_error,bool concurrent=false) noexcept {
     auto& owner=binding();owner.roles=&roles;owner.ticket=ticket;owner.concurrent=concurrent;
-    owner.js_exception=false;owner.configuration=nullptr;
+    owner.js_exception=false;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;
     owner.error=owner.view.initialize(segments,segment_count,fields,field_count,payload,payload_bytes,
                                      static_cast<std::uint16_t>(roles.size()),record_error);
     owner.active=owner.error==capture::Error::ok;
@@ -51,7 +56,7 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
     return owner.error;
 }
 inline void end() noexcept {
-    auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.configuration=nullptr;owner.view.reset();
+    auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;owner.view.reset();
 }
 struct Lease {
     Lease()=default;Lease(const Lease&)=delete;Lease& operator=(const Lease&)=delete;
@@ -151,6 +156,46 @@ inline JSValue scalar(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     default:{float v;std::memcpy(&v,result.data,4);return allocated(JS_NewFloat64(c,v));}
     }
 }
+// Read the exact current owned point without committing its error. Callers
+// decide when a demanded fact commits failure; no live reads are possible.
+inline capture::Error read_owned_field(const capture::OwnedReadField& field,std::uintptr_t base,
+                                      std::uint32_t checkpoint,std::byte* output,std::size_t& size) noexcept {
+    auto& owner=binding();size=0;
+    auto status=capture::Error::ok;const auto role_id=field.role_id?field.role_id:owner.role_index.find(*owner.roles,field.role);
+    const auto cp=field.current_checkpoint?checkpoint:field.checkpoint;
+    std::optional<std::uint16_t> selected;
+    if(!role_id)status=capture::Error::missing_plan_field;
+    else if(field.selector==-2){const auto point=owner.view.point_info(role_id,cp);
+        if(point.error!=capture::Error::ok)status=point.error;
+        else if(point.field_count!=1)status=point.field_count?capture::Error::ambiguous_read:capture::Error::missing_plan_field;
+        else if(point.single_field_error!=capture::Error::ok)status=point.single_field_error;
+        else if(owner.concurrent)status=capture::Error::changed_guard;
+        else if(field.expected_field_id&&field.expected_field_id!=point.single_field_id)status=capture::Error::missing_plan_field;
+        else selected=point.single_field_id;
+    }else if(field.selector>=0)selected=static_cast<std::uint16_t>(field.selector);
+    const auto read=[&](std::uintptr_t address,std::size_t bytes,void* target) noexcept {
+        if(status!=capture::Error::ok)return;
+        const auto value=owner.view.read(role_id,cp,selected,address,bytes);status=value.error;
+        if(status==capture::Error::ok&&owner.concurrent)status=capture::Error::changed_guard;
+        if(status==capture::Error::ok&&bytes)std::memcpy(target,value.data,bytes);
+    };
+    const auto add=[&](std::uintptr_t address,std::uint32_t offset) noexcept {
+        if(status!=capture::Error::ok)return address;
+        if(offset>std::numeric_limits<std::uintptr_t>::max()-address){status=capture::Error::bounds;return std::uintptr_t{0};}
+        return address+offset;
+    };
+    auto address=field.absolute_root?field.absolute:base;
+    for(unsigned n=0;n<field.depth&&status==capture::Error::ok;++n){const auto link=add(address,field.path[n]);read(link,8,&address);}
+    address=add(address,field.offset);
+    if(field.kind==0){read(address,field.bytes,output);if(status==capture::Error::ok)size=field.bytes;}
+    else {
+        std::int32_t units=0;read(address,8,output);
+        read(add(address,16),4,&units);
+        if(status==capture::Error::ok&&(units<0||static_cast<unsigned>(units)>field.max_units))status=capture::Error::invalid_length;
+        if(status==capture::Error::ok){std::memcpy(output+8,&units,4);read(add(address,20),units*2,output+12);if(status==capture::Error::ok)size=12+units*2;}
+    }
+    return status;
+}
 inline JSValue execute_read_batch(JSContext* c,const ReadProgram& plan,unsigned mask,std::uintptr_t base,std::uint32_t checkpoint,bool check=false) {
     auto& owner=binding();unsigned slots=plan.fields.size();
     if(check){slots=0;for(const auto& field:plan.fields)slots+=field.project;}
@@ -163,39 +208,7 @@ inline JSValue execute_read_batch(JSContext* c,const ReadProgram& plan,unsigned 
         const auto& field=plan.fields[i];const bool emit=!check||field.project;const auto entry=16+(check?projected:i)*16;const auto start=cursor;
         if(emit){++projected;put(entry,std::uint16_t{0xffff});put(entry+2,static_cast<std::uint16_t>(field.kind));put(entry+4,std::uint32_t{0});put(entry+8,std::uint32_t{0});put(entry+12,std::uint32_t{0});}
         if(!(mask&field.tier))continue;
-        auto status=capture::Error::ok;const auto role_id=field.role_id?field.role_id:owner.role_index.find(*owner.roles,field.role);
-        const auto cp=field.current_checkpoint?checkpoint:field.checkpoint;
-        std::optional<std::uint16_t> selected;
-        if(!role_id)status=capture::Error::missing_plan_field;
-        else if(field.selector==-2){const auto point=owner.view.point_info(role_id,cp);
-            if(point.error!=capture::Error::ok)status=point.error;
-            else if(point.field_count!=1)status=point.field_count?capture::Error::ambiguous_read:capture::Error::missing_plan_field;
-            else if(point.single_field_error!=capture::Error::ok)status=point.single_field_error;
-            else if(owner.concurrent)status=capture::Error::changed_guard;
-            else if(field.expected_field_id&&field.expected_field_id!=point.single_field_id)status=capture::Error::missing_plan_field;
-            else selected=point.single_field_id;
-        }else if(field.selector>=0)selected=static_cast<std::uint16_t>(field.selector);
-        const auto read=[&](std::uintptr_t address,std::size_t bytes,void* target) noexcept {
-            if(status!=capture::Error::ok)return;
-            const auto value=owner.view.read(role_id,cp,selected,address,bytes);status=value.error;
-            if(status==capture::Error::ok&&owner.concurrent)status=capture::Error::changed_guard;
-            if(status==capture::Error::ok&&bytes)std::memcpy(target,value.data,bytes);
-        };
-        const auto add=[&](std::uintptr_t address,std::uint32_t offset) noexcept {
-            if(status!=capture::Error::ok)return address;
-            if(offset>std::numeric_limits<std::uintptr_t>::max()-address){status=capture::Error::bounds;return std::uintptr_t{0};}
-            return address+offset;
-        };
-        auto address=field.absolute_root?field.absolute:base;
-        for(unsigned n=0;n<field.depth&&status==capture::Error::ok;++n){const auto link=add(address,field.path[n]);read(link,8,&address);}
-        address=add(address,field.offset);
-        if(field.kind==0){read(address,field.bytes,output.data()+cursor);if(status==capture::Error::ok)cursor+=field.bytes;}
-        else {
-            std::int32_t units=0;read(address,8,output.data()+cursor);
-            read(add(address,16),4,&units);
-            if(status==capture::Error::ok&&(units<0||static_cast<unsigned>(units)>field.max_units))status=capture::Error::invalid_length;
-            if(status==capture::Error::ok){put(cursor+8,units);read(add(address,20),units*2,output.data()+cursor+12);if(status==capture::Error::ok)cursor+=12+units*2;}
-        }
+        std::size_t bytes=0;auto status=read_owned_field(field,base,checkpoint,output.data()+cursor,bytes);cursor+=bytes;
         if(check&&status==capture::Error::ok) {
             for(const auto& word:field.words){
                 const auto* data=output.data()+start+word.offset;bool equal=false;
@@ -219,6 +232,76 @@ inline JSValue execute_read_batch(JSContext* c,const ReadProgram& plan,unsigned 
     if(first_error!=capture::Error::ok){owner.graph_failure=first_index;error(first_error);return JS_UNDEFINED;}
     put(12,static_cast<std::uint32_t>(cursor-head));error(capture::Error::ok);
     return allocated(JS_NewArrayBufferCopy(c,reinterpret_cast<const std::uint8_t*>(output.data()),cursor));
+}
+inline void bind_hp_observation(const capture::CompiledPlan* plan,capture::Phase phase,std::uintptr_t root,
+                                std::uint32_t checkpoint,std::uint64_t mode=0) noexcept {
+    auto& owner=binding();owner.hp_plan=plan;owner.hp_phase=phase;owner.hp_root=root;
+    owner.hp_checkpoint=checkpoint;owner.hp_mode=mode;owner.hp_issued=false;
+}
+// QuickJS's pinned UTF8 decoder accepts surrogate code points and preserves
+// them as individual 16-bit units. Encode each UTF16 unit as CESU8, never
+// normalize or pair/rewrite it; embedded NUL uses the explicit byte length.
+inline JSValue observation_string(JSContext* c,const std::byte* bytes) {
+    std::int32_t count=0;std::memcpy(&count,bytes+8,4);
+    if(count<0||static_cast<unsigned>(count)>capture::max_string_units){error(capture::Error::invalid_plan);return JS_UNDEFINED;}
+    std::array<char,capture::max_string_units*3> encoded{};std::size_t cursor=0;
+    for(int i=0;i<count;++i){std::uint16_t unit;std::memcpy(&unit,bytes+12+i*2,2);
+        if(unit<128)encoded[cursor++]=static_cast<char>(unit);
+        else if(unit<2048){encoded[cursor++]=static_cast<char>(0xc0|(unit>>6));encoded[cursor++]=static_cast<char>(0x80|(unit&63));}
+        else {encoded[cursor++]=static_cast<char>(0xe0|(unit>>12));encoded[cursor++]=static_cast<char>(0x80|((unit>>6)&63));encoded[cursor++]=static_cast<char>(0x80|(unit&63));}
+    }
+    return allocated(JS_NewStringLen(c,encoded.data(),cursor));
+}
+inline JSValue hp_observation(JSContext* c,JSValueConst,int count,JSValueConst* args) {
+    auto& owner=binding();owner.js_exception=false;std::uintptr_t hook=0,root=0;
+    if(count!=2||!owner.active||!owner.hp_plan||!owner.hp_plan->hp_observations_ready
+        ||!address(c,args[0],hook)||!address(c,args[1],root)||hook!=owner.hp_plan->hook_address||root!=owner.hp_root||!root
+        ||(owner.hp_phase!=capture::Phase::entry&&owner.hp_phase!=capture::Phase::leave)) {
+        if(!owner.js_exception)error(capture::Error::invalid_plan);
+        return unavailable();
+    }
+    const auto& fields=owner.hp_plan->hp_observations[owner.hp_phase==capture::Phase::entry?0:1];
+    JSValue result=JS_NewArray(c);if(JS_IsException(result)){conversion_exception();return result;}
+    unsigned cursor=0;bool failed=false;
+    const auto put=[&](JSValue value){if(JS_IsException(value)){failed=true;return;}
+        if(JS_DefinePropertyValueUint32(c,result,cursor++,value,JS_PROP_ENUMERABLE)<0)failed=true;};
+    put(JS_NewUint32(c,1));put(JS_NewUint32(c,fields.size()));put(JS_NewUint32(c,owner.hp_phase==capture::Phase::entry?0:1));
+    put(JS_NewUint32(c,owner.hp_checkpoint));put(JS_NewFloat64(c,static_cast<double>(owner.hp_mode)));
+    for(unsigned i=0;i<fields.size()&&!failed;++i){
+        const auto& field=fields[i];std::array<std::byte,12+capture::max_string_units*2> bytes;std::size_t size=0;
+        const bool present=owner.view.field_present(field.raw.role_id,owner.hp_checkpoint,field.presence_id);
+        const auto observed=read_owned_field(field.raw,root,owner.hp_checkpoint,bytes.data(),size);
+        // Auto body reads may be owned by another independent successful field
+        // even when the nominal primary field was not captured at this tier.
+        const auto status=!present&&observed==capture::Error::missing_plan_field?65535u:static_cast<unsigned>(observed);
+        owner.hp_status[i]=status;put(JS_NewUint32(c,status));
+        for(const auto& codec:field.values){
+            if(failed)break;
+            if(status){put(JS_UNDEFINED);continue;}
+            const auto* data=bytes.data()+codec.offset;
+            switch(codec.kind){
+            case 0:{std::uint8_t value;std::memcpy(&value,data,1);put(JS_NewUint32(c,value));break;}
+            case 1:{std::uint32_t value;std::memcpy(&value,data,4);put(JS_NewUint32(c,value));break;}
+            case 2:{std::uint64_t value;std::memcpy(&value,data,8);put(JS_NewBigUint64(c,value));break;}
+            case 3:{std::int64_t value;std::memcpy(&value,data,8);put(JS_NewBigInt64(c,value));break;}
+            default:put(observation_string(c,bytes.data()));break;
+            }
+        }
+    }
+    if(failed||JS_DefinePropertyValueStr(c,result,"length",JS_NewUint32(c,cursor),0)<0||JS_PreventExtensions(c,result)<0){
+        JS_FreeValue(c,result);conversion_exception();return JS_EXCEPTION;
+    }
+    owner.hp_issued=true;error(capture::Error::ok);return result;
+}
+inline JSValue consume_hp_failure(JSContext* c,JSValueConst,int count,JSValueConst* args) {
+    auto& owner=binding();owner.js_exception=false;double index=0;
+    if(count!=1||!owner.active||!owner.hp_plan||!owner.hp_issued
+        ||(owner.hp_phase!=capture::Phase::entry&&owner.hp_phase!=capture::Phase::leave)) {error(capture::Error::invalid_plan);return JS_UNDEFINED;}
+    const auto& fields=owner.hp_plan->hp_observations[owner.hp_phase==capture::Phase::entry?0:1];
+    if(fields.empty()||!number(c,args[0],index,0,fields.size()-1)){if(!owner.js_exception)error(capture::Error::invalid_plan);return unavailable();}
+    const auto status=owner.hp_status[static_cast<unsigned>(index)];
+    error(status==65535?capture::Error::missing_plan_field:status?static_cast<capture::Error>(status):capture::Error::invalid_plan);
+    return JS_UNDEFINED;
 }
 // Exact record configuration is selected by engine, never by a JS supplied id.
 inline void bind_graphs(const capture::CaptureConfiguration* config,std::uint64_t scope,
@@ -283,6 +366,7 @@ inline void install(JSContext* c,void(*poison)() noexcept) {
     const Entry entries[]{
         {"__nativeOwnedRead",bytes,5},{"__nativeOwnedScalar",scalar,5},{"__nativeOwnedStatus",status,0},
         {"__nativeOwnedPoint",point,2},{"__nativeOwnedLease",lease,1},
+        {"__nativeOwnedHpObservation",hp_observation,2},{"__nativeOwnedConsumeHpFailure",consume_hp_failure,1},
         {"__nativeOwnedGraphReadBatch",graph_read_batch,4},{"__nativeOwnedGraphCheck",graph_check,3},{"__nativeOwnedGraphFailure",graph_failure,0}};
     for(const auto& entry:entries)JS_SetPropertyStr(c,global,entry.name,JS_NewCFunction(c,entry.function,entry.name,entry.arguments));
     JS_FreeValue(c,global);
