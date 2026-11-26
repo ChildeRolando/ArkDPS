@@ -61,7 +61,7 @@ globalThis.__arkdpsPublicationServed'''.replace('DIRECT_FAULT',json.dumps(fault)
     return text
 
 
-def run(binary,source_root,case):
+def run(binary,source_root,case,require_batch=False):
     fault=case if case in ('root','phase','constructor') else False
     with TemporaryDirectory(prefix='arkdps-direct-hp-') as directory:
         directory=Path(directory);f=Fixture(directory/'child',binary);pipe=None
@@ -107,6 +107,13 @@ def run(binary,source_root,case):
                 assert result['argsProxies']==2,result # parent E plus nested HP E
                 raw_count=4+len(calls)*2
             counters=result['native_async_capture']
+            if require_batch:
+                assert counters['batch_calls']>0 and counters['batch_issued']>0,counters
+                assert counters['batch_issued']==counters['batch_finalized'],counters
+                assert 1<=counters['maximum_batch_edges']<=32,counters
+                assert counters['batch_issued']+counters['single_replayed']==raw_count,counters
+                assert counters['single_replayed']>0,counters # publication is a hard barrier
+                assert counters['batch_fallback_reasons']['cold_or_publication']>0,counters
             assert counters['reserved_ticket']==counters['processed_ticket']==counters['closed_ticket']==counters['published_ticket']==raw_count,result
             assert int(result['native_publication']['closed_ticket'])==raw_count,result
             assert counters['delivered_event_sequence']==0,result
@@ -118,13 +125,13 @@ def run(binary,source_root,case):
 
 
 if __name__=='__main__':
-    parser=ArgumentParser(description=__doc__);parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--source-root',type=Path,default=ROOT);parser.add_argument('--receipt',type=Path,required=True);a=parser.parse_args();binary=a.binary.resolve()
+    parser=ArgumentParser(description=__doc__);parser.add_argument('--binary',type=Path,required=True);parser.add_argument('--source-root',type=Path,default=ROOT);parser.add_argument('--receipt',type=Path,required=True);parser.add_argument('--require-batch',action='store_true');a=parser.parse_args();binary=a.binary.resolve()
     receipt=dict(scope=__doc__,binary_sha256=sha256(binary.read_bytes()).hexdigest(),test_sha256=sha256(Path(__file__).read_bytes()).hexdigest(),cases=[])
     receipt['source_root_head']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=a.source_root.resolve(),text=True).strip()
     build=binary.with_suffix('.build.json')
     if build.is_file():receipt.update(build_metadata_sha256=sha256(build.read_bytes()).hexdigest(),build_metadata=json.loads(build.read_text(encoding='utf-8')))
     try:
-        for case in ('normal','parent','root','phase','constructor'):receipt['cases'].append(run(binary,a.source_root.resolve(),case))
+        for case in ('normal','parent','root','phase','constructor'):receipt['cases'].append(run(binary,a.source_root.resolve(),case,a.require_batch))
         receipt['result']='PASS'
     except BaseException as error:
         receipt.update(result='FAIL',error_type=type(error).__name__,error=str(error));raise
