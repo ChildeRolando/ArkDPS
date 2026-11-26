@@ -1,5 +1,6 @@
 #pragma once
 #include "owned_replay_view.h"
+#include "owned_role_index.h"
 #include "quickjs.h"
 #include <cmath>
 #include <charconv>
@@ -13,6 +14,7 @@ namespace arkdps::owned_js {
 // consumer buffer only for the current replay lease, never game memory.
 struct Binding {
     capture::OwnedReplayView view;
+    capture::OwnedRoleIndex role_index;
     const std::vector<std::string>* roles = nullptr;
     std::uint64_t ticket = 0;
     capture::Error error = capture::Error::missing_plan_field;
@@ -63,10 +65,10 @@ inline std::uint16_t role(JSContext* c,JSValueConst value) noexcept {
     if (!owner.active || !owner.roles || !JS_IsString(value)) {error(capture::Error::missing_plan_field);return 0;}
     std::size_t length=0;const auto* name=JS_ToCStringLen(c,&length,value);
     if (!name) {conversion_exception();return 0;}
-    std::uint16_t result=0;
-    const std::string_view wanted(name,length);
-    for (std::size_t i=0;i<owner.roles->size();++i)
-        if (std::string_view((*owner.roles)[i])==wanted) {result=static_cast<std::uint16_t>(i+1);break;}
+    if (!owner.role_index.ensure(*owner.roles)) {
+        JS_FreeCString(c,name);error(capture::Error::invalid_plan);return 0;
+    }
+    const auto result=owner.role_index.find(*owner.roles,std::string_view(name,length));
     JS_FreeCString(c,name);
     if (!result) error(capture::Error::missing_plan_field);
     return result;
