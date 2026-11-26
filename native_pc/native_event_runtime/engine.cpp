@@ -982,6 +982,7 @@ JSValue js_batch_advance(JSContext* c,JSValueConst,int count,JSValueConst* args)
         }
         ++batch.issued;++runtime.batch_issued;runtime.maximum_batch_edges=(std::max)(runtime.maximum_batch_edges,batch.issued);
         auto packet=JS_NewArray(c);
+        if(JS_IsException(packet))return packet;
         for(unsigned i=0;i<batch.pending->arguments.size();++i)
             if(JS_DefinePropertyValueUint32(c,packet,i,JS_DupValue(c,batch.pending->arguments[i]),JS_PROP_ENUMERABLE)<0){JS_FreeValue(c,packet);return JS_EXCEPTION;}
         return packet;
@@ -991,10 +992,11 @@ unsigned replay_bounded_batch(std::size_t first_size,std::chrono::steady_clock::
     auto& runtime=state();auto* c=runtime.context;auto& batch=replay_batch_state();
     if(batch.active)throw std::runtime_error("nested bounded replay batch");
     ++runtime.batch_calls;batch.active=true;batch.issued=0;batch.finalized=0;batch.limit=(std::min)(32u,remaining);batch.first_size=first_size;batch.deadline=deadline;batch.native_failure=nullptr;
-    batch.controller=JS_NewObject(c);JS_PreventExtensions(c,batch.controller);
-    std::array<std::uint8_t,176> zero{};batch.header=JS_NewArrayBufferCopy(c,zero.data(),zero.size());
+    batch.controller=JS_NewObject(c);
+    const bool allocation_failed=JS_IsException(batch.controller)||JS_PreventExtensions(c,batch.controller)<0;
+    std::array<std::uint8_t,176> zero{};batch.header=allocation_failed?JS_UNDEFINED:JS_NewArrayBufferCopy(c,zero.data(),zero.size());
     std::array<JSValue,4> args{{runtime.batch_advance,batch.controller,batch.header,runtime.replay_dispatch}};
-    auto result=JS_IsException(batch.controller)||JS_IsException(batch.header)?JS_EXCEPTION:JS_Call(c,runtime.replay_batch,JS_UNDEFINED,args.size(),args.data());
+    auto result=allocation_failed||JS_IsException(batch.header)?JS_EXCEPTION:JS_Call(c,runtime.replay_batch,JS_UNDEFINED,args.size(),args.data());
     batch.active=false;
     const bool incomplete=batch.pending||batch.first_size||!batch.issued||batch.issued!=batch.finalized;
     std::uint32_t returned=0;bool valid_count=false;
