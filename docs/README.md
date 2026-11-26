@@ -12,6 +12,7 @@
 
 - [手动对局性能计时](performance-timings.md) — 低开销开关、原生/宿主/WPF 阶段、日志解释与 rc.43 私有计时包验收。
 - [PC 原生现场采集与单消费者](native-capture-worker.md) — 现场快照、队列、共享归约、发布/读取/ACK 及冷启动边界。
+- [原生采集性能专家咨询案](native-capture-expert-consultation-2026-11-27.md) — 固定 GitHub 源码与测量回执、消费吞吐瓶颈、正确性约束及待专家决策的问题。
 
 - [官服 PC Frida 生命周期与恢复约束](native-pc-frida-state-machine.md) — 状态转换、资源所有权、请求世代与覆盖验证。
 
