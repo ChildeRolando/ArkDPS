@@ -403,7 +403,8 @@ function __arkdpsOwnedGraphCheck(kind,graph){
  let geometry=__arkdpsGraphChecks.get(graph);
  if(!geometry){
   const fields=kind==='scope'?graph.fields:graph.chunks?.flatMap(part=>part.fields);
-  if(!Array.isArray(fields)||!fields.length)__arkdpsReplayGap('invalid owned graph comparison fields');
+  if(!Array.isArray(fields))__arkdpsReplayGap('invalid owned graph comparison fields');
+  if(!fields.length)return null; // Legal normal-stage publication has no membership guards.
   if(fields.some(f=>!f||typeof f.projection!=='boolean'||f.comparison===null||(!f.projection&&f.comparison===undefined)||
     f.root!=='absolute'||!['bytes','utf16'].includes(f.kind)||(f.kind==='bytes'?f.bytes<1||f.bytes>128:f.max_units<1||f.max_units>200)))return null;
   const projected=[],indices=[];
