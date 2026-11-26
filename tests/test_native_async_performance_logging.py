@@ -14,7 +14,7 @@ def raw_async():
         active=0, failure_code=0, captured_prefix_lag_records=2, publication_lag_records=2,
         published_event_sequence=10, delivered_event_sequence=8, read_prefix_lag_events=2,
         queue_age_available=True, queue_age_qpc_frequency=10_000_000,
-        lane_metrics=[dict(lane=0, captured_records=20, consumed_records=18,
+        lane_metrics=[dict(lane=0, captured_records=20, consumed_records=18, captured_bytes=2048, consumed_bytes=1024,
             counter_snapshot_consistent=True, resident_records_approx=2, resident_bytes_approx=1024,
             thread_id=200, thread_birth='133700000000000001', lane_generation=3,
             peak_resident_records=8, peak_resident_bytes=4096, queue_age_available=True,
@@ -46,6 +46,7 @@ def test_async_summary_is_strict_bounded_and_identity_bound():
     lane = result['lane_metrics'][0]
     assert lane['thread_birth'] == '133700000000000001' and lane['lane_generation'] == 3
     assert lane['observed_pending_age_lower_bound_qpc'] is None
+    assert lane['captured_bytes'] == 2048 and lane['consumed_bytes'] == 1024
     assert result['callback_timing']['samples'][0]['thread_birth'] == lane['thread_birth']
     assert 'secret' not in str(result)
     assert sanitize_native_async_capture(raw, native=native(), identity=(124, 99))['reason'] == 'identity_mismatch'
@@ -68,7 +69,8 @@ def test_invalid_async_top_is_unavailable_without_zero_fill(change):
 
 @pytest.mark.parametrize('change', [
     lambda r: r.update(thread_birth='9'*10000), lambda r: r.update(lane=True),
-    lambda r: r.update(captured_records=-1), lambda r: r.update(resident_records_approx=0),
+    lambda r: r.update(captured_records=-1), lambda r: r.update(captured_bytes=0),
+    lambda r: r.update(consumed_bytes=True), lambda r: r.update(resident_records_approx=0),
 ])
 def test_invalid_lane_is_explicit_unavailable_and_cannot_bind_sample(change):
     raw = raw_async(); change(raw['lane_metrics'][0]); result = clean(raw)

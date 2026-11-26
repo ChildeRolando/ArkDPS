@@ -200,7 +200,7 @@ def sanitize_native_async_capture(data, *, native=None, identity=None):
         return unavailable('invalid_lanes')
     if len(lanes) > 16:
         return unavailable('capacity_exceeded')
-    lane_numbers = ('captured_records', 'consumed_records', 'thread_id', 'lane_generation',
+    lane_numbers = ('captured_records', 'consumed_records', 'captured_bytes', 'consumed_bytes', 'thread_id', 'lane_generation',
                     'peak_resident_records', 'peak_resident_bytes', 'age_sample_count')
     nullable = ('resident_records_approx', 'resident_bytes_approx', 'last_capture_to_replay_qpc',
                 'maximum_capture_to_replay_qpc', 'observed_pending_age_lower_bound_qpc')
@@ -221,7 +221,9 @@ def sanitize_native_async_capture(data, *, native=None, identity=None):
         if valid:
             valid = (row['lane'] not in by_lane
                 and (not row['counter_snapshot_consistent'] or row['captured_records'] >= row['consumed_records']
-                     and row['resident_records_approx'] == row['captured_records'] - row['consumed_records'])
+                     and row['resident_records_approx'] == row['captured_records'] - row['consumed_records']
+                     and row['captured_bytes'] >= row['consumed_bytes']
+                     and row['resident_bytes_approx'] == row['captured_bytes'] - row['consumed_bytes'])
                 and (row['counter_snapshot_consistent'] or all(row[key] is None for key in nullable[:2]))
                 and (row['queue_age_available'] and row['age_sample_count'] > 0
                      and all(row[key] is not None for key in nullable[2:4])
