@@ -39,7 +39,8 @@ globalThis.__arkdpsPublicationServed=through=>{served=Math.max(served,through);}
 globalThis.__arkdpsOnClosedRecord=record=>{
  if(record.publication_request===lastRequest)return null;lastRequest=record.publication_request;
  return {mark:{sequence:0,epoch:entries,frame:leaves,game_time:leaves/30,active:0,active_hooks:[],
-  error:null,stopped:false,entries,leaves,owned_payload_bytes_per_edge:128},acknowledged:0,events_after:0,events_through:0,events:[],hp_context:[],
+  error:null,stopped:false,entries,leaves,owned_payload_bytes_per_edge:128,
+  native_capture_scope_mode_epoch:record.facts.scope_mode_epoch??record.facts.mode_epoch},acknowledged:0,events_after:0,events_through:0,events:[],hp_context:[],
   read_fields:{sequence:0,epoch:entries},terminal_read:null};
 };
 rpc.exports={mark(){if(CONTROL)return {entries,leaves,active:0};throw Error('legacy mark');},readEvents(){throw Error('legacy read');},
