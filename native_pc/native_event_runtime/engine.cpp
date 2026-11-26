@@ -671,7 +671,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
         header.publication_captured ? header.publication_revision : 0,header.cold_revision,
         header.hook_id,header.checkpoint,header.active,header.active_after,header.lane,header.thread_id,
         header.phase==Phase::entry ? 0u : 1u,header.closed_after ? 1u : 0u,
-        header.scope_unavailable ? 1u : 0u,header.parent_checkpoint_count}};
+        (header.scope_unavailable ? 1u : 0u)|(header.capture_concurrent ? 2u : 0u),header.parent_checkpoint_count}};
     std::copy(values.begin(),values.end(),packed.begin());
     for (unsigned i=0;i<header.parent_checkpoint_count;++i) {
         ParentCheckpoint parent;
@@ -688,7 +688,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     const auto payload=bytes+field_start+header.field_count*sizeof(FieldState);
     const auto view_error=arkdps::owned_js::begin(bytes+segment_start,header.segment_count,
         bytes+field_start,header.field_count,payload,header.byte_count,
-        runtime.configurations.roles,header.ticket,header.error);
+        runtime.configurations.roles,header.ticket,header.error,header.capture_concurrent);
     arkdps::owned_js::Lease view_lease;
     if (view_error!=Error::ok) {JS_FreeValue(c,packed_bytes);throw std::runtime_error("native owned view rejected structural capture");}
     runtime.replay_header=header; runtime.replay_active=true;
@@ -903,6 +903,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     call.configuration=runtime.configurations.pin(pinned_mode);
     callback_timer.stack_read();
     if (!capture_read(nullptr,frame->stack,&call.return_address,sizeof call.return_address)) { lanes.poison(LaneFault::invalid_stack); return hook->original; }
+    const auto activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
     call.id=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
     call.parent=lane->depth ? lane->calls[lane->depth-1].id : 0;
     auto& context=call.context;
@@ -931,7 +932,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     RecordHeader header{};
     header.ticket=call.id; header.invocation=call.id; header.parent=call.parent; header.mode_epoch=call.mode_epoch;
     header.captured_qpc=timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
-    header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
+    header.activity_begin=activity_begin;
     header.active=runtime.active.load(std::memory_order_acquire);
     header.activity=header.activity_begin; header.args=context.args; header.return_address=call.return_address; header.scope_mode_epoch=scope_mode;
     header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId(); header.thread_birth=lane->birth;
@@ -941,6 +942,9 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
                         capture_read,nullptr,lane->snapshot,header,lane,
                         header.publication_request && runtime.cold_publication_request.load(std::memory_order_acquire)==header.publication_request);
     save_entry_roots(hook->capture_plan,lane->snapshot,context);
+    header.activity=runtime.activity_generation.load(std::memory_order_acquire);
+    header.capture_concurrent=entry_capture_concurrent(header.active,header.depth,header.activity_begin,header.activity,
+        runtime.active.load(std::memory_order_acquire));
     const bool queued=lanes.publish(*lane,header);
     callback_timer.capture(lane->snapshot,header.parent_checkpoint_count,queued);
     return hook->original;
@@ -966,6 +970,7 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     auto* hook=static_cast<Hook*>(call.hook);
     callback_timer.bind(*lane,hook->timing_id);
     RecordHeader header{};
+    header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
     header.ticket=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
     header.invocation=call.id; header.parent=call.parent; header.mode_epoch=call.mode_epoch;
     header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId(); header.thread_birth=lane->birth;
@@ -983,7 +988,6 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
         header.publication_request=requested;
     }
     header.captured_qpc=timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
-    header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
     header.active=runtime.active.load(std::memory_order_acquire);
     call.context.return_value=frame->rax; call.context.return_valid=true;
     capture_scope_point(hook->capture_plan,Phase::leave,call.context,call.configuration,
@@ -992,6 +996,7 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     header.activity=runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel)+1;
     header.active_after=runtime.active.fetch_sub(1,std::memory_order_acq_rel)-1;
     header.closed_after=header.active_after==0 && header.activity==header.activity_begin+1;
+    header.capture_concurrent=leave_capture_concurrent(header.active,header.depth,header.activity_begin,header.activity,header.active_after);
     const bool queued=lanes.publish(*lane,header);
     callback_timer.capture(lane->snapshot,header.parent_checkpoint_count,queued);
     --lane->depth;
@@ -1157,7 +1162,7 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
                 {"resident_records_approx",optional(snapshot.resident_records)},
                 {"resident_bytes_approx",optional(snapshot.resident_bytes)},
                 {"thread_id",snapshot.thread_id},{"thread_birth",std::to_string(snapshot.thread_birth)},
-                {"lane_generation",snapshot.generation},{"peak_resident_records",snapshot.peak_records},{"peak_resident_bytes",snapshot.peak_bytes},
+                {"lane_generation",snapshot.generation},{"capture_uncertain_records",snapshot.uncertain_records},{"peak_resident_records",snapshot.peak_records},{"peak_resident_bytes",snapshot.peak_bytes},
                 {"queue_age_available",snapshot.age_available},{"age_sample_count",snapshot.age_samples},
                 {"last_capture_to_replay_qpc",optional(snapshot.last_age)},
                 {"maximum_capture_to_replay_qpc",optional(snapshot.maximum_age)},

@@ -45,7 +45,7 @@ struct RecordHeader {
     std::uint64_t return_value = 0, thread_birth = 0, captured_qpc = 0;
     std::uint64_t publication_request = 0, mode_epoch = 0, scope_mode_epoch = 0;
     std::uint64_t configuration_id=0, scope_revision=0, publication_revision=0, cold_revision=0;
-    bool scope_unavailable=true, publication_captured=false, projection_candidate=false;
+    bool scope_unavailable=true, publication_captured=false, projection_candidate=false, capture_concurrent=false;
     std::uintptr_t return_address = 0;
     std::array<std::uint64_t, 16> args{};
     std::uint32_t hook_id = 0, thread_id = 0, lane = 0, depth = 0;
@@ -55,6 +55,13 @@ struct RecordHeader {
     Phase phase = Phase::entry;
     Error error = Error::ok;
 };
+static_assert(sizeof(RecordHeader)==312,"capture header changed: update its version and owned consumers");
+inline bool entry_capture_concurrent(unsigned active,unsigned depth,std::uint64_t begin,std::uint64_t end,unsigned active_end) noexcept {
+    return active>depth || active_end>depth || begin!=end;
+}
+inline bool leave_capture_concurrent(unsigned active,unsigned depth,std::uint64_t begin,std::uint64_t end,unsigned active_end) noexcept {
+    return !depth || active>depth || end!=begin+1 || active_end>depth-1;
+}
 constexpr std::size_t record_capacity = invocation_depth*sizeof(ParentCheckpoint) + sizeof(RecordHeader) + max_segments*sizeof(Segment)
     + max_fields*sizeof(FieldState) + max_bytes;
 struct Lane {
@@ -76,7 +83,7 @@ struct Lane {
     std::array<std::byte, record_capacity> scratch{};
     // One producer writes this cache line; only worker reads diagnostic mirrors.
     struct alignas(64) ProducerCounts {
-        std::atomic<std::uint64_t> records{0}, bytes{0}, peak_records{0}, peak_bytes{0};
+        std::atomic<std::uint64_t> records{0}, bytes{0}, peak_records{0}, peak_bytes{0}, uncertain_records{0};
     } submitted;
     // Only worker writes this cache line; producer reads reclamation mirrors.
     struct alignas(64) ConsumerCounts {
@@ -90,7 +97,7 @@ struct LaneMetricSnapshot {
     std::uint64_t thread_birth=0;
     unsigned generation=0;
     std::uint64_t submitted=0, consumed=0, submitted_bytes=0, consumed_bytes=0;
-    std::uint64_t peak_records=0, peak_bytes=0, age_samples=0;
+    std::uint64_t peak_records=0, peak_bytes=0, age_samples=0, uncertain_records=0;
     bool consistent=false, age_available=false;
     std::optional<std::uint64_t> resident_records, resident_bytes, last_age, maximum_age, observed_pending_age;
 };
@@ -111,7 +118,8 @@ inline LaneMetricSnapshot lane_metric_snapshot(const Lane& lane, bool timing_ena
     result.consumed=lane.consumed.records.load(std::memory_order_relaxed);
     result.submitted_bytes=lane.submitted.bytes.load(std::memory_order_acquire);
     result.consumed_bytes=lane.consumed.bytes.load(std::memory_order_relaxed);
-    result.consistent=result.submitted>=result.consumed && result.submitted_bytes>=result.consumed_bytes;
+    result.uncertain_records=lane.submitted.uncertain_records.load(std::memory_order_relaxed);
+    result.consistent=result.submitted>=result.consumed && result.submitted_bytes>=result.consumed_bytes && result.uncertain_records<=result.submitted;
     if (result.consistent) {
         result.resident_records=result.submitted-result.consumed;
         result.resident_bytes=result.submitted_bytes-result.consumed_bytes;
@@ -200,6 +208,8 @@ public:
             && !(spill && spill->try_push(lane.spill_owner_tag.load(std::memory_order_relaxed),header.ticket,lane.scratch.data(),offset))) {
             unsigned zero=0; failure.compare_exchange_strong(zero,static_cast<unsigned>(LaneFault::queue_full),std::memory_order_relaxed); return false;
         }
+        if(header.capture_concurrent)lane.submitted.uncertain_records.store(
+            lane.submitted.uncertain_records.load(std::memory_order_relaxed)+1,std::memory_order_relaxed);
         const auto records=lane.submitted.records.load(std::memory_order_relaxed)+1;
         const auto bytes=lane.submitted.bytes.load(std::memory_order_relaxed)+offset;
         lane.submitted.records.store(records,std::memory_order_relaxed);
@@ -303,6 +313,7 @@ public:
         }
         if (lane.worker_thread_handle) { CloseHandle(lane.worker_thread_handle); lane.worker_thread_handle=nullptr; }
         // This slot's metrics now belong only to its next birth/generation.
+        lane.submitted.uncertain_records.store(0,std::memory_order_relaxed);
         lane.submitted.records.store(0,std::memory_order_relaxed); lane.submitted.bytes.store(0,std::memory_order_relaxed);
         lane.submitted.peak_records.store(0,std::memory_order_relaxed); lane.submitted.peak_bytes.store(0,std::memory_order_relaxed);
         lane.consumed.records.store(0,std::memory_order_relaxed); lane.consumed.bytes.store(0,std::memory_order_relaxed);
