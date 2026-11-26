@@ -2777,11 +2777,11 @@ function hpObservationIo(edge,enemy){
  const observation=probeAdapter.captureHpObservation(edge,enemy);
  return observation===null?pointerHpIo:observation;
 }
-function applyHpEntry(receiver,args,io,label,attributeChange){
+function applyHpEntry(receiver,args,io,label,attributeChange,enemyOverride=null){
  if(stopped||fatal||(attributeChange&&args[1].toInt32()!==MAX_HP_ATTRIBUTE))return;
  let enemyTarget=true;
  try{
-  const enemy=args[0],key=enemy.toString();
+  const enemy=enemyOverride??args[0],key=enemy.toString();
   if(enemy.isNull())return;
   noteModifierHpWriterAttempt(enemy);
   const existing=enemyHpWrites.get(key);
@@ -2876,6 +2876,12 @@ function installEnemyStateHooks() {
     onEnter(args){return applyHpEntry(this,args,null,label,attributeChange);},
     onLeave(){return applyHpLeave(this,null,label);}
    };
+   // Native direct dispatch only changes observation transport. Every path
+   // still applies the exact same HP state transitions and rejection order.
+   if(label==='Entity.SetHpInternal'){
+    callbacks.arkdpsDirectHpEntry=function(enemy,issuedIo){return applyHpEntry(this,null,issuedIo,label,false,enemy);};
+    callbacks.arkdpsDirectHpLeave=function(issuedIo){return applyHpLeave(this,issuedIo,label);};
+   }
    try{
     callbacks.arkdpsName='hp.'+label;
     installed.push(registerProbeHook(address,callbacks));
