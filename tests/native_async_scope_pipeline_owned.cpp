@@ -111,6 +111,7 @@ int main(){
  unsigned native_reads=0;header={};
  capture_scope_point(*nochange_plan,Phase::entry,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
  assert(lane->calls[0].hp_before_valid && lane->calls[0].hp_exact_enemy);
+ assert(native_reads==6 && header.scope_unavailable);
  native_reads=0;header={};
  capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
  assert(native_reads==3 && snapshot->field_count==3 && header.scope_unavailable);

@@ -90,7 +90,11 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
         header.cold_revision=1;
         capture_append(*base.cold->plan,Phase::checkpoint,context,reader,user,snapshot,0,1);
     }
-    const CaptureGraph* scope=!cold && !nochange && !terminal_leave && config && config->scope && config->scope->available
+    // The canonical normal setter defers stampEventScope until a changed
+    // closing HP. time(false,false) still consumes both independent clocks.
+    const bool deferred_open_scope=phase==Phase::entry && base.hp_normal && invocation
+        && invocation->hp_exact_enemy && !header.publication_request;
+    const CaptureGraph* scope=!cold && !nochange && !deferred_open_scope && !terminal_leave && config && config->scope && config->scope->available
         ? config->scope.get() : nullptr;
     Context graph_context=context;
     if (scope) {
