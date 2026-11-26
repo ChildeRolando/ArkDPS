@@ -385,3 +385,52 @@ Production calls the default true and exposes no host/product switch. Bundle
 A/B must keep raw HP enabled in both arms and assert equal actual observation
 counts. A raw-provider disabled test uses an explicitly labelled high-level
 benchmark stub; deleting old globals cannot disable a sealed capability.
+
+### 当前实施清单：事实直达、批量派发与作用域处理
+
+2026-11-27 按用户认可的方向调整，承接本分支实际实现，不回退到咨询案的旧源码。
+本次核对的代码基线为 `0a79cef`（原始 HP provider 与 sealed owner 已集成）；
+`813160f` 补齐独立审核及函数计时材料。以下“完成”只说明对应离线边界，
+不代表持续吞吐或游戏 FPS 已验收。
+
+| 阶段 | 状态 | 已有实现及实际剩余工作 |
+| --- | --- | --- |
+| A：事实合同与唯一业务所有者 | HP 边界已完成，继续做整体验收 | 所有端共用 `applyHpEntry/Leave`；原生从同一 CompiledPlan/OwnedReplayView 提供原始值，符号、Q32、XOR、身份、生命周期及结算仍由共享 JS 解释。无权威 C++ 业务副本。 |
+| B：无预合并事实直达 | 在做 | count1 raw IO 已接入，但实际仍调用旧 packed ReplayDispatch、receiver/arguments 包装和现 scope 入口；这不是直达阶段完成。下一步让受控原始事实直接调用同一状态入口，保每笔 E/L、父子关系及原失败路径，建立全链路对照。 |
+| C：有界批量跨界 | 待 B 语义基线，尚未启用 | 批次仅改变派发单位。按记录数、字节数和墙钟预算限制，保逐项事实与可闭合前缀；中途故障不能确认尾部。无事件、暂停及终局也必须及时发布。 |
+| D：后台 scope 重复工作 | 部分完成，主要热点仍在 | 已有静态 geometry、固定字节比较及 NativeCheck；JS 动态字段解释仍贵。优先处理已持有字节的重复解析、构造和比较，每条事实仍绑定实际记录、配置及检查点。 |
+| E：叶子配对、无变化压实、回血预合并 | 暂缓，未启用 | 先完成无预合并的直达与批量版本。不得丢无变化 HP：finishModifierHpWriter 必须先于 unchanged 返回。每项压缩须独立开关与关闭版对照；不能证明等价的区间保持逐笔。 |
+| 游戏线程 guard 差分扫描、多 VM | 暂缓 | 不在游戏线程额外扫描 64/785 个 fixture 字段；不以布局、同帧或没有通知代替现场证据；不增加并行权威状态机。 |
+| 真实 DLL 与私有测试包 | 在做，未交付 | 原始 provider/模式绑定的新自有进程夹具已准备；完整引擎验收和压力验收后再打包。实机结果独立登记。 |
+
+主要判据和现有回执：
+
+- 原 pointer provider 重构前后，PC/MuMu、raw/compact 共 40 个场景的完整 JSON
+  与状态逐字段相等，见 `runtime/production-hp-throughput/provider-parity/receipt/`。
+  已知结算缺证的修正另有独立正负预期，不以复刻旧错误为目标。
+- `runtime/production-hp-throughput/raw-attrs-golden/` 用相同真实 owned record
+  比较缺 MaxHP 链的事件及 ReplaySummary；missing_root 仍是未知，未借失败前缀补 NULL。
+- `runtime/hp-provider-profile/` 是实际 raw provider 的 1/128 inclusive 函数采样，
+  每组 5000 setters 对应 10000 次实际 observation。scope 约 77.7us/调用，
+  observation 工厂约 9.8us，CPP observation 约 3.24us/edge；这些包含关系不能相加。
+  它定位成本，不是无插桩吞吐或 FPS。
+- `runtime/production-hp-throughput/raw-observation-pair/` 的单组实际消费仍约
+  5301 heal setters/s，控制约 5025/s，输入基线有约 20% 漂移；未证明稳定收益，
+  更未通过 30000/s。该回执绑定当时 dirty native 文件 SHA，不冒称后续 sealed owner 的效果。
+- 分段计时显示旧 ReplayDispatch 外围有分散固定成本；约 33us/setter 只是当时
+  特定实现的插桩测量，不是理论下界。当前阻塞是完整消费成本，不是等待更多实机日志。
+
+冻结验收口径：
+
+1. 先完成无预合并版的事件顺序、逐笔结算/未知状态、身份、时钟、终局及 ACK 对照。
+   原生快路径计数必须证明实际启用；普通对象或另一记录不能伪造证明。
+2. 纯回血 30000 setter/s、10 秒、300000 setters；原始 E/L 和业务输出分别计数。
+   未完成 10 秒或 code4 必须保留失败，不能用合并后事件数量替代输入量。
+3. 500ms 消费暂停后持续追赶；候选目标 2.5 秒内追平、稳态发布延迟 p99<50ms，
+   明确起止时钟与排除项。45k/s 余量需饱和供给或积压追赶另测，不能由 30k 限速实验推出。
+4. 60 秒混合负载须冻结真实输入/调用类型与比例的来源；不能把专家示例比例标成实测。
+   伤害型输入若超过 100000 业务事件，必须模拟真实 read/served/ACK；不放大或截断业务队列。
+5. 无静默丢弃、无越界读取、无提前 ACK；原始、闭合、处理、发布、交付、ACK 水位独立。
+   所有游戏回调继续不依赖消费者 VM；扩大 arena 或缓冲不能替代持续吞吐通过。
+6. 离线与实机分开验收。私有包交付时列明尚未通过的压力/实机条件，不能用局部 PASS
+   宣称游戏 FPS 已改善；数据过期和未核实命中继续按各自根因分类。
