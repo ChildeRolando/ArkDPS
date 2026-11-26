@@ -39,5 +39,13 @@ for(const platform of ['native_pc','android2791']){
  c.missing=klass('Incomplete',f.alloc());
  assert.throws(()=>vm.runInContext('isCharacterSourceClass(missing)',c),/Unreadable fixture address/);
  assert.equal(vm.runInContext('sourceCharacterLineage.has(cycle.toString())||sourceCharacterLineage.has(missing.toString())',c),false);
+ if(platform==='native_pc'){
+  // A live-path cache is not the native replay's sealed metadata authority.
+  c.__arkdpsReplayActive=()=>true;
+  c.__arkdpsColdClassLineage=()=>{throw Error('closed class proof unavailable');};
+  c.exactCharacter=f.character;
+  for(const expression of ['isCharacterSourceClass(deepCharacter)','isCharacterSourceClass(foreign)','isCharacterSourceClass(exactCharacter)'])
+   assert.throws(()=>vm.runInContext(expression,c),/closed class proof unavailable/);
+ }
 }
 console.log('PASS_COMPLETE_CLASS_LINEAGE_CONSUMERS native_pc/android2791; source UID/live/presence/foreign/cycle/missing');

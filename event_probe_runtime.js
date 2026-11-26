@@ -425,10 +425,12 @@ function entityId(p){if(p.isNull())throw new Error('missing source entity');cons
 const sourceCharacterLineage=new Map();
 function isCharacterSourceClass(klass){
  const base=sourceCharacterClasses.character;
+ const captured=typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureClassLineage==='function'
+  ?immutableClassLineage(klass):null;
  if(klass.equals(base))return true;
  const key=klass.toString();
  if(sourceCharacterLineage.has(key))return sourceCharacterLineage.get(key);
- for(const current of immutableClassLineage(klass)){
+ for(const current of captured??immutableClassLineage(klass)){
   if(current.equals(base)){
    sourceCharacterLineage.set(key,true);
    return true;
