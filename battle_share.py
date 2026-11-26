@@ -25,6 +25,11 @@ def record_display(record):
     unverified = record.unverified_autochess_scope
     practice = {True: '演习', False: '正式', None: '演习状态未知'}[None if unverified else metadata['practice']]
     outcome = OUTCOMES['unknown' if unverified else metadata['outcome']]
+    segment = metadata.get('capture_segment')
+    capture_segment = (isinstance(segment, dict) and segment.get('complete') is False
+                       and segment.get('reason') in ('event_capture_paused', 'event_capture_resumed'))
+    if capture_segment:
+        outcome = '采样片段'
     duration = f'{data["duration"]:.1f} 秒'
     duration_label = f'采样至 {duration}' if unverified else f'{duration}（最后可靠游戏时刻）'
     date = data['observed_at'] or data['recorded_at']
@@ -48,6 +53,11 @@ def record_display(record):
         display['platform'] = platform
     if unverified:
         display.update(scope_warning=AUTOCHESS_SNAPSHOT_LABEL, labels=(*display['labels'], AUTOCHESS_SNAPSHOT_LABEL))
+    if capture_segment:
+        display.update(capture_segment_label=('采样片段 · 事件暂停' if segment['reason'] == 'event_capture_paused'
+                                              else '采样片段 · 事件恢复'),
+                       capture_warning='手动暂停事件采集；逐次统计仅覆盖本片段',
+                       labels=(*display['labels'], '手动暂停事件采集；逐次统计仅覆盖本片段'))
     return display
 
 
@@ -81,6 +91,9 @@ def json_bytes(record):
     data['display'] = {'stage': stage_names.display_fields(data['metadata']['stage_id'])}
     if record.unverified_autochess_scope:
         data['display']['scope_warning'] = AUTOCHESS_SNAPSHOT_NOTE
+    capture = record_display(record)
+    if 'capture_segment_label' in capture:
+        data['display'].update({key: capture[key] for key in ('capture_segment_label', 'capture_warning')})
     return (json.dumps(data, ensure_ascii=False, allow_nan=False, indent=2) + '\n').encode('utf-8')
 
 

@@ -2,6 +2,10 @@
 
 这是当前桌面入口和分发契约；统计及历史格式仍由 [panel-model](panel-model.md)、[statistics-core](statistics-core.md) 与 [snapshot-adapter](snapshot-adapter.md) 拥有。技术取舍见 [ADR 0003](adr/0003-wpf-python-worker.md)。
 
+侧栏的「暂停事件／继续事件」发送临时命令 `event_pause {paused: bool}`，只由采集线程控制实际 producer。状态 `event_capture_control` 包含 `supported/requested_paused/paused/state/revision/error/reason`；`state` 为 `running/pausing/paused/resuming/error/unavailable`。UI 等待实际确认，转换中禁用按钮，失败保留最后确认状态并允许重试。请求编号递增，不改持久化的 `layout.event_observation`。旧组件或未就绪观察器显示不可用。
+
+暂停只停止事件钩子；独立原生累计快照与 FPS 继续采集，卫戍暂停时使用原有只读快照及其归属限制。临时控制保留同一个观察器、进程输入所有权与 ACK 游标。切段前须结清已接纳前缀的 ACK；有既有观察片段时，还须把暂停回复水位内的尾部经原战局屏障实际接纳、确认，再切到快照采样。不能把控制回复的最终序号当作消费证明，也不能以恢复时的空基线读取跳过该尾部。控制等待不跳过整个采样循环；尾部无法在原战局验证时保留队列并报告等待。`observation.events.capture_pause_tail` 将这段覆盖缺口交给 live/replay 相同的消费入口。暂停与继续沿用原归档队列创建明确的采样片段，原生战局身份保持不变；历史及分享标注「采样片段」。恢复建立当前帧基线，暂停期间未观察的逐次数据不补算，也不能用旧的零时刻证据声明完整覆盖。
+
 采集审计的 `lifecycle_observation` 保留原有 `gap/read_unavailable` 原因，并可附带 `read_error: {type, message}`。该诊断记录被拒采样的具体错误，不构造快照或事件；缺少此字段的旧录制仍可重放。
 
 桌面状态可附带 `sampling_rejection: {code: "mapping_unavailable", reason}`，表示连接仍在运行但当前样本未通过归属校验。它与连接错误分开，绑定当前采集来源；成功样本、实际消费成功的准备/等待/终局观察或来源切换后清除，普通跨帧重试和旧生命周期状态不能清除。主窗、侧栏和 HUD 显示同一原因，保留数据超过原有两秒门槛仍显示过期；该提示不改变统计、事件确认或重连策略。字段缺失或为空表示无此诊断。

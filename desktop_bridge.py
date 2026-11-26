@@ -67,9 +67,9 @@ BRIDGE_COMMANDS = frozenset((
     'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
     'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
     'history_refresh', 'history_select', 'history_config', 'export', 'connection_apply',
-    'multiplayer_enabled', 'debug_mode',
+    'multiplayer_enabled', 'debug_mode', 'event_pause',
 ))
-BRIDGE_KEY_COMMANDS = frozenset(('hello', 'connection_apply', 'rescan', 'history_refresh', 'quit', 'debug_mode'))
+BRIDGE_KEY_COMMANDS = frozenset(('hello', 'connection_apply', 'rescan', 'history_refresh', 'quit', 'debug_mode', 'event_pause'))
 PC_STARTUP_KEY_EVENTS = frozenset(('target_selected', 'loader_submitted', 'loader_completed', 'target_unavailable')) | NATIVE_HOOK_STARTUP_EVENTS
 PC_STARTUP_KEY_STATES = frozenset(('waiting_for_process', 'ready', 'failed', 'process_failed', 'cleanup_pending'))
 
@@ -414,6 +414,8 @@ class DesktopState:
         self._waiting_for_connection_sample = False
         self.battle_waiting = False
         self.scanning = False
+        self.event_capture_control = dict(supported=False, requested_paused=False, paused=False,
+            state='unavailable', revision=0, reason='等待事件观察者就绪', error=None)
         self.history_notice = ''
         self.refresh_history()
 
@@ -508,6 +510,19 @@ class DesktopState:
         self._materialized_views = dict(owner=self, scopes={}, views={})
 
     def accept(self, kind, value):
+        if kind == 'event_capture_control':
+            if (self._awaiting_source and (not isinstance(value, dict)
+                    or value.get('source_revision') != self._source_request_revision)):
+                return
+            if (isinstance(value, dict) and type(value.get('revision')) is int
+                    and value['revision'] >= self.event_capture_control['revision']
+                    and value.get('state') in ('running', 'pausing', 'paused', 'resuming', 'error', 'unavailable')
+                    and all(type(value.get(key)) is bool for key in ('supported', 'requested_paused', 'paused'))):
+                keys = ('supported', 'requested_paused', 'paused', 'state', 'revision', 'error', 'reason')
+                if 'source_revision' in value:
+                    keys += ('source_revision',)
+                self.event_capture_control = {key: value.get(key) for key in keys}
+            return
         # Every admitted source/quality event is a revision, even at the same frame.
         # FPS is an independent overlay and is read directly from its monitor.
         self._invalidate_presentation()
@@ -1149,6 +1164,7 @@ class DesktopState:
             event_status, event_error = self.observer_status, self.observer_error
         return dict(protocol=PROTOCOL_VERSION, layout=self.layout.to_dict(),
                     native_hook_candidate=self.native_hook_profile,
+                    event_capture_control=dict(self.event_capture_control),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
                     effective_connection_config=self.effective_connection.to_dict(),
                     totals=team_totals({} if character_counters else stats), native_counter_scope=counter_scope,
@@ -1233,6 +1249,9 @@ class DesktopState:
                 raise ValueError('调试模式开关必须是布尔值')
             if enabled != self.layout.debug_mode:
                 self.persist(replace(self.layout, debug_mode=enabled))
+        elif op == 'event_pause':
+            if type(cmd.get('paused')) is not bool:
+                raise ValueError('事件暂停开关必须是布尔值')
         elif op == 'hud_style':
             panel_id = cmd['panel_id']
             if panel_id not in {p.panel_id for p in self.layout.panels}:
@@ -1432,6 +1451,93 @@ class CollectionWorker:
         self.last_connect_attempt = 0.0
         self.last_endpoint_check = 0.0
         self.thread = threading.Thread(target=self.run, name='ArkDPS collection')
+        self._event_capture_control = dict(getattr(state, 'event_capture_control', dict(
+            supported=False, requested_paused=False, paused=False, state='unavailable', revision=0,
+            reason='等待事件观察者就绪', error=None)))
+        self._event_pause_revision = 0
+        self._requested_events_paused = False
+        self._applied_event_pause_revision = -1
+        self._event_control_session = None
+        self._event_control_source_revision = None
+
+    def request_event_pause(self, paused):
+        if type(paused) is not bool:
+            raise ValueError('事件暂停开关必须是布尔值')
+        with self._request_lock:
+            if self.stop.is_set():
+                raise RuntimeError('采集器正在关闭')
+            if not self._event_capture_control['supported']:
+                raise RuntimeError(self._event_capture_control.get('reason') or '当前观察者不支持暂停事件采集')
+            if self._event_control_source_revision != self._request_revision:
+                raise RuntimeError('采集来源正在切换，请等待连接就绪')
+            if self._event_pause_revision >= 2147483647:
+                raise RuntimeError('事件控制请求序号已用尽，请重新启动 ArkDPS')
+            self._event_pause_revision += 1
+            self._requested_events_paused = paused
+            self._event_capture_control.update(requested_paused=paused,
+                state='pausing' if paused else 'resuming', revision=self._event_pause_revision,
+                error=None, reason='等待采集线程确认')
+            return dict(self._event_capture_control)
+
+    def _publish_event_control(self, **values):
+        with self._request_lock:
+            if values.get('source_revision', self._request_revision) != self._request_revision:
+                return
+            if values.get('revision', self._event_pause_revision) < self._event_pause_revision:
+                return
+            updated = dict(self._event_capture_control, **values)
+            if updated == self._event_capture_control:
+                return
+            self._event_capture_control = updated
+            self.events.put(('event_capture_control', dict(updated)))
+
+    def _advance_event_pause(self, source_revision=None):
+        """The collection thread alone changes the producer and statistics owner."""
+        session = self.session
+        if source_revision is None:
+            source_revision = self._request_revision
+        if session is not self._event_control_session:
+            self._event_control_session = session
+            self._event_control_source_revision = source_revision
+            self._applied_event_pause_revision = -1
+        with self._request_lock:
+            revision, requested = self._event_pause_revision, self._requested_events_paused
+        supported = session is not None and getattr(session, 'event_pause_supported', False)
+        def actual_paused():
+            actual = getattr(getattr(session, 'observer', None), 'capture_paused', None)
+            return actual if type(actual) is bool else bool(getattr(session, 'events_paused', False))
+        paused = actual_paused()
+        if not supported:
+            self._publish_event_control(supported=False, requested_paused=requested, paused=paused,
+                state='unavailable', revision=revision, source_revision=source_revision,
+                error=None, reason='当前事件观察者尚未就绪或不支持暂停')
+            return False
+        if self._applied_event_pause_revision == revision:
+            return False
+        if revision == 0 and not requested and not paused:
+            self._applied_event_pause_revision = revision
+            self._publish_event_control(supported=True, requested_paused=False, paused=False,
+                state='running', revision=revision, source_revision=source_revision, error=None, reason=None)
+            return False
+        try:
+            session.set_events_paused(requested, revision)
+        except (ObserverReadRetry, CaptureRetry):
+            self._publish_event_control(supported=True, requested_paused=requested,
+                paused=actual_paused(), state='pausing' if requested else 'resuming',
+                revision=revision, source_revision=source_revision,
+                error=None, reason='等待事件前缀确认和原生回调排空')
+            return True
+        except Exception as exc:
+            self._applied_event_pause_revision = revision
+            self._publish_event_control(supported=True, requested_paused=requested,
+                paused=actual_paused(), state='error', revision=revision,
+                source_revision=source_revision, error=str(exc).partition('\n')[0][:200], reason='事件采集控制失败')
+            return False
+        self._applied_event_pause_revision = revision
+        self._publish_event_control(supported=True, requested_paused=requested,
+            paused=actual_paused(), state='paused' if session.events_paused else 'running',
+            revision=revision, source_revision=source_revision, error=None, reason=None)
+        return False
 
     def set_multiplayer_enabled(self, enabled):
         with self._request_lock:
@@ -1541,6 +1647,8 @@ class CollectionWorker:
             self.events.put(('warning', error))
         self.session = None
         self.cleanup_error = ''
+        self._publish_event_control(supported=False, paused=False, state='unavailable', error=None,
+            reason='等待事件观察者就绪', revision=self._event_pause_revision, source_revision=self._request_revision)
         return True
 
     def _connect_session(self, adb, serial, runtime, **kwargs):
@@ -1890,6 +1998,7 @@ class CollectionWorker:
                             # connection retry or alter its owner/arming boundary.
                             self._emit_pc_bootstrap(self.pc_runtime.describe())
                         if usable and self.session is not None:
+                            self._advance_event_pause(current_revision)
                             if self._pc_observer_recovery_needed(self.session, session_bootstrap_generation):
                                 # Reauthentication waits until the old observer
                                 # has released its session and script. A changed
@@ -1931,7 +2040,8 @@ class CollectionWorker:
                             consume_sequence = sessions.sequence
                             native_clock_owner = (self.pc_runtime
                                 if current_config.native_pc_event_backend == 'native' else None)
-                            clock_retry = (current_config.platform == 'native_pc' and current_enabled
+                            clock_retry = (not getattr(self.session, 'events_paused', False)
+                                and current_config.platform == 'native_pc' and current_enabled
                                 and (current_config.native_pc_event_backend == 'frida'
                                      or (current_config.native_pc_event_backend == 'native'
                                          and not current_config.native_pc_event_feed
@@ -2321,6 +2431,10 @@ def serve(input_stream, output, state, worker=None, *, internal_capture=False):
                     worker.set_multiplayer_enabled(state.layout.multiplayer_enabled)
                 elif op == 'debug_mode' and worker:
                     worker.set_debug_mode(state.layout.debug_mode)
+                elif op == 'event_pause':
+                    if worker is None:
+                        raise ValueError('离线模式不支持暂停事件采集')
+                    state.accept('event_capture_control', worker.request_event_pause(cmd['paused']))
                 kind = 'snapshot' if op == 'snapshot' else 'state'
             advance('snapshot')
             if getattr(worker, 'effective', None) is not None:
