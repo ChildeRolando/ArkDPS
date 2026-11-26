@@ -1,4 +1,7 @@
 #include "engine.h"
+#include "engine_worker.h"
+#include "engine_capture_lane.h"
+#include "engine_capture_plan.h"
 #include <windows.h>
 #include <psapi.h>
 #include <MinHook.h>
@@ -35,10 +38,23 @@ struct Hook {
     void* thunk = nullptr;
     JSValue callbacks = JS_UNDEFINED;
     bool detached = false;
+    arkdps::capture::CompiledPlan capture_plan;
 };
 struct Allocation { std::uintptr_t base; std::size_t size; };
 struct Runtime {
-    std::recursive_mutex mutex;
+    arkdps::EngineWorker worker;
+    std::unique_ptr<arkdps::capture::CaptureLanes> lanes;
+    std::uint64_t processed_ticket = 0, closed_ticket = 0, delivered_sequence = 0;
+    bool replay_active = false;
+    JSValue prefix_projection = JS_UNDEFINED;
+    std::string captured_publication;
+    std::uint64_t published_ticket = 0;
+    arkdps::capture::RecordHeader replay_header;
+    JSValue replay_begin = JS_UNDEFINED, replay_end = JS_UNDEFINED;
+    struct WorkerInvocation { JSValue receiver = JS_UNDEFINED; std::uint64_t id = 0; Hook* hook = nullptr; };
+    std::array<std::array<WorkerInvocation, 256>, 16> receivers{};
+    std::array<unsigned, 16> replay_depth{};
+    std::array<std::byte, arkdps::capture::record_capacity> consume_buffer{};
     JSRuntime* runtime = nullptr;
     JSContext* context = nullptr;
     JSValue pointer = JS_UNDEFINED;
@@ -66,10 +82,6 @@ struct EntryFrame {
 };
 static_assert(offsetof(EntryFrame, return_target) == 0xa8);
 struct ReturnFrame { std::uint64_t rax, rdx; std::array<std::uint8_t, 32> xmm; };
-struct Invocation { Hook* hook; std::uintptr_t return_address; JSValue receiver; };
-struct ThreadInvocations { unsigned depth = 0; std::array<Invocation, 256> calls; };
-thread_local ThreadInvocations invocations;
-
 // Diagnostics have no ownership of the VM lock. Every thread writes only its
 // own fixed cells; snapshots use bounded seqlock reads outside the VM mutex.
 // There is no hot-path allocation, log, global RMW, division, or clock when off.
@@ -91,28 +103,23 @@ TimingState timing_state;
 std::uint64_t ticks_now() noexcept {
     LARGE_INTEGER value; QueryPerformanceCounter(&value); return value.QuadPart;
 }
-thread_local TimingThread* timing_thread = nullptr;
-thread_local bool timing_untracked = false;
-thread_local std::uint32_t timing_random = 0;
 TimingThread* timing_slot() noexcept {
-    if (timing_thread || timing_untracked) return timing_thread;
     const auto id = GetCurrentThreadId();
-    timing_random = id ^ 0x9e3779b9u;
+    for (auto& slot : timing_state.threads)
+        if (slot.owner.load(std::memory_order_relaxed)==id) return &slot;
     for (auto& slot : timing_state.threads) {
-        DWORD empty = 0;
-        if (slot.owner.compare_exchange_strong(empty, id, std::memory_order_relaxed)) {
-            timing_thread = &slot; return &slot;
-        }
+        DWORD empty=0;
+        if (slot.owner.compare_exchange_strong(empty,id,std::memory_order_relaxed)) return &slot;
     }
-    timing_untracked = true;
-    timing_state.thread_overflow.store(true, std::memory_order_relaxed);
+    timing_state.thread_overflow.store(true,std::memory_order_relaxed);
     return nullptr;
 }
+std::uint32_t timing_random = 0x9e3779b9u; // Worker-only sampler.
 void timing_add(std::atomic<std::uint64_t>& value, std::uint64_t delta) noexcept {
     value.store(value.load(std::memory_order_relaxed) + delta, std::memory_order_relaxed);
 }
 struct TimingSpan;
-thread_local TimingSpan* timing_active = nullptr;
+TimingSpan* timing_active = nullptr;
 struct TimingSpan {
     TimingCell* cell = nullptr;
     TimingSpan* parent = nullptr;
@@ -152,17 +159,6 @@ struct TimingSpan {
         timing_add(cell->read_spans, detail_sampled ? 1 : 0);
         cell->revision.fetch_add(1, std::memory_order_acq_rel);
     }
-};
-struct TimingLock {
-    TimingSpan& span;
-    std::unique_lock<std::recursive_mutex> lock;
-    std::uint64_t acquired = 0;
-    TimingLock(std::recursive_mutex& mutex, TimingSpan& measured) : span(measured), lock(mutex, std::defer_lock) {
-        const auto start = span.sampled ? ticks_now() : 0;
-        lock.lock();
-        if (span.sampled) { acquired = ticks_now(); span.wait += acquired-start; }
-    }
-    ~TimingLock() { if (acquired) span.hold += ticks_now()-acquired; }
 };
 struct ReadTiming {
     TimingSpan* span = timing_active && timing_active->detail_sampled ? timing_active : nullptr;
@@ -273,6 +269,10 @@ std::size_t size(JSContext* context, JSValueConst value, std::size_t limit = max
     return static_cast<std::size_t>(result);
 }
 void read(std::uintptr_t address, void* destination, std::size_t count) {
+    if (state().replay_active) {
+        state().lanes->poison(arkdps::capture::LaneFault::live_replay_access);
+        throw std::runtime_error("live native read forbidden during captured replay");
+    }
     ReadTiming timing(count);
     if (count > max_read || address + count < address) throw std::runtime_error("invalid read range");
     SIZE_T actual = 0;
@@ -301,6 +301,7 @@ JSValue js_read(JSContext* c, JSValueConst, int count, JSValueConst* args) {
 }
 JSValue js_write(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] {
+        if (state().replay_active) { state().lanes->poison(arkdps::capture::LaneFault::live_replay_access); throw std::runtime_error("live native operation forbidden during captured replay"); }
         if (count != 2) throw std::runtime_error("write requires address and bytes");
         const auto address = integer(c, args[0]);
         std::size_t bytes = 0;
@@ -316,6 +317,7 @@ JSValue js_write(JSContext* c, JSValueConst, int count, JSValueConst* args) {
 }
 JSValue js_allocate(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] {
+        if (state().replay_active) { state().lanes->poison(arkdps::capture::LaneFault::live_replay_access); throw std::runtime_error("live native operation forbidden during captured replay"); }
         if (count != 1) throw std::runtime_error("alloc requires length");
         const auto bytes = size(c, args[0]);
         auto& runtime = state();
@@ -406,6 +408,7 @@ JSValue js_export(JSContext* c, JSValueConst, int count, JSValueConst* args) {
 }
 JSValue js_native_call(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] {
+        if (state().replay_active) { state().lanes->poison(arkdps::capture::LaneFault::live_replay_access); throw std::runtime_error("live native operation forbidden during captured replay"); }
         if (count != 2) throw std::runtime_error("native call requires function and arguments");
         const auto address = integer(c, args[0]);
         if (!state().exports.count(address)) throw std::runtime_error("unregistered IL2CPP export");
@@ -436,6 +439,18 @@ JSValue js_attach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
         if (JS_IsString(label)) hook->timing_name = string(c, label).substr(0, 96);
         JS_FreeValue(c, label);
         hook->address = reinterpret_cast<void*>(integer(c, args[0]));
+        auto contract=JS_GetPropertyStr(c,args[1],"arkdpsCaptureContract");
+        auto encoded=JS_JSONStringify(c,contract,JS_UNDEFINED,JS_UNDEFINED);
+        JS_FreeValue(c,contract);
+        if (JS_IsException(encoded) || JS_IsUndefined(encoded)) {
+            JS_FreeValue(c,encoded);
+            throw std::runtime_error("native hook requires a complete capture contract");
+        }
+        std::string capture_json;
+        try { capture_json=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); throw; }
+        JS_FreeValue(c,encoded);
+        hook->capture_plan=arkdps::capture::compile_plan(nlohmann::json::parse(capture_json), reinterpret_cast<std::uintptr_t>(hook->address));
+
         hook->callbacks = JS_DupValue(c, args[1]);
         // A leaf thunk: movabs volatile r11,Hook*; jmp [rip+0]; .quad entry.
         // It changes no stack slots, so ordinary Windows leaf unwind remains valid.
@@ -475,7 +490,10 @@ JSValue js_detach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
 JSValue js_send(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] { if (count != 1) throw std::runtime_error("send requires JSON"); state().ready = string(c, args[0]); return JS_UNDEFINED; });
 }
-JSValue js_active(JSContext* c, JSValueConst, int, JSValueConst*) { return JS_NewUint32(c, state().active.load()); }
+JSValue js_active(JSContext* c, JSValueConst, int, JSValueConst*) {
+    auto& runtime=state();
+    return JS_NewUint32(c, runtime.replay_active ? runtime.replay_header.active : runtime.active.load());
+}
 JSValue js_pid(JSContext* c, JSValueConst, int, JSValueConst*) { return JS_NewUint32(c, GetCurrentProcessId()); }
 void function(JSContext* c, JSValueConst global, const char* name, JSCFunction* callback, int arguments) {
     JS_SetPropertyStr(c, global, name, JS_NewCFunction(c, callback, name, arguments));
@@ -499,92 +517,257 @@ void callback(JSContext* c, Hook* hook, const char* name, JSValueConst receiver,
 }
 }
 
-extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
-    TimingSpan timing(hook->timing_id*2);
-    auto& runtime = state();
-    runtime.active.fetch_add(1);
-    runtime.activity_generation.fetch_add(1);
-    std::uintptr_t original_return = 0;
-    // The caller stack is necessarily readable for a valid function invocation.
-    std::memcpy(&original_return, reinterpret_cast<void*>(frame->stack), sizeof(original_return));
-    frame->return_target = 2; // active-only scope if the bounded TLS stack is full
-    if (invocations.depth >= invocations.calls.size()) {
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-        fail("native hook nesting limit exceeded");
-        return hook->original;
-    }
-    auto& invocation = invocations.calls[invocations.depth++];
-    invocation = {hook, original_return, JS_UNDEFINED};
-    frame->return_target = 1;
-    try {
-        TimingLock lock(runtime.mutex, timing);
-        if (!runtime.fatal.empty() || runtime.stopping.load()) return hook->original;
-        auto* c = runtime.context;
-        JS_UpdateStackTop(runtime.runtime);
-        invocation.receiver = JS_NewObject(c);
-        JS_SetPropertyStr(c, invocation.receiver, "threadId", JS_NewUint32(c, GetCurrentThreadId()));
-        JS_SetPropertyStr(c, invocation.receiver, "returnAddress", pointer(c, original_return));
-        std::array<std::uint64_t, 16> values{{frame->rcx, frame->rdx, frame->r8, frame->r9}};
-        constexpr std::size_t stack_first = 4;
-        constexpr std::size_t slot_size = sizeof(values[0]);
-        const auto stack_arguments = frame->stack + 40;
-        try {
-            read(stack_arguments, values.data() + stack_first, (values.size() - stack_first) * slot_size);
-        } catch (const std::runtime_error&) {
-            // Keep the original per-slot validation when a bulk read fails.
-            for (std::size_t slot = stack_first; slot < values.size(); ++slot)
-                read(stack_arguments + (slot - stack_first) * slot_size, &values[slot], slot_size);
+
+namespace {
+void js_property(JSContext* c, JSValue object, const char* name, JSValue value) {
+    if (JS_SetPropertyStr(c,object,name,value)<0) throw std::runtime_error(exception(c));
+}
+void replay_record(const std::byte* bytes, std::size_t length) {
+    using namespace arkdps::capture;
+    auto& runtime=state(); auto* c=runtime.context;
+    RecordHeader header;
+    if (length<sizeof header) throw std::runtime_error("short native capture header");
+    std::memcpy(&header,bytes,sizeof header);
+    const auto required=sizeof header+header.segment_count*sizeof(Segment)+header.field_count*sizeof(FieldState)+header.byte_count;
+    if (header.lane>=lane_count || !header.depth || header.depth>invocation_depth
+        || header.hook_id>=runtime.hooks.size() || header.segment_count>max_segments
+        || header.field_count>max_fields || header.byte_count>max_bytes || length!=required
+        || header.ticket!=runtime.processed_ticket+1 || (header.phase!=Phase::entry && header.phase!=Phase::leave))
+        throw std::runtime_error("invalid native capture record");
+    auto* hook=runtime.hooks[header.hook_id].get();
+    auto& depth=runtime.replay_depth[header.lane];
+    auto& call=runtime.receivers[header.lane][header.depth-1];
+    if (header.phase==Phase::entry) {
+        if (header.depth!=depth+1 || call.id || header.parent!=(depth ? runtime.receivers[header.lane][depth-1].id : 0))
+            throw std::runtime_error("native capture parent/entry topology mismatch");
+        call.id=header.invocation; call.hook=hook; call.receiver=JS_NewObject(c); ++depth;
+        js_property(c,call.receiver,"threadId",JS_NewUint32(c,header.thread_id));
+        js_property(c,call.receiver,"returnAddress",pointer(c,header.return_address));
+        js_property(c,call.receiver,"nativeCaptureInvocation",JS_NewString(c,std::to_string(header.invocation).c_str()));
+    } else if (header.depth!=depth || call.id!=header.invocation || call.hook!=hook
+               || header.parent!=(depth>1 ? runtime.receivers[header.lane][depth-2].id : 0))
+        throw std::runtime_error("native capture leave topology mismatch");
+    const char* edge=header.phase==Phase::entry ? "entry" : "leave";
+    auto record=JS_NewObject(c), segments=JS_NewArray(c), fields=JS_NewArray(c);
+    js_property(c,record,"version",JS_NewInt32(c,1));
+    js_property(c,record,"hook_id",JS_NewUint32(c,header.hook_id));
+    js_property(c,record,"edge",JS_NewString(c,edge));
+    js_property(c,record,"checkpoint",JS_NewUint32(c,header.checkpoint));
+    const auto segment_start=sizeof header;
+    const auto field_start=segment_start+header.segment_count*sizeof(Segment);
+    const auto payload=bytes+field_start+header.field_count*sizeof(FieldState);
+    for (unsigned i=0;i<header.segment_count;++i) {
+        Segment segment;
+        std::memcpy(&segment,bytes+segment_start+i*sizeof segment,sizeof segment);
+        if (!segment.role || segment.role>hook->capture_plan.roles.size()
+            || segment.offset>header.byte_count || segment.size>header.byte_count-segment.offset)
+            throw std::runtime_error("invalid captured segment");
+        auto value=JS_NewObject(c);
+        js_property(c,value,"field_id",JS_NewUint32(c,segment.field_id));
+        js_property(c,value,"role",JS_NewString(c,hook->capture_plan.roles[segment.role-1].c_str()));
+        js_property(c,value,"checkpoint",JS_NewUint32(c,header.checkpoint));
+        js_property(c,value,"address",JS_NewBigUint64(c,segment.address));
+        js_property(c,value,"bytes",JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(payload+segment.offset),segment.size));
+        Error field_error=Error::missing_plan_field;
+        for (unsigned j=0;j<header.field_count;++j) {
+            FieldState state;
+            std::memcpy(&state,bytes+field_start+j*sizeof state,sizeof state);
+            if (state.id==segment.field_id && state.role==segment.role) field_error=state.error;
         }
-        auto bytes = JS_NewArrayBufferCopy(c, reinterpret_cast<const std::uint8_t*>(values.data()),
-                                          values.size() * slot_size);
-        if (JS_IsException(bytes)) throw std::runtime_error(exception(c));
-        auto args = JS_Call(c, runtime.argument_view, JS_UNDEFINED, 1, &bytes);
-        JS_FreeValue(c, bytes);
-        if (JS_IsException(args)) throw std::runtime_error(exception(c));
-        try { callback(c, hook, "onEnter", invocation.receiver, 1, &args); }
-        catch (...) { JS_FreeValue(c, args); throw; }
-        JS_FreeValue(c, args);
-    } catch (const std::exception& error) { std::lock_guard<std::recursive_mutex> lock(runtime.mutex); fail(error.what()); }
-    catch (...) { std::lock_guard<std::recursive_mutex> lock(runtime.mutex); fail("native onEnter failed"); }
-    return hook->original;
+        js_property(c,value,"status",JS_NewString(c,field_error==Error::ok ? "ok" : field_error==Error::changed_guard ? "guard_changed" : "unreadable"));
+        JS_SetPropertyUint32(c,segments,i,value);
+    }
+    for (unsigned i=0;i<header.field_count;++i) {
+        FieldState field;
+        std::memcpy(&field,bytes+field_start+i*sizeof field,sizeof field);
+        if (!field.role || field.role>hook->capture_plan.roles.size()) throw std::runtime_error("invalid captured field");
+        auto value=JS_NewObject(c);
+        js_property(c,value,"field_id",JS_NewUint32(c,field.id));
+        js_property(c,value,"role",JS_NewString(c,hook->capture_plan.roles[field.role-1].c_str()));
+        js_property(c,value,"checkpoint",JS_NewUint32(c,header.checkpoint));
+        js_property(c,value,"status",JS_NewString(c,field.error==Error::ok ? "ok" : field.error==Error::changed_guard ? "guard_changed" : "unreadable"));
+        js_property(c,value,"attempted_address",JS_NewBigUint64(c,field.attempted_address));
+        js_property(c,value,"attempted_size",JS_NewUint32(c,field.attempted_size));
+        JS_SetPropertyUint32(c,fields,i,value);
+    }
+    js_property(c,record,"segments",segments); js_property(c,record,"fields",fields);
+    runtime.replay_header=header; runtime.replay_active=true;
+    auto entered=JS_Call(c,runtime.replay_begin,JS_UNDEFINED,1,&record);
+    if (JS_IsException(entered)) { JS_FreeValue(c,record); runtime.replay_active=false; throw std::runtime_error(exception(c)); }
+    JS_FreeValue(c,entered);
+    std::exception_ptr callback_failure;
+    try {
+        if (header.phase==Phase::entry) {
+            std::array<JSValue,2> arguments{{
+                JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(header.args.data()),hook->capture_plan.plan.arg_count*8),
+                JS_NewUint32(c,header.arg_mask)}};
+            auto view=JS_Call(c,runtime.argument_view,JS_UNDEFINED,2,arguments.data());
+            for (auto value : arguments) JS_FreeValue(c,value);
+            if (JS_IsException(view)) throw std::runtime_error(exception(c));
+            try { callback(c,hook,"onEnter",call.receiver,1,&view); }
+            catch (...) { JS_FreeValue(c,view); throw; }
+            JS_FreeValue(c,view);
+        } else {
+            auto result=pointer(c,header.return_value);
+            try { callback(c,hook,"onLeave",call.receiver,1,&result); }
+            catch (...) { JS_FreeValue(c,result); throw; }
+            JS_FreeValue(c,result);
+        }
+    } catch (...) { callback_failure=std::current_exception(); }
+    std::string projection;
+    if (!callback_failure && header.closed_after && JS_IsFunction(c,runtime.prefix_projection)) {
+        auto frozen=JS_Call(c,runtime.prefix_projection,JS_UNDEFINED,1,&record);
+        if (JS_IsException(frozen)) callback_failure=std::make_exception_ptr(std::runtime_error(exception(c)));
+        else if (!JS_IsUndefined(frozen) && !JS_IsNull(frozen)) {
+            auto encoded=JS_JSONStringify(c,frozen,JS_UNDEFINED,JS_UNDEFINED);
+            if (JS_IsException(encoded)) callback_failure=std::make_exception_ptr(std::runtime_error(exception(c)));
+            else projection=string(c,encoded);
+            JS_FreeValue(c,encoded);
+        }
+        JS_FreeValue(c,frozen);
+    }
+    auto ended=JS_Call(c,runtime.replay_end,JS_UNDEFINED,0,nullptr);
+    runtime.replay_active=false;
+    JS_FreeValue(c,record);
+    if (JS_IsException(ended)) throw std::runtime_error(exception(c));
+    auto complete=JS_GetPropertyStr(c,ended,"complete");
+    const bool valid=JS_ToBool(c,complete)==1;
+    JS_FreeValue(c,complete); JS_FreeValue(c,ended);
+    if (!valid) throw std::runtime_error("native callback replay has structural gaps");
+    if (callback_failure) std::rethrow_exception(callback_failure);
+    if (header.phase==Phase::leave) {
+        JS_FreeValue(c,call.receiver); call={}; --depth;
+    }
+    runtime.processed_ticket=header.ticket;
+    if (header.closed_after) {
+        runtime.closed_ticket=header.ticket;
+        if (!projection.empty()) {
+            const auto parsed=nlohmann::json::parse(projection);
+            if (parsed.is_object() && !parsed.value("retry",false) && parsed.value("error",nlohmann::json()).is_null()) {
+                runtime.captured_publication=projection;
+                runtime.published_ticket=header.ticket;
+            }
+        }
+    }
+}
+void drain_captures() noexcept {
+    using namespace arkdps::capture;
+    auto& runtime=state();
+    if (!runtime.initialized || !runtime.fatal.empty()) return;
+    try {
+        if (runtime.lanes->failure.load(std::memory_order_acquire))
+            throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
+        // Bounded poll work keeps host jobs responsive under sustained producers.
+        for (unsigned budget=0;budget<512;++budget) {
+            Lane* found=nullptr;
+            for (auto& lane : runtime.lanes->lanes) {
+                auto ticket=lane->queue.head_ticket();
+                if (ticket && *ticket==runtime.processed_ticket+1) { found=lane.get(); break; }
+            }
+            if (!found) break; // A reserved but unpublished ticket is not skippable.
+            std::uint64_t ticket=0; std::size_t size=0;
+            if (found->queue.try_pop(ticket,runtime.consume_buffer.data(),runtime.consume_buffer.size(),size)!=CaptureQueue::PopResult::popped)
+                throw std::runtime_error("native capture record exceeds worker buffer");
+            JS_UpdateStackTop(runtime.runtime);
+            replay_record(runtime.consume_buffer.data(),size);
+        }
+    } catch (const std::exception& error) {
+        runtime.lanes->poison(LaneFault::replay_structure);
+        runtime.lanes->enabled.store(false,std::memory_order_release);
+        fail(error.what());
+    } catch (...) {
+        runtime.lanes->poison(LaneFault::replay_structure);
+        runtime.lanes->enabled.store(false,std::memory_order_release);
+        fail("native capture replay failed");
+    }
+}
 }
 
+// Callback paths never enter QuickJS or touch the host mailbox.
+extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
+    using namespace arkdps::capture;
+    auto& runtime=state();
+    runtime.active.fetch_add(1,std::memory_order_acq_rel);
+    runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel);
+    frame->return_target=2;
+    auto& lanes=*runtime.lanes;
+    if (!lanes.enabled.load(std::memory_order_acquire) || lanes.failure.load(std::memory_order_relaxed)) return hook->original;
+    auto* lane=lanes.current();
+    if (!lane) return hook->original;
+    if (lane->depth>=invocation_depth) { lanes.poison(LaneFault::depth_full); return hook->original; }
+    auto& call=lane->calls[lane->depth];
+    call.hook=hook;
+    if (!capture_read(nullptr,frame->stack,&call.return_address,sizeof call.return_address)) { lanes.poison(LaneFault::invalid_stack); return hook->original; }
+    call.id=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
+    call.parent=lane->depth ? lane->calls[lane->depth-1].id : 0;
+    auto& context=call.context;
+    context={}; context.invocation_id=call.id; context.parent_invocation_id=call.parent;
+    context.globals=hook->capture_plan.globals; context.globals_valid=hook->capture_plan.globals_valid;
+    const std::array<std::uint64_t,4> gp{{frame->rcx,frame->rdx,frame->r8,frame->r9}};
+    for (unsigned index=0;index<hook->capture_plan.plan.arg_count;++index) {
+        if (!(hook->capture_plan.plan.arg_mask&(1u<<index))) continue;
+        if (index<4) context.args[index]=gp[index];
+        else if (!capture_read(nullptr,frame->stack+40+(index-4)*8,&context.args[index],8)) {
+            lanes.poison(LaneFault::invalid_stack); return hook->original;
+        }
+        context.args_valid|=1u<<index;
+    }
+    context.entry_refs=context.args; context.entry_valid=context.args_valid;
+    if (lane->depth) { context.parent_refs=lane->calls[lane->depth-1].context.entry_refs; context.parent_valid=lane->calls[lane->depth-1].context.entry_valid; }
+    ++lane->depth; frame->return_target=1;
+    RecordHeader header{};
+    header.ticket=call.id; header.invocation=call.id; header.parent=call.parent;
+    header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
+    header.active=runtime.active.load(std::memory_order_acquire);
+    header.activity=header.activity_begin; header.args=context.args; header.return_address=call.return_address;
+    header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId();
+    for (unsigned i=0;i<lane_count;++i) if (lanes.lanes[i].get()==lane) header.lane=i;
+    header.depth=lane->depth; header.phase=Phase::entry; header.arg_mask=context.args_valid;
+    capture(hook->capture_plan.plan,Phase::entry,context,capture_read,nullptr,lane->snapshot);
+    lanes.publish(*lane,header);
+    return hook->original;
+}
 extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcept {
-    auto& runtime = state();
-    if (mode == 2) {
-        runtime.active.fetch_sub(1);
-        runtime.activity_generation.fetch_add(1);
+    using namespace arkdps::capture;
+    auto& runtime=state();
+    auto& lanes=*runtime.lanes;
+    if (mode==2) {
+        runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel);
+        runtime.active.fetch_sub(1,std::memory_order_acq_rel);
         return nullptr;
     }
-    if (!invocations.depth) return nullptr;
-    // Keep the slot on the stack until after JS: native calls made by an onLeave
-    // can themselves enter instrumented functions and need a distinct TLS slot.
-    auto& invocation = invocations.calls[invocations.depth - 1];
-    const auto target = invocation.return_address;
-    TimingSpan timing(invocation.hook->timing_id*2+1);
-    try {
-        TimingLock lock(runtime.mutex, timing);
-        JS_UpdateStackTop(runtime.runtime);
-        if (runtime.fatal.empty() && !JS_IsUndefined(invocation.receiver)) {
-            auto value = pointer(runtime.context, frame->rax);
-            try { callback(runtime.context, invocation.hook, "onLeave", invocation.receiver, 1, &value); }
-            catch (...) { JS_FreeValue(runtime.context, value); throw; }
-            JS_FreeValue(runtime.context, value);
-        }
-        JS_FreeValue(runtime.context, invocation.receiver);
-        invocation.receiver = JS_UNDEFINED;
-    } catch (const std::exception& error) { std::lock_guard<std::recursive_mutex> lock(runtime.mutex); fail(error.what()); }
-    catch (...) { std::lock_guard<std::recursive_mutex> lock(runtime.mutex); fail("native onLeave failed"); }
-    --invocations.depth;
-    runtime.active.fetch_sub(1);
-    runtime.activity_generation.fetch_add(1);
-    return reinterpret_cast<void*>(target);
+    auto* lane=lanes.current();
+    if (!lane || !lane->depth) {
+        lanes.poison(LaneFault::invalid_stack);
+        runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel);
+        runtime.active.fetch_sub(1,std::memory_order_acq_rel);
+        return nullptr;
+    }
+    auto& call=lane->calls[lane->depth-1];
+    auto* hook=static_cast<Hook*>(call.hook);
+    RecordHeader header{};
+    header.ticket=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
+    header.invocation=call.id; header.parent=call.parent;
+    header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId();
+    for (unsigned i=0;i<lane_count;++i) if (lanes.lanes[i].get()==lane) header.lane=i;
+    header.depth=lane->depth; header.phase=Phase::leave;
+    header.args=call.context.args; header.arg_mask=call.context.args_valid;
+    header.return_value=frame->rax; header.return_address=call.return_address;
+    header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
+    header.active=runtime.active.load(std::memory_order_acquire);
+    call.context.return_value=frame->rax; call.context.return_valid=true;
+    capture(hook->capture_plan.plan,Phase::leave,call.context,capture_read,nullptr,lane->snapshot);
+    header.activity=runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel)+1;
+    header.active_after=runtime.active.fetch_sub(1,std::memory_order_acq_rel)-1;
+    header.closed_after=header.active_after==0 && header.activity==header.activity_begin+1;
+    lanes.publish(*lane,header);
+    --lane->depth;
+    return nullptr;
 }
 
 namespace arkdps {
-void initialize(const std::string& source) {
+void initialize_on_worker(const std::string& source) {
     auto& runtime = state();
-    std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
     if (runtime.runtime) throw std::runtime_error("native runtime can only initialize once per process");
     if (source.empty() || source.size() > 2 * max_read) throw std::runtime_error("invalid probe source size");
     const auto status = MH_Initialize();
@@ -604,10 +787,14 @@ void initialize(const std::string& source) {
     function(c,global,"__send",js_send,1);function(c,global,"__nativeActive",js_active,0);function(c,global,"__pid",js_pid,0);
     try {
         evaluate(c, arkdps_bridge_source, "native-bridge.js");
+        evaluate(c, "globalThis.arkdpsNativeAsyncCapture=true;", "native-async.js");
+        runtime.replay_begin=JS_GetPropertyStr(c,global,"__arkdpsReplayBegin");
+        runtime.replay_end=JS_GetPropertyStr(c,global,"__arkdpsReplayEnd");
         runtime.pointer = JS_GetPropertyStr(c, global, "__arkdpsPointer");
         runtime.argument_view = JS_GetPropertyStr(c, global, "__arkdpsArguments");
         runtime.dispatch = JS_GetPropertyStr(c, global, "__arkdpsRequest");
         evaluate(c, source, "event-probe.js");
+        runtime.prefix_projection=JS_GetPropertyStr(c,global,"__arkdpsOnClosedRecord");
         if (runtime.ready.empty()) throw std::runtime_error("probe did not publish readiness");
         for (const auto& hook : runtime.hooks) {
             if (hook->detached) continue;
@@ -616,6 +803,7 @@ void initialize(const std::string& source) {
         // All JS definitions and retained function handles now exist before the
         // first target thread can execute one of the enabled callbacks.
         runtime.initialized = true;
+        runtime.lanes->enabled.store(true,std::memory_order_release);
         if (MH_ApplyQueued() != MH_OK) throw std::runtime_error("could not enable native hooks");
         JS_FreeValue(c, global);
     } catch (...) {
@@ -625,120 +813,132 @@ void initialize(const std::string& source) {
         throw;
     }
 }
-std::string readiness() {
+std::string readiness_on_worker() {
     auto& runtime = state();
-    std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
     if (!runtime.initialized || !runtime.fatal.empty()) throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
     return runtime.ready;
 }
-std::string request(const std::string& json) {
-    unsigned operation_id = timing_request+3;
-    if (timing_state.enabled.load(std::memory_order_relaxed)) {
-        if (json.find("\"operation\":\"mark\"") != std::string::npos) operation_id = timing_request;
-        else if (json.find("\"operation\":\"read\"") != std::string::npos) operation_id = timing_request+1;
-        else if (json.find("\"operation\":\"ack\"") != std::string::npos) operation_id = timing_request+2;
+std::string request_on_worker(const std::string& json) {
+    auto& runtime=state();
+    if (json.size()>8*max_read) throw std::runtime_error("request too large");
+    const auto command=nlohmann::json::parse(json,[](int depth,nlohmann::json::parse_event_t,nlohmann::json&) {
+        if (depth>64) throw std::runtime_error("request nesting exceeds limit");
+        return true;
+    });
+    const auto operation=command.value("operation",std::string());
+    const bool stopping=operation=="stop";
+    TimingSpan timing(timing_request,true);
+    bool diagnostic=false, diagnostic_snapshot=false;
+    if (operation=="mark" && command.contains("native_timing")) {
+        const auto& control=command.at("native_timing");
+        if (control.is_object() && control.value("version",nlohmann::json())==1
+            && control.contains("enabled") && control.at("enabled").is_boolean()) {
+            timing_state.enabled.store(control.at("enabled").get<bool>(),std::memory_order_relaxed);
+            diagnostic=true; diagnostic_snapshot=control.value("snapshot",false);
+        }
     }
-    bool timing_reply = false, timing_take_snapshot = false;
-    auto& runtime = state();
-    std::string result;
-    std::exception_ptr failure;
-    bool stopping = false;
-    {
-    TimingSpan timing(operation_id, true);
-    try {
-        TimingLock lock(runtime.mutex, timing);
-        if (json.size() > 8 * max_read) throw std::runtime_error("request is too large");
-        const auto command = nlohmann::json::parse(json, [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
-            if (depth > 64) throw std::runtime_error("request nesting exceeds limit");
-            return true;
-        });
-        if (command.is_object() && command.value("operation", nlohmann::json()) == "mark"
-                && command.contains("native_timing")) {
-            const auto& control = command["native_timing"];
-            if (control.is_object() && control.value("version", 0) == 1
-                    && control.contains("enabled") && control["enabled"].is_boolean()) {
-                timing_state.enabled.store(control["enabled"].get<bool>(), std::memory_order_relaxed);
-                timing_reply = true;
-                timing_take_snapshot = control.value("snapshot", false);
-            }
-        }
-        stopping = command.is_object() && command.value("operation", nlohmann::json()) == "stop";
-        if (stopping) {
-            // This path is available even after a fatal callback. Do not leave
-            // native detours enabled merely because JS can no longer run.
-            runtime.stopping.store(true);
-            for (const auto& hook : runtime.hooks) {
-                const auto status = MH_QueueDisableHook(hook->address);
-                if (status != MH_OK) throw std::runtime_error("could not queue every native hook for stop");
-                hook->detached = true;
-            }
-        }
-        if (!runtime.initialized || !runtime.fatal.empty()) {
-            if (!stopping) throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
-            result = "{\"active\":0}";
-        } else {
-            if (!runtime.context) throw std::runtime_error("native runtime has no JavaScript context");
-            JS_UpdateStackTop(runtime.runtime);
-            auto argument = JS_NewStringLen(runtime.context, json.data(), json.size());
-            const auto dispatch_started = timing.sampled ? ticks_now() : 0;
-            auto value = JS_Call(runtime.context, runtime.dispatch, JS_UNDEFINED, 1, &argument);
-            if (timing.sampled) timing.js += ticks_now()-dispatch_started;
-            JS_FreeValue(runtime.context, argument);
-            if (JS_IsException(value)) throw std::runtime_error(exception(runtime.context));
-            result = string(runtime.context, value);
-            JS_FreeValue(runtime.context, value);
-        }
-    } catch (...) { failure = std::current_exception(); }
-    }
-    // No QuickJS lock while MinHook suspends threads: a game thread can be
-    // blocked acquiring that lock after entering our thunk.
-    if (MH_ApplyQueued() != MH_OK) throw std::runtime_error("could not apply native hook changes");
     if (stopping) {
-        using Clock = std::chrono::steady_clock;
-        const auto deadline = Clock::now() + std::chrono::seconds(2);
-        auto quiet_since = Clock::now();
-        auto generation = runtime.activity_generation.load();
+        runtime.stopping.store(true,std::memory_order_release);
+        runtime.lanes->enabled.store(false,std::memory_order_release);
+        for (auto& hook : runtime.hooks) {
+            if (MH_QueueDisableHook(hook->address)!=MH_OK) throw std::runtime_error("could not disable native hooks");
+            hook->detached=true;
+        }
+        if (MH_ApplyQueued()!=MH_OK) throw std::runtime_error("could not apply native stop");
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+        auto quiet_since=std::chrono::steady_clock::now();
+        auto previous=runtime.activity_generation.load(std::memory_order_acquire);
         for (;;) {
-            const auto current = runtime.activity_generation.load();
-            const auto active = runtime.active.load();
-            const auto now = Clock::now();
-            if (active || current != generation) { quiet_since = now; generation = current; }
-            if (!active && now - quiet_since >= std::chrono::milliseconds(25)) break;
-            if (now >= deadline) throw std::runtime_error("native hooks disabled but callbacks did not drain within 2 seconds; active=" + std::to_string(active));
-            // Original functions and their onLeave callbacks must be able to
-            // acquire the JS mutex while stop waits for their full lifetime.
-            Sleep(1);
+            drain_captures();
+            const auto generation=runtime.activity_generation.load(std::memory_order_acquire);
+            const auto active=runtime.active.load(std::memory_order_acquire);
+            const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
+            const auto now=std::chrono::steady_clock::now();
+            if (generation!=previous || active || runtime.processed_ticket!=reserved) quiet_since=now;
+            previous=generation;
+            if (!runtime.fatal.empty()) throw std::runtime_error("hooks disabled; capture drain failed: "+runtime.fatal);
+            if (!active && runtime.processed_ticket==reserved && now-quiet_since>=std::chrono::milliseconds(25)) break;
+            if (now>=deadline) throw std::runtime_error("hooks disabled; native calls/capture prefix did not drain");
+            Sleep(1); // Worker/host only; game original functions never wait here.
         }
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-        if (runtime.active.load() || runtime.activity_generation.load() != generation)
-            throw std::runtime_error("native stop lost its quiet fence; active=" + std::to_string(runtime.active.load()));
-        if (!runtime.fatal.empty()) throw std::runtime_error("native hooks disabled; active=" + std::to_string(runtime.active.load()) + "; fatal: " + runtime.fatal);
-        if (!failure) {
-            auto value = nlohmann::json::parse(result);
-            value["active"] = runtime.active.load();
-            value["native_quiet"] = true;
-            value["native_activity_generation"] = std::to_string(runtime.activity_generation.load());
-            result = value.dump();
-        }
+    } else {
+        drain_captures();
+        if (!runtime.initialized || !runtime.fatal.empty()) throw std::runtime_error(runtime.fatal.empty() ? "native runtime not ready" : runtime.fatal);
     }
-    if (failure) {
-        if (stopping) {
-            try { std::rethrow_exception(failure); }
-            catch (const std::exception& error) {
-                throw std::runtime_error("native hooks disabled; active=" + std::to_string(runtime.active.load()) + "; stop failed: " + error.what());
-            }
-        }
-        std::rethrow_exception(failure);
+    auto async_state=[&] {
+        return nlohmann::json{{"version",1},{"reserved_ticket",runtime.lanes->reserved.load(std::memory_order_acquire)},
+            {"processed_ticket",runtime.processed_ticket},{"closed_ticket",runtime.closed_ticket},
+            {"published_ticket",runtime.published_ticket},{"publication_ready",!runtime.captured_publication.empty()},
+            {"activity_generation",runtime.activity_generation.load(std::memory_order_acquire)},
+            {"active",runtime.active.load(std::memory_order_acquire)},
+            {"failure_code",runtime.lanes->failure.load(std::memory_order_acquire)}};
+    };
+    const auto opening=async_state();
+    if (operation=="ack") {
+        const auto sequence=capture::plan_uint(command.at("sequence"),UINT64_MAX);
+        if (sequence>runtime.delivered_sequence) throw std::runtime_error("native ACK exceeds delivered event prefix");
     }
-    if (timing_reply && !failure) try {
-        // Parsing/encoding diagnostic metadata must never hold the QuickJS mutex.
-        auto response = nlohmann::json::parse(result);
-        response["native_timing_control"] = {{"version", 1},
-            {"enabled", timing_state.enabled.load(std::memory_order_relaxed)}};
-        if (timing_take_snapshot) response["native_timing"] = timing_snapshot();
-        result = response.dump();
-    } catch (...) { /* Keep the original business reply if diagnostics fail. */ }
-    return result;
+    const bool reads=operation=="mark" || operation=="read" || operation=="terminal_read";
+    // No compatibility quiet-defer certificate is valid for the async backend.
+    // Terminal publication must be supplied by the native closed-prefix owner;
+    // until that endpoint is installed, refuse without calling JS read/ACK code.
+    if (operation=="terminal_read" || (reads && (opening.at("active")!=0
+        || opening.at("reserved_ticket")!=opening.at("processed_ticket"))))
+        return nlohmann::json{{"retry",true},{"events",nlohmann::json::array()},
+            {"hp_context",nlohmann::json::array()},{"error",nullptr},{"stopped",false},
+            {"mark_retry_reason","native_async_prefix_pending"},{"native_async_capture",opening}}.dump();
+    JS_UpdateStackTop(runtime.runtime);
+    auto argument=JS_NewStringLen(runtime.context,json.data(),json.size());
+    auto value=JS_Call(runtime.context,runtime.dispatch,JS_UNDEFINED,1,&argument);
+    JS_FreeValue(runtime.context,argument);
+    if (JS_IsException(value)) throw std::runtime_error(exception(runtime.context));
+    std::string encoded;
+    try { encoded=string(runtime.context,value); } catch (...) { JS_FreeValue(runtime.context,value); throw; }
+    JS_FreeValue(runtime.context,value);
+    auto response=nlohmann::json::parse(encoded);
+    if (!response.is_object()) throw std::runtime_error("native worker reply must be an object");
+    const auto closing=async_state();
+    response.erase("native_quiet_boundary_version"); response.erase("native_deferred_callbacks");
+    response["native_async_capture"]=closing;
+    if (reads && (opening.at("activity_generation")!=closing.at("activity_generation")
+        || closing.at("active")!=0 || closing.at("reserved_ticket")!=closing.at("processed_ticket"))) {
+        response["retry"]=true; response["events"]=nlohmann::json::array(); response["hp_context"]=nlohmann::json::array();
+        response["mark_retry_reason"]="native_async_prefix_changed";
+    } else if (operation=="read" && response.value("error",nlohmann::json()).is_null()
+               && !response.value("retry",false) && response.contains("events") && response.at("events").is_array()) {
+        const auto after=capture::plan_uint(command.at("after"),UINT64_MAX);
+        const auto through=capture::plan_uint(command.at("through"),UINT64_MAX);
+        bool contiguous=through>=after && through-after==response.at("events").size();
+        std::uint64_t sequence=after;
+        for (const auto& event : response.at("events")) {
+            if (!event.is_object() || !event.contains("sequence") || capture::plan_uint(event.at("sequence"),UINT64_MAX)!=++sequence) contiguous=false;
+        }
+        if (contiguous) runtime.delivered_sequence=(std::max)(runtime.delivered_sequence,through);
+    }
+    if (stopping) { response["native_quiet"]=true; response["active"]=0; }
+    if (diagnostic) {
+        response["native_timing_control"]={{"version",1},{"enabled",timing_state.enabled.load()},
+            {"callback_sampling",0},{"capture_timing_available",false}};
+        if (diagnostic_snapshot) response["native_timing"]=timing_snapshot();
+    }
+    return response.dump();
+}
+void initialize(const std::string& source) {
+    auto& runtime=state();
+    runtime.worker.start([source] {
+        state().lanes=std::make_unique<capture::CaptureLanes>();
+        initialize_on_worker(source);
+    },drain_captures);
+    runtime.worker.wait_initialized();
+}
+std::string readiness() {
+    return state().worker.submit([] { return readiness_on_worker(); });
+}
+std::string request(const std::string& json) {
+    return state().worker.submit([json] { return request_on_worker(json); });
+}
+std::string captured_prefix_publication() {
+    return state().worker.submit([] { return state().captured_publication; });
 }
 std::uint64_t timing_begin() noexcept {
     return timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
