@@ -15,7 +15,7 @@ const field={root:'absolute',kind:'bytes',bytes:24,role:'scope.class',projection
 const graph={revision:7,mode_epoch:5,fields:[{root:'absolute',kind:'bytes',bytes:4,role:'scope.static',projection:false,comparison:{version:1,words:[{offset:0,kind:'u32',value:2}]}},field]};
 __arkdpsReplayBegin(rec());const io=__arkdpsOwnedGraphPrimitives('scope',graph);globalThis.good=__arkdpsVerifiedGraphPrimitives(io,'scope',graph);globalThis.values=io.values(1);globalThis.staticRejected=reject(()=>io.values(0));globalThis.staticEnd=__arkdpsReplayEnd();
 __arkdpsReplayBegin(rec());globalThis.oldRejected=reject(()=>io.values(1));globalThis.oldEnd=__arkdpsReplayEnd();
-__arkdpsReplayBegin(rec());const forged=new io.constructor({replay:__arkdpsReplay,kind:'scope',graph});globalThis.forged=!__arkdpsVerifiedGraphPrimitives(forged,'scope',graph)&&reject(()=>forged.values(1));__arkdpsReplayEnd();
+__arkdpsReplayBegin(rec());const forged=new io.constructor({format:1,replay:__arkdpsReplay,kind:'scope',graph});globalThis.forged=!__arkdpsVerifiedGraphPrimitives(forged,'scope',graph)&&reject(()=>forged.values(1));__arkdpsReplayEnd();
 globalThis.bad=[];for(const m of ['phase','sign','wide','extra','missing','guard']){mode=m;status=0;__arkdpsReplayBegin(rec());const caught=reject(()=>__arkdpsOwnedGraphPrimitives('scope',graph));bad.push({m,caught,end:__arkdpsReplayEnd()});}
 mode='ok';__arkdpsReplayBegin(rec());const unsupported={...graph,fields:[{...field,observation:{values:[{kind:'float',offset:0}]}}]};const count=calls;globalThis.unsupported=__arkdpsOwnedGraphPrimitives('scope',unsupported)===null&&calls===count;__arkdpsReplayEnd();globalThis.live=live;
 `,c);

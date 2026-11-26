@@ -85,7 +85,7 @@ function checkExecute(kind,revision,epoch){
 }
 globalThis.__nativeOwnedGraphCheck=checkExecute;globalThis.__nativeOwnedGraphFailure=()=>0;
 __arkdpsReplayBegin(nativeRecord());const proof=__arkdpsOwnedGraphCheck('scope',checkGraph);
-globalThis.constructorForged=__arkdpsVerifiedGraphProof(new proof.constructor({replay:__arkdpsReplay,kind:"scope",graph:checkGraph,batch:{}}),"scope",checkGraph);
+globalThis.constructorForged=__arkdpsVerifiedGraphProof(new proof.constructor({format:0,replay:__arkdpsReplay,kind:"scope",graph:checkGraph,batch:{}}),"scope",checkGraph);
 globalThis.proofGood=__arkdpsVerifiedGraphProof(proof,'scope',checkGraph)&&Object.isFrozen(proof);
 globalThis.proofForged=__arkdpsVerifiedGraphProof({},'scope',checkGraph)||__arkdpsVerifiedGraphProof(true,'scope',checkGraph)||__arkdpsVerifiedGraphProof(proof,'publication',checkGraph);
 globalThis.proofValue=proof.slot(1).getBigUint64(0,true).toString();globalThis.proofEnd=__arkdpsReplayEnd();
