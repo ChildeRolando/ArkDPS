@@ -81,8 +81,8 @@ send({ready:true,fixture:'owned-native-view-semantic',capture_capabilities:__nat
 '''.replace('CASE', json.dumps(case)).replace('OFFSET', str(offset))
 
 
-def fresh_mark(pipe, fixture):
-    deadline = time.monotonic()+3
+def fresh_mark(pipe, fixture, *, deadline_seconds=3):
+    deadline = time.monotonic()+deadline_seconds
     fresh_mark.last_nudges = 0
     while time.monotonic() < deadline:
         results = Queue()
@@ -99,7 +99,7 @@ def fresh_mark(pipe, fixture):
         result = fixture.command('benchmark', count=1)
         fresh_mark.last_nudges += 1
         assert result['count'] == 1 and result['total'] == 650, result
-        pending.join(timeout=3)
+        pending.join(timeout=deadline_seconds)
         assert not pending.is_alive(), 'fresh mark did not finish'
         answer = results.get_nowait()
         if isinstance(answer, BaseException):

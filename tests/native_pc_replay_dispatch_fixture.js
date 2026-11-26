@@ -99,3 +99,12 @@ for(const reason of ['captured class ancestry cycle','captured class ancestry bu
  assert.deepEqual(Array.from(c.hierarchyGap[4].codes),[16]);
  assert(!JSON.stringify(c.hierarchyGap[4]).includes('0x123'));
 }
+
+vm.runInContext(`
+status=0;__arkdpsReplayBegin({version:1,native_view:true,ticket:'17',edge:'entry',checkpoint:0});
+__arkdpsReplayRole('body',0,7);
+try{__arkdpsReplayCheckpoint('body',9,()=>{throw Error('owned scope exit');});}catch(ignored){}
+globalThis.restoredPoint=[__arkdpsReplay.role,__arkdpsReplay.checkpoint,__arkdpsReplay.fieldId];
+globalThis.restoredPointEnd=__arkdpsReplayEnd();
+`,c);
+assert.deepEqual(Array.from(c.restoredPoint),['body',0,7]);assert.equal(c.restoredPointEnd.complete,true);

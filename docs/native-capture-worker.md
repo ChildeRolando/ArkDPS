@@ -203,3 +203,10 @@ OwnedReplayView的字段与segment索引仍保留原顺序语义（role/checkpoi
 增加327680字节worker驻留，无Game回调分配；不省略字段、guard、attempt范围或点位。
 生产HP计划生成的owned Snapshot专项覆盖小entry、changed回血及hostclaim publication输入；
 该索引微测只说明索引初始化成本，不能代替实际QuickJS共享HP回调与持续入队的吞吐验收。
+
+
+worker的标量验证使用固定kind范围，不为每次读取创建范围数组；Point/Witness/Checkpoint
+用三个局部值在finally中恢复精确角色，不创建暂存数组。这不改变角色/字段/检查点、错误分类、
+原生独立poison或浮点NaN的原始含义。`native_async_scalar_validation_owned.py`可在已有DLL的自有
+child中，使用真实owned lease与原生provider对照两个实际标量验证函数；它测量helper成本，
+不包含完整scope/publication/生产HP吞吐，也不声明游戏FPS改善。

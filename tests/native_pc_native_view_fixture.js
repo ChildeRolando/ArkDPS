@@ -152,3 +152,30 @@ assert.equal(c.numericPinned.complete,true);assert(c.numericFlagRebuilt);assert.
 assert(c.concurrentBytes);assert(c.concurrentScalar);assert(c.concurrentWitness);assert.equal(c.concurrentOptional.available,false);assert.equal(c.concurrentArguments,'0');assert(c.concurrentFrozen);assert.equal(c.concurrentEnd.complete,true);assert.equal(c.concurrentEnd.unreadable_reads,4);for(const key of ['concurrentBadAddress','concurrentBadField','concurrentBadPoint']){assert(c[key]);assert.equal(c[key+'End'].complete,false);}assert.equal(c.afterConcurrent,251);assert.equal(c.afterConcurrentEnd.complete,true);
 
 assert.deepEqual(Array.from(c.packedFlags,x=>Array.from(x)),[[false,false],[true,false],[false,true],[true,true]]);assert(c.badPackedFlags);
+
+// Scalar validation has no temporary range arrays; the semantics stay strict.
+vm.runInContext(`
+const originalScalarValidation=__nativeOwnedScalar;
+globalThis.scalarValidation=[];
+for(const [kind,value]of [[0,-1],[0,256],[1,65536],[2,4294967296],[2,9007199254740992],[3,-2147483649],[3,1.5],[2,NaN],[2,Infinity],[4,-1n],[5,9223372036854775808n]]){
+ globalThis.__nativeOwnedScalar=()=>value;status=0;__arkdpsReplayBegin(nativeRecord());
+ const rejected=rejects(()=>__arkdpsReplayPoint('body',()=>__arkdpsOwnedScalar(4096n,kind)));
+ scalarValidation.push({rejected,complete:__arkdpsReplayEnd().complete});
+}
+globalThis.__nativeOwnedScalar=()=>NaN;status=0;__arkdpsReplayBegin(nativeRecord());
+globalThis.floatNan=__arkdpsReplayPoint('body',()=>__arkdpsOwnedScalar(4096n,6));
+globalThis.floatNanEnd=__arkdpsReplayEnd();
+globalThis.__nativeOwnedScalar=originalScalarValidation;
+`,c);
+assert(Array.from(c.scalarValidation).every(x=>x.rejected&&!x.complete));
+assert(Number.isNaN(c.floatNan));assert.equal(c.floatNanEnd.complete,true);
+
+vm.runInContext(`
+globalThis.invalidKinds=[];const kindScalar=__nativeOwnedScalar;globalThis.__nativeOwnedScalar=()=>0;
+for(const kind of [-1,1.5,7,NaN]){
+ status=0;__arkdpsReplayBegin(nativeRecord());
+ const rejected=rejects(()=>__arkdpsOwnedScalar(4096n,kind));invalidKinds.push({rejected,complete:__arkdpsReplayEnd().complete});
+}
+globalThis.__nativeOwnedScalar=kindScalar;
+`,c);
+assert(Array.from(c.invalidKinds).every(x=>x.rejected&&!x.complete));

@@ -172,20 +172,20 @@ function __arkdpsCapturedAssignable(base,klass){
 function __arkdpsReplayPoint(role,body){
  if(__arkdpsReplay===null)return body();
  if(typeof role!=='string'||typeof body!=='function')__arkdpsReplayGap('invalid replay point');
- const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId];
+ const replay=__arkdpsReplay,previousRole=replay.role,previousField=replay.fieldId;
  replay.role=role;replay.fieldId=null;
- try{return body();}finally{replay.role=previous[0];replay.fieldId=previous[1];}
+ try{return body();}finally{replay.role=previousRole;replay.fieldId=previousField;}
 }
 function __arkdpsReplayCheckpoint(role,checkpoint,body){
  if(__arkdpsReplay===null)return body();
  if(!Number.isSafeInteger(checkpoint)||checkpoint<0)__arkdpsReplayGap('invalid parent checkpoint');
- const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId,replay.checkpoint];
+ const replay=__arkdpsReplay,previousRole=replay.role,previousField=replay.fieldId,previousCheckpoint=replay.checkpoint;
  replay.role=role;replay.fieldId=null;replay.checkpoint=checkpoint;
- try{return body();}finally{[replay.role,replay.fieldId,replay.checkpoint]=previous;}
+ try{return body();}finally{replay.role=previousRole;replay.fieldId=previousField;replay.checkpoint=previousCheckpoint;}
 }
 function __arkdpsReplayWitness(role,body){
  if(__arkdpsReplay===null)return body();
- const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId,replay.checkpoint],checkpoint=replay.record.checkpoint??0;
+ const replay=__arkdpsReplay,previousRole=replay.role,previousField=replay.fieldId,previousCheckpoint=replay.checkpoint,checkpoint=replay.record.checkpoint??0;
  let fieldId;
  if(replay.native){
   const packed=__arkdpsNativePoint(role,checkpoint);
@@ -198,7 +198,7 @@ function __arkdpsReplayWitness(role,body){
   fieldId=[...ids][0];
  }
  replay.role=role;replay.fieldId=fieldId;replay.checkpoint=checkpoint;
- try{return body();}finally{[replay.role,replay.fieldId,replay.checkpoint]=previous;}
+ try{return body();}finally{replay.role=previousRole;replay.fieldId=previousField;replay.checkpoint=previousCheckpoint;}
 }
 function __arkdpsReplayOptional(role,read){
  if(__arkdpsReplay===null)return {available:true,value:read()};
@@ -289,10 +289,13 @@ function __arkdpsNativeAddress(address){
 }
 function __arkdpsOwnedScalar(address,kind){
  const replay=__arkdpsReplay;
+ if(!Number.isInteger(kind)||kind<0||kind>6)__arkdpsReplayGap('invalid native scalar kind');
  const value=__arkdpsNativeCall('__nativeOwnedScalar',replay.role,replay.checkpoint,replay.fieldId===null?-1:replay.fieldId,__arkdpsNativeAddress(address),kind);
  if(value===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
- const bounds=[[0,255],[0,65535],[0,4294967295],[-2147483648,2147483647]];
- if(kind<4){const [lo,hi]=bounds[kind];if(!Number.isInteger(value)||value<lo||value>hi)__arkdpsReplayGap('invalid native scalar integer');}
+ if(kind<4){
+  const lo=kind===3?-2147483648:0,hi=kind===0?255:kind===1?65535:kind===2?4294967295:2147483647;
+  if(!Number.isInteger(value)||value<lo||value>hi)__arkdpsReplayGap('invalid native scalar integer');
+ }
  else if(kind===4||kind===5){if(typeof value!=='bigint'||value<(kind===4?0n:-0x8000000000000000n)||value>(kind===4?0xffffffffffffffffn:0x7fffffffffffffffn))__arkdpsReplayGap('invalid native scalar bigint');}
  else if(kind!==6||typeof value!=='number')__arkdpsReplayGap('invalid native scalar float');
  return value;
