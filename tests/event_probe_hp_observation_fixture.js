@@ -13,7 +13,9 @@ function run(mode){
  if(mode==='null-attributes')f.write(actor.add(0xb0),f.ptr(0));
  const trace=[];f.context.hpIoTrace=(name)=>trace.push(name);
  vm.runInContext(`const baseApplyEntry=applyHpEntry,baseApplyLeave=applyHpLeave;
- const observedIo=Object.fromEntries(Object.entries(pointerHpIo).map(([name,read])=>[name,function(...args){hpIoTrace(name);return read(...args);} ]));
+ class ObservedHpIo{#base=pointerHpIo;read(name,args){hpIoTrace(name);return this.#base[name](...args);}}
+ for(const name of Object.keys(pointerHpIo))ObservedHpIo.prototype[name]=function(...args){return this.read(name,args);};
+ const observedIo=new ObservedHpIo();
  applyHpEntry=(receiver,args,io,label,attribute)=>baseApplyEntry(receiver,args,observedIo,label,attribute);
  applyHpLeave=(receiver,io,label)=>baseApplyLeave(receiver,observedIo,label);`,f.context);
  if(mode==='pending-rebirth')vm.runInContext('pendingEnemyRebirth.set(12,{})',f.context);

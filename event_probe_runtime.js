@@ -1898,8 +1898,8 @@ function isEnemy(object,klass=object.readPointer()) {
  if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
  return enemyClassCache.get(key);
 }
-function stageTrapId(object,id=targetKey(object),readClass=null) {
- return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,readClass?ptr(readClass(object)):object.readPointer())?id:null;
+function stageTrapId(object,id=targetKey(object),io=null) {
+ return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,io?ptr(io.trapClass(object)):object.readPointer())?id:null;
 }
 function beginEnemyHook(label) {
  epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
@@ -2803,7 +2803,7 @@ function applyHpEntry(receiver,args,io,label,attributeChange){
   if(!enemyTarget){
    if(attributeChange)return;
    try{capturedId=io.id(enemy)||null;}catch(error){return;}
-   if(!stageTrapId(enemy,capturedId,io.trapClass))return;
+   if(!stageTrapId(enemy,capturedId,io))return;
   }
   // This setter publishes only the closing scope. The opening clock still
   // detects a new round and brackets the write with the closing clock.
