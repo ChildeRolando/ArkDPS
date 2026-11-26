@@ -17,6 +17,8 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--compiler', default='g++')
     parser.add_argument('--optimization', choices=['O0', 'O2'], default='O0')
+    parser.add_argument('--fixture', choices=['bounded', 'production-hp'], default='bounded')
+    parser.add_argument('--build-only', action='store_true')
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -41,11 +43,16 @@ def main():
     binary = output / 'owned-batch-test.exe'
     command = [args.compiler, '-std=c++17', '-static', '-' + args.optimization, '-pthread', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                '-I', str(ROOT/'native_pc/native_event_runtime'), '-isystem', str(deps),
-               str(ROOT/'tests/owned_bounded_replay_test.cpp'), str(ROOT/'native_pc/native_event_runtime/native_capture.cpp'),
+               str(ROOT/'tests'/('production_hp_actual_engine.cpp' if args.fixture=='production-hp' else 'owned_bounded_replay_test.cpp')), str(ROOT/'native_pc/native_event_runtime/native_capture.cpp'),
                *[str(deps/name) for name in named], '-lpsapi', '-o', str(binary)]
     build = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=90)
     (output/'build.log').write_text(build.stdout + build.stderr)
     assert build.returncode == 0, (build.returncode, build.stdout, build.stderr)
+    if args.build_only:
+        (output/'build-receipt.json').write_text(json.dumps({'executed':False,'fixture':args.fixture,'optimization':args.optimization,'binary_sha256':digest(binary),'dependency_sha256':{str(p):digest(p) for p in inputs}},indent=2))
+        print('BUILT_OWNED_REPLAY', binary)
+        return
+    assert args.fixture=='bounded', 'production HP fixture requires --build-only and its explicit workload runner'
     cases = []
     for case in ['normal', 'fault', 'early', 'pending', 'string', 'nan']:
         run = subprocess.run([str(binary), case], cwd=ROOT, capture_output=True, text=True, timeout=10)

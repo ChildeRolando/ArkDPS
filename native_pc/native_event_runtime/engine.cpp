@@ -1020,7 +1020,7 @@ unsigned replay_bounded_batch(std::size_t first_size,std::chrono::steady_clock::
     if(incomplete||!valid_count)throw std::runtime_error("incomplete bounded replay result");
     return batch.issued;
 }
-bool drain_captures() noexcept {
+bool drain_captures_with_batch(bool allow_batch) noexcept {
     using namespace arkdps::capture;
     auto& runtime=state();
     if (!runtime.initialized || !runtime.fatal.empty()) return false;
@@ -1035,7 +1035,7 @@ bool drain_captures() noexcept {
             else if(!pop_replay_record(size))break;
             JS_UpdateStackTop(runtime.runtime);
             arkdps::capture::RecordHeader selected;std::memcpy(&selected,runtime.consume_buffer.data(),sizeof selected);
-            if(direct_record(selected))budget+=replay_bounded_batch(size,poll_deadline,512-budget)-1;
+            if(allow_batch&&direct_record(selected))budget+=replay_bounded_batch(size,poll_deadline,512-budget)-1;
             else {++runtime.single_replayed;++runtime.replay_fallbacks[static_cast<unsigned>(direct_record_reason(selected))];replay_record(runtime.consume_buffer.data(),size);}
             if (runtime.lanes->failure.load(std::memory_order_acquire))
                 throw std::runtime_error("native capture failed during replay");
@@ -1075,6 +1075,8 @@ bool drain_captures() noexcept {
     }
     return false;
 }
+bool drain_captures() noexcept {return drain_captures_with_batch(true);}
+
 }
 
 // Callback paths never enter QuickJS or touch the host mailbox.
