@@ -5,8 +5,16 @@
 #include <chrono>
 #include <iostream>
 #include <thread>
-#include <vector>
+#include <cstdlib>
+#include <new>
 using namespace arkdps::capture;
+static std::atomic<std::size_t> allocations{0};
+void* operator new(std::size_t n){allocations.fetch_add(1);if(auto p=std::malloc(n))return p;throw std::bad_alloc();}
+void operator delete(void* p) noexcept {std::free(p);}
+void operator delete(void* p,std::size_t) noexcept {std::free(p);}
+void* operator new[](std::size_t n){return ::operator new(n);}
+void operator delete[](void* p) noexcept {std::free(p);}
+void operator delete[](void* p,std::size_t) noexcept {std::free(p);}
 static std::array<std::byte,record_capacity> buffer;
 static void initialize(Lane& lane){
  lane.snapshot.byte_count=128;lane.snapshot.segment_count=1;lane.snapshot.field_count=1;lane.snapshot.error=Error::ok;
@@ -46,7 +54,9 @@ static void pressure(unsigned paused_ms,unsigned duration_ms){
   std::this_thread::sleep_until(began+std::chrono::milliseconds(paused_ms));
   for(unsigned i=1;i<=edges;){if(manager.next_ready(i)){consume(manager,i);popped.store(i++);}else{assert(!manager.failure.load());std::this_thread::yield();}}
  });
+ const auto hot_allocations=allocations.load();
  start.store(true,std::memory_order_release);producer.join();consumer.join();
+ assert(allocations.load()==hot_allocations);
  assert(done&&produced==edges&&popped==edges&&manager.failure.load()==0);
  auto& lane=*manager.lanes[0];const auto metric=lane_metric_snapshot(lane,false,0);
  assert(metric.consistent&&metric.resident_records==0&&metric.submitted==edges&&metric.peak_records>8192);
@@ -57,7 +67,7 @@ static void pressure(unsigned paused_ms,unsigned duration_ms){
  consume(manager,edges+1);const auto fresh=lane_metric_snapshot(lane,false,0);
  assert(fresh.generation==1&&fresh.submitted==1&&fresh.consumed==1&&fresh.thread_birth!=0);
  assert(manager.reclaim_terminated(0,true));
- std::cout<<"pressure pause="<<paused_ms<<"ms edges="<<edges<<" peak="<<metric.peak_records<<" bytes="<<metric.peak_bytes<<" fault=0\n";
+ std::cout<<"pressure pause="<<paused_ms<<"ms edges="<<edges<<" peak="<<metric.peak_records<<" bytes="<<metric.peak_bytes<<" fault=0 hot_cpp_allocations=0\n";
 }
 int main(){
  static_assert(static_cast<unsigned>(LaneFault::queue_full)==4&&static_cast<unsigned>(LaneFault::publication_failure)==9);
