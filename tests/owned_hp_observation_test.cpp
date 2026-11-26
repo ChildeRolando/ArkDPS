@@ -82,6 +82,19 @@ int main(){
  evaluate("packet["+std::to_string(at(code,"hp.before")+1)+"]===-9223372036854775808n");
  evaluate("(()=>{const s=packet["+std::to_string(at(code,"hp.id")+1)+"];return s.length===9&&[65,0,0x4e2d,0xd800,66,0xdfff,67,0xd83d,0xde00].every((v,i)=>s.charCodeAt(i)===v)})()");
  evaluate("(()=>{'use strict';try{packet[5]=9;return false}catch(e){return packet[5]===0}})()");JS_FreeValue(c,packet);
+ // Prepared adoption reuses the exact native-issued identity without re-reading.
+ begin(code,config,memory,*snapshot);packet=owned::prepare_hp_observation(c);assert(JS_IsObject(packet)&&!poisoned);
+ JSValue adoptedArgs[]{JS_NewBigUint64(c,0x9000),JS_NewBigUint64(c,memory.root()),JS_DupValue(c,packet)};
+ // Invalidate the underlying view after issue: adoption is identity-only, not prefetch.
+ owned::binding().view.reset();auto adopted=owned::hp_observation(c,JS_UNDEFINED,3,adoptedArgs);
+ assert(JS_IsObject(adopted)&&JS_VALUE_GET_PTR(adopted)==JS_VALUE_GET_PTR(packet)&&!poisoned);JS_FreeValue(c,adopted);
+ auto forged=JS_NewArray(c);JS_FreeValue(c,adoptedArgs[2]);adoptedArgs[2]=forged;
+ adopted=owned::hp_observation(c,JS_UNDEFINED,3,adoptedArgs);assert(JS_IsUndefined(adopted)&&poisoned);JS_FreeValue(c,adopted);
+ for(auto value:adoptedArgs)JS_FreeValue(c,value);
+ begin(code,config,memory,*snapshot);JSValue staleArgs[]{JS_NewBigUint64(c,0x9000),JS_NewBigUint64(c,memory.root()),JS_DupValue(c,packet)};
+ adopted=owned::hp_observation(c,JS_UNDEFINED,3,staleArgs);assert(JS_IsUndefined(adopted)&&poisoned);JS_FreeValue(c,adopted);
+ for(auto value:staleArgs)JS_FreeValue(c,value);
+ JS_FreeValue(c,packet);owned::end();
  // Empty UTF16 remains a real empty string, not a missing value.
  memory.set(memory.string,16,std::int32_t{0});capture_point(code,memory,*snapshot);begin(code,config,memory,*snapshot);packet=observe(c,memory.root());global=JS_GetGlobalObject(c);JS_SetPropertyStr(c,global,"packet",JS_DupValue(c,packet));JS_FreeValue(c,global);evaluate("packet["+std::to_string(at(code,"hp.id")+1)+"]==='' ");JS_FreeValue(c,packet);memory.initialize();capture_point(code,memory,*snapshot);
  // Every slot result, including structural defects, stays deferred until demanded.
@@ -115,3 +128,4 @@ int main(){
  auto object=JS_GetGlobalObject(legacy);auto absent=JS_GetPropertyStr(legacy,object,"__nativeOwnedProvider");assert(JS_IsUndefined(absent));JS_FreeValue(legacy,absent);JS_FreeValue(legacy,object);JS_FreeContext(legacy);
  JS_FreeRuntime(runtime);std::cout<<"PASS_RAW_HP_OBSERVATION actual compiled fields/capture/view/primitive UTF16/deferred failures/auto overlap/unique/lease/mode\n";
 }
+

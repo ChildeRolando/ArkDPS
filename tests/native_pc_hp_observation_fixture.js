@@ -51,6 +51,20 @@ mode='ok';const shortContract={...contract,fields:contract.fields.map(field=>fie
 mode='unused-words';__arkdpsReplayBegin(record(5,'leave'));const leave=__arkdpsOwnedHpObservation(contract,enemy),attrs=leave.attributes(enemy);globalThis.countZero=leave.attributeCount(attrs)===0&&!poisoned;globalThis.leaveClock=leave.clock();globalThis.leaveClosing=leave.closing(enemy);globalThis.leaveEnd=__arkdpsReplayEnd();
 mode='ok';__arkdpsReplayBegin(record(5,'leave'));const other=__arkdpsOwnedHpObservation(contract,enemy);globalThis.foreignAttrs=rejects(()=>other.attributeCount(attrs));globalThis.foreignAttrsEnd=__arkdpsReplayEnd();
 mode='trap-conflict';__arkdpsReplayBegin(record());const trap=__arkdpsOwnedHpObservation(contract,enemy);globalThis.noEarlyTrap=!poisoned;globalThis.trapConflict=rejects(()=>trap.trapClass(enemy));globalThis.trapPoison=poisoned;globalThis.trapEnd=__arkdpsReplayEnd();
+// Fake native issuing seam; actual identity/adoption is separately tested in CPP.
+mode='ok';const rawFactory=nativeObservation;let issued,adoptions=0;
+__nativeReplayHealthy=()=>!poisoned;
+__nativeOwnedHpObservation=function(hook,root,packet){if(arguments.length===3){adoptions++;if(packet!==issued){status=1;poisoned=true;return;}return packet;}return rawFactory(hook,root);};
+function packedHp(edge){const b=new ArrayBuffer(176),v=new DataView(b);for(const [i,n]of [[0,17],[7,5],[8,5],[13,3],[17,31],[18,edge]])v.setBigUint64(i*8,BigInt(n),true);return b;}
+function issue(edge){__arkdpsReplayBegin(record(5,edge));issued=rawFactory(36864n,4096n);__arkdpsReplayEnd();return issued;}
+const originalArguments=__arkdpsArguments;__arkdpsArguments=()=>{throw Error('direct must not make arguments');};
+const originalFactory=__arkdpsOwnedHpObservation;__arkdpsOwnedHpObservation=()=>{throw Error('direct must not refetch');};
+let callbackKeys;
+const directE=__arkdpsReplayDispatch(packedHp(0),function(actor,input){callbackKeys=Object.keys(this);if(!__arkdpsIsPreparedHpObservation(input,contract,actor))throw Error('brand');this.write=input.identity(actor)[1];},undefined,4096n,1,undefined,undefined,issue('entry'),contract);
+const directL=__arkdpsReplayDispatch(packedHp(1),function(input){if(!__arkdpsIsPreparedHpObservation(input,contract))throw Error('leave brand');this.closed=this.write;},directE[3],4096n,1,undefined,undefined,issue('leave'),contract);
+globalThis.directFacts={complete:directE[2]&&directL[2],same:directE[3]===directL[3],keys:callbackKeys,closed:directL[3].closed,adoptions};
+issue('entry');globalThis.forgedDirect=rejects(()=>__arkdpsReplayDispatch(packedHp(0),()=>{},undefined,4096n,1,undefined,undefined,Object.freeze([...issued]),contract));
+__arkdpsArguments=originalArguments;__arkdpsOwnedHpObservation=originalFactory;
 globalThis.liveCount=live;
 `,c);
 assert.equal(c.oldProvider,null);assert(c.successCalls&&c.goodEnd.complete);assert.equal(c.good[0][0],0xfedcba9876543210n);assert.equal(c.good[0][1],73);assert.equal(c.good[1],1);assert.equal(c.good[2],-9223372036854775808n);assert.equal(c.good[3],'A\0中\ud800B\udfffC\ud83d\ude00');assert.deepEqual(Array.from(c.good[4]),[30,-4294967296n,30]);
@@ -58,4 +72,5 @@ assert(c['before-planned']&&c['before-structural']&&c['before-missing']);assert(
 for(const i of [1,2])assert(c.failures[i].caught&&c.failures[i].nativeFault&&!c.failures[i].summary.complete);
 assert(c.unusedFault&&c.unusedEnd.complete);assert(c.receiverMutation&&!c.receiverEnd.complete);assert(c.expired&&!c.expiredEnd.complete);assert(c.pinned&&c.pinnedEnd.complete);assert(c.replaced&&!c.replacedEnd.complete);assert(c.oldEpoch&&c.oldEpochEnd.complete);
 assert(Array.from(c.malformed).every(row=>row.caught&&!row.summary.complete));assert(c.longString&&!c.longStringEnd.complete);assert(c.shortString&&!c.shortStringEnd.complete);assert(c.countZero&&c.leaveEnd.complete);assert.deepEqual(Array.from(c.leaveClosing),[73,-9223372036854775808n]);assert(c.foreignAttrs&&!c.foreignAttrsEnd.complete);assert(c.noEarlyTrap&&c.trapConflict&&c.trapPoison&&!c.trapEnd.complete);assert.equal(c.liveCount,0);
+assert(c.directFacts.complete&&c.directFacts.same&&c.directFacts.closed===73&&c.directFacts.adoptions===2);assert.deepEqual(Array.from(c.directFacts.keys),['threadId']);assert(c.forgedDirect);
 console.log('PASS_RAW_HP_JS provider pin/primitive types/deferred structural+planned/mode/cp/private receiver/lease/trap/count0/no live');

@@ -36,18 +36,23 @@ struct Binding {
     std::uintptr_t hp_root=0;std::uint32_t hp_checkpoint=0;
     std::uint64_t hp_mode=0;bool hp_issued=false;
     std::array<std::uint16_t,16> hp_status{};
+    JSContext* hp_packet_context=nullptr;JSValue hp_packet=JS_UNDEFINED;
 };
 inline Binding& binding() { static auto* value = new Binding; return *value; }
 inline void error(capture::Error value) noexcept {
     auto& owner=binding();owner.error=value;
     if (capture::OwnedReplayView::structural(value) && owner.poison) owner.poison();
 }
+inline void release_hp_packet() noexcept {
+    auto& owner=binding();if(owner.hp_packet_context)JS_FreeValue(owner.hp_packet_context,owner.hp_packet);
+    owner.hp_packet=JS_UNDEFINED;owner.hp_packet_context=nullptr;owner.hp_issued=false;
+}
 inline capture::Error begin(const void* segments,std::size_t segment_count,
                            const void* fields,std::size_t field_count,
                            const std::byte* payload,std::size_t payload_bytes,
                            const std::vector<std::string>& roles,std::uint64_t ticket,
                            capture::Error record_error,bool concurrent=false) noexcept {
-    auto& owner=binding();owner.roles=&roles;owner.ticket=ticket;owner.concurrent=concurrent;
+    release_hp_packet();auto& owner=binding();owner.roles=&roles;owner.ticket=ticket;owner.concurrent=concurrent;
     owner.js_exception=false;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;
     owner.error=owner.view.initialize(segments,segment_count,fields,field_count,payload,payload_bytes,
                                      static_cast<std::uint16_t>(roles.size()),record_error);
@@ -56,7 +61,7 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
     return owner.error;
 }
 inline void end() noexcept {
-    auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;owner.view.reset();
+    release_hp_packet();auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;owner.view.reset();
 }
 struct Lease {
     Lease()=default;Lease(const Lease&)=delete;Lease& operator=(const Lease&)=delete;
@@ -235,7 +240,7 @@ inline JSValue execute_read_batch(JSContext* c,const ReadProgram& plan,unsigned 
 }
 inline void bind_hp_observation(const capture::CompiledPlan* plan,capture::Phase phase,std::uintptr_t root,
                                 std::uint32_t checkpoint,std::uint64_t mode=0) noexcept {
-    auto& owner=binding();owner.hp_plan=plan;owner.hp_phase=phase;owner.hp_root=root;
+    release_hp_packet();auto& owner=binding();owner.hp_plan=plan;owner.hp_phase=phase;owner.hp_root=root;
     owner.hp_checkpoint=checkpoint;owner.hp_mode=mode;owner.hp_issued=false;
 }
 // QuickJS's pinned UTF8 decoder accepts surrogate code points and preserves
@@ -252,14 +257,11 @@ inline JSValue observation_string(JSContext* c,const std::byte* bytes) {
     }
     return allocated(JS_NewStringLen(c,encoded.data(),cursor));
 }
-inline JSValue hp_observation(JSContext* c,JSValueConst,int count,JSValueConst* args) {
-    auto& owner=binding();owner.js_exception=false;std::uintptr_t hook=0,root=0;
-    if(count!=2||!owner.active||!owner.hp_plan||!owner.hp_plan->hp_observations_ready
-        ||!address(c,args[0],hook)||!address(c,args[1],root)||hook!=owner.hp_plan->hook_address||root!=owner.hp_root||!root
-        ||(owner.hp_phase!=capture::Phase::entry&&owner.hp_phase!=capture::Phase::leave)) {
-        if(!owner.js_exception)error(capture::Error::invalid_plan);
-        return unavailable();
-    }
+inline JSValue prepare_hp_observation(JSContext* c) {
+    auto& owner=binding();owner.js_exception=false;
+    if(!owner.active||!owner.hp_plan||!owner.hp_plan->hp_observations_ready||!owner.hp_root
+        ||(owner.hp_phase!=capture::Phase::entry&&owner.hp_phase!=capture::Phase::leave)) {error(capture::Error::invalid_plan);return JS_UNDEFINED;}
+    release_hp_packet();
     const auto& fields=owner.hp_plan->hp_observations[owner.hp_phase==capture::Phase::entry?0:1];
     JSValue result=JS_NewArray(c);if(JS_IsException(result)){conversion_exception();return result;}
     unsigned cursor=0;bool failed=false;
@@ -270,7 +272,7 @@ inline JSValue hp_observation(JSContext* c,JSValueConst,int count,JSValueConst* 
     for(unsigned i=0;i<fields.size()&&!failed;++i){
         const auto& field=fields[i];std::array<std::byte,12+capture::max_string_units*2> bytes;std::size_t size=0;
         const bool present=owner.view.field_present(field.raw.role_id,owner.hp_checkpoint,field.presence_id);
-        const auto observed=read_owned_field(field.raw,root,owner.hp_checkpoint,bytes.data(),size);
+        const auto observed=read_owned_field(field.raw,owner.hp_root,owner.hp_checkpoint,bytes.data(),size);
         // Auto body reads may be owned by another independent successful field
         // even when the nominal primary field was not captured at this tier.
         const auto status=!present&&observed==capture::Error::missing_plan_field?65535u:static_cast<unsigned>(observed);
@@ -291,7 +293,22 @@ inline JSValue hp_observation(JSContext* c,JSValueConst,int count,JSValueConst* 
     if(failed||JS_DefinePropertyValueStr(c,result,"length",JS_NewUint32(c,cursor),0)<0||JS_PreventExtensions(c,result)<0){
         JS_FreeValue(c,result);conversion_exception();return JS_EXCEPTION;
     }
-    owner.hp_issued=true;error(capture::Error::ok);return result;
+    owner.hp_packet_context=c;owner.hp_packet=JS_DupValue(c,result);owner.hp_issued=true;error(capture::Error::ok);return result;
+}
+inline JSValue hp_observation(JSContext* c,JSValueConst,int count,JSValueConst* args) {
+    auto& owner=binding();owner.js_exception=false;std::uintptr_t hook=0,root=0;
+    if((count!=2&&count!=3)||!owner.active||!owner.hp_plan||!owner.hp_plan->hp_observations_ready
+        ||!address(c,args[0],hook)||!address(c,args[1],root)||hook!=owner.hp_plan->hook_address||root!=owner.hp_root||!root
+        ||(owner.hp_phase!=capture::Phase::entry&&owner.hp_phase!=capture::Phase::leave)) {
+        if(!owner.js_exception)error(capture::Error::invalid_plan);
+        return unavailable();
+    }
+    if(count==3){
+        if(!owner.hp_issued||owner.hp_packet_context!=c||!JS_IsObject(args[2])||!JS_IsObject(owner.hp_packet)
+            ||JS_VALUE_GET_PTR(args[2])!=JS_VALUE_GET_PTR(owner.hp_packet)) {error(capture::Error::invalid_plan);return JS_UNDEFINED;}
+        return JS_DupValue(c,owner.hp_packet);
+    }
+    return prepare_hp_observation(c);
 }
 inline JSValue consume_hp_failure(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     auto& owner=binding();owner.js_exception=false;double index=0;

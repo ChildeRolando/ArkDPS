@@ -44,6 +44,8 @@ struct Hook {
     void* original = nullptr;
     void* thunk = nullptr;
     JSValue callbacks = JS_UNDEFINED;
+    JSValue direct_entry = JS_UNDEFINED, direct_leave = JS_UNDEFINED;
+    JSValue direct_contract = JS_UNDEFINED;
     bool detached = false;
     arkdps::capture::CompiledPlan capture_plan;
 };
@@ -530,6 +532,15 @@ JSValue js_attach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
         runtime.configurations.intern(hook->capture_plan);
 
         hook->callbacks = JS_DupValue(c, args[1]);
+        // Setup-only immutable references: no mutable member lookup per raw edge.
+        if (hook->capture_plan.hp_normal && hook->capture_plan.hp_observations_ready) {
+            auto entry=JS_GetPropertyStr(c,args[1],"arkdpsDirectHpEntry");
+            auto leave=JS_GetPropertyStr(c,args[1],"arkdpsDirectHpLeave");
+            if (JS_IsFunction(c,entry) && JS_IsFunction(c,leave)) {
+                hook->direct_entry=entry;hook->direct_leave=leave;
+                hook->direct_contract=JS_GetPropertyStr(c,args[1],"arkdpsCaptureContract");
+            } else {JS_FreeValue(c,entry);JS_FreeValue(c,leave);}
+        }
         // A leaf thunk: movabs volatile r11,Hook*; jmp [rip+0]; .quad entry.
         // It changes no stack slots, so ordinary Windows leaf unwind remains valid.
         std::array<std::uint8_t, 24> code{{0x49,0xbb}};
@@ -694,18 +705,27 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     arkdps::owned_js::bind_graphs(runtime.configurations.find(header.configuration_id),header.scope_revision,header.publication_revision,header.mode_epoch,header.checkpoint);
     if (view_error!=Error::ok) {JS_FreeValue(c,packed_bytes);throw std::runtime_error("native owned view rejected structural capture");}
     runtime.replay_header=header; runtime.replay_active=true;
-    auto method=JS_GetPropertyStr(c,hook->callbacks,header.phase==Phase::entry ? "onEnter" : "onLeave");
-    auto callback_payload=header.phase==Phase::entry
+    // Only the ordinary, non-nested HP path can bypass generic arguments.
+    // Publication/cold/parent/concurrent edges retain the complete old wrapper.
+    const bool direct=hook->capture_plan.hp_normal && hook->capture_plan.hp_observations_ready
+        && JS_IsFunction(c,hook->direct_entry) && JS_IsFunction(c,hook->direct_leave)
+        && header.args[0] && header.depth==1 && !header.parent && !header.parent_checkpoint_count
+        && !header.capture_concurrent && !header.cold_revision && !header.publication_captured
+        && !header.publication_request && !header.projection_candidate;
+    auto prepared=direct ? arkdps::owned_js::prepare_hp_observation(c) : JS_UNDEFINED;
+    auto method=direct ? JS_DupValue(c,header.phase==Phase::entry ? hook->direct_entry : hook->direct_leave)
+        : JS_GetPropertyStr(c,hook->callbacks,header.phase==Phase::entry ? "onEnter" : "onLeave");
+    auto callback_payload=direct ? JS_NewBigUint64(c,header.args[0]) : header.phase==Phase::entry
         ? JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(header.args.data()),hook->capture_plan.plan->arg_count*8)
         : JS_NewBigUint64(c,header.return_value);
-    auto raw_return_address=header.phase==Phase::entry ? JS_NewBigUint64(c,header.return_address) : JS_UNDEFINED;
-    std::array<JSValue,7> dispatch_args{{packed_bytes,method,call.receiver,callback_payload,
+    auto raw_return_address=!direct && header.phase==Phase::entry ? JS_NewBigUint64(c,header.return_address) : JS_UNDEFINED;
+    std::array<JSValue,9> dispatch_args{{packed_bytes,method,call.receiver,callback_payload,
         JS_NewUint32(c,header.arg_mask),header.projection_candidate && header.closed_after ? runtime.prefix_projection : JS_UNDEFINED,
-        raw_return_address}};
+        raw_return_address,prepared,direct ? hook->direct_contract : JS_UNDEFINED}};
     JSValue answer=JS_EXCEPTION;
-    if (!JS_IsException(method) && !JS_IsException(callback_payload) && !JS_IsException(raw_return_address))
+    if (!JS_IsException(method) && !JS_IsException(callback_payload) && !JS_IsException(raw_return_address) && !JS_IsException(prepared) && (!direct || JS_IsObject(prepared)))
         answer=JS_Call(c,runtime.replay_dispatch,JS_UNDEFINED,dispatch_args.size(),dispatch_args.data());
-    JS_FreeValue(c,packed_bytes);JS_FreeValue(c,method);JS_FreeValue(c,callback_payload);JS_FreeValue(c,raw_return_address);
+    JS_FreeValue(c,packed_bytes);JS_FreeValue(c,method);JS_FreeValue(c,callback_payload);JS_FreeValue(c,raw_return_address);JS_FreeValue(c,prepared);
     runtime.replay_active=false;
     if (const auto failure=runtime.lanes->failure.load(std::memory_order_acquire)) {
         if (JS_IsException(answer)) {auto ignored=JS_GetException(c);JS_FreeValue(c,ignored);}

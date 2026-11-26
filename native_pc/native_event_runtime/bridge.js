@@ -74,13 +74,24 @@ function __arkdpsPackedCaptureRecord(bytes){return new __ArkDpsCaptureRecord(byt
 // by the worker before calling this function and remains live through End.
 // The result is only a transport envelope; C++ must independently inspect its
 // poison flag and complete bit before passing the projection to the journal.
-function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix,returnAddress){
+function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix,returnAddress,prepared,contract){
  const record=__arkdpsPackedCaptureRecord(header);
  __arkdpsReplayBegin(record);
  const replay=__arkdpsReplay;
  let projection,summary,healthy=false;
  try{
   if(typeof __nativeReplayHealthy!=='function')__arkdpsReplayGap('native replay health helper unavailable');
+  if(prepared!==undefined){
+   if(typeof callback!=='function'||typeof payload!=='bigint')__arkdpsReplayGap('invalid prepared HP callback');
+   const previousRole=replay.role,previousField=replay.fieldId,previousCheckpoint=replay.checkpoint;
+   replay.role='body';replay.fieldId=null;replay.checkpoint=record.checkpoint??0;
+   try{
+    const enemy=record.edge==='entry'?ptr(payload):payload;
+    const io=__arkdpsPreparedHpObservation(contract,enemy,prepared);
+    if(record.edge==='entry'){receiver={threadId:record.thread_id};callback.call(receiver,enemy,io);}
+    else callback.call(receiver,io);
+   }finally{replay.role=previousRole;replay.fieldId=previousField;replay.checkpoint=previousCheckpoint;}
+  }else{
   if(record.edge==='entry'){
    if(typeof returnAddress!=='bigint')__arkdpsReplayGap('native entry return address unavailable');
    receiver={threadId:record.thread_id,returnAddress:ptr(returnAddress),nativeCaptureInvocation:record.invocation_id,nativeCaptureModeEpoch:record.number(7)};
@@ -88,6 +99,7 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
   if(typeof callback==='function'){
    if(record.edge==='entry')callback.call(receiver,__arkdpsArguments(payload,argumentMask));
    else callback.call(receiver,ptr(payload));
+  }
   }
   healthy=__nativeReplayHealthy();
   if(typeof healthy!=='boolean')__arkdpsReplayGap('invalid native replay health');
@@ -294,7 +306,7 @@ function __arkdpsNativeCall(name,a,b,c,d,e){
   const native=__arkdpsReplay.native;
   switch(name){
    case '__nativeOwnedStatus':return native.__nativeOwnedStatus();
-   case '__nativeOwnedHpObservation':return native.__nativeOwnedHpObservation(a,b);
+   case '__nativeOwnedHpObservation':return c===undefined?native.__nativeOwnedHpObservation(a,b):native.__nativeOwnedHpObservation(a,b,c);
    case '__nativeOwnedConsumeHpFailure':return native.__nativeOwnedConsumeHpFailure(a);
    case '__nativeOwnedGraphFailure':return native.__nativeOwnedGraphFailure();
    case '__nativeOwnedGraphCheck':return native.__nativeOwnedGraphCheck(a,b,c);
@@ -320,10 +332,10 @@ function __arkdpsNativeAddress(address){
 }
 // Immutable metadata handles are registered once before native installation is
 // sealed. They contain read geometry only; values always come from this lease.
-const __arkdpsHpObservationGeometry=new WeakMap();
+const __arkdpsHpObservationGeometry=new WeakMap(),__arkdpsPreparedHpObservations=new WeakMap();
 class __ArkDpsHpObservation {
  #replay;#packet;#geometry;#root;#attributes=null;
- constructor(replay,packet,geometry,receiver,root){this.#replay=replay;this.#packet=packet;this.#geometry=geometry;this.#root=root;Object.freeze(this);}
+ constructor(replay,packet,geometry,receiver,root,contract,prepared){this.#replay=replay;this.#packet=packet;this.#geometry=geometry;this.#root=root;if(prepared)__arkdpsPreparedHpObservations.set(this,{replay,contract,root});Object.freeze(this);}
  #active(){if(this.#replay!==__arkdpsReplay)__arkdpsReplayGap('HP observation lease ended');}
  #object(receiver){this.#active();let root;try{root=__integer(receiver);}catch(error){__arkdpsReplayGap('invalid HP observation receiver');}if(root!==this.#root)__arkdpsReplayGap('HP observation receiver changed');}
  #fact(name){
@@ -353,10 +365,10 @@ class __ArkDpsHpObservation {
  attributeCount(handle){this.#active();if(handle!==this.#attributes||handle===null)__arkdpsReplayGap('foreign HP attribute observation');return this.#packet[this.#fact('attributes.count')];}
  attributeWords(handle){this.#active();if(handle!==this.#attributes||handle===null)__arkdpsReplayGap('foreign HP attribute observation');const at=this.#fact('attributes.slot0');return [this.#packet[at],this.#packet[at+1],this.#packet[at+2]];}
 }
-function __arkdpsOwnedHpObservation(contract,receiver){
+function __arkdpsCreateHpObservation(contract,receiver,prepared){
  const replay=__arkdpsReplay;if(!replay?.native)__arkdpsReplayGap('HP observation requires native replay');
  const native=replay.native;
- if(native.__nativeOwnedHpObservation===undefined&&native.__nativeOwnedConsumeHpFailure===undefined)return null;
+ if(native.__nativeOwnedHpObservation===undefined&&native.__nativeOwnedConsumeHpFailure===undefined){if(prepared!==undefined)__arkdpsReplayGap('prepared HP provider unavailable');return null;}
  if(typeof native.__nativeOwnedHpObservation!=='function'||typeof native.__nativeOwnedConsumeHpFailure!=='function'||!contract||typeof contract!=='object')__arkdpsReplayGap('invalid HP observation provider');
  let layouts=__arkdpsHpObservationGeometry.get(contract);
  if(!layouts){
@@ -385,11 +397,24 @@ function __arkdpsOwnedHpObservation(contract,receiver){
  const geometry=layouts[replay.record.edge];if(!geometry)__arkdpsReplayGap('invalid HP observation phase');
  let root,hook;try{root=__integer(receiver);hook=__integer(contract.address);}catch(error){__arkdpsReplayGap('invalid HP observation receiver');}
  if(root<=0n||root>0xffffffffffffffffn||hook<=0n||hook>0xffffffffffffffffn)__arkdpsReplayGap('invalid HP observation receiver');
- const packet=__arkdpsNativeCall('__nativeOwnedHpObservation',__arkdpsNativeAddress(hook),__arkdpsNativeAddress(root));
+ const packet=__arkdpsNativeCall('__nativeOwnedHpObservation',__arkdpsNativeAddress(hook),__arkdpsNativeAddress(root),prepared);
  if(packet===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
+ if(prepared!==undefined&&packet!==prepared)__arkdpsReplayGap('prepared HP packet identity changed');
  if(!Array.isArray(packet)||packet.length!==geometry.length||packet[0]!==1||packet[1]!==geometry.count||packet[2]!== (replay.record.edge==='entry'?0:1)||packet[3]!== (replay.record.checkpoint??0)||packet[4]!==replay.record.facts?.mode_epoch)__arkdpsReplayGap('invalid HP observation packet');
  try{Object.freeze(packet);}catch(error){__arkdpsReplayGap('mutable HP observation packet');}
- return new __ArkDpsHpObservation(replay,packet,geometry,receiver,root);
+ return new __ArkDpsHpObservation(replay,packet,geometry,receiver,root,contract,prepared!==undefined);
+}
+function __arkdpsOwnedHpObservation(contract,receiver){return __arkdpsCreateHpObservation(contract,receiver,undefined);}
+function __arkdpsPreparedHpObservation(contract,receiver,packet){
+ if(packet===undefined)__arkdpsReplayGap('missing prepared HP packet');
+ const io=__arkdpsCreateHpObservation(contract,receiver,packet);
+ if(io===null)__arkdpsReplayGap('unsupported prepared HP contract');return io;
+}
+function __arkdpsIsPreparedHpObservation(io,contract,receiver){
+ const state=__arkdpsPreparedHpObservations.get(io);
+ if(!state||state.replay!==__arkdpsReplay||state.contract!==contract)return false;
+ if(receiver!==undefined){try{if(__integer(receiver)!==state.root)return false;}catch(error){return false;}}
+ return true;
 }
 class __ArkDpsOwnedBatch {
  #view;#state;#mask;#head;
