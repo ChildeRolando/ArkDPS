@@ -33,4 +33,17 @@ assert.deepEqual(run('unchanged').trace,['identity','born','clock','id','hp','cl
 assert.deepEqual(run('empty-maxhp').trace,['identity','born','clock','id','hp','clock','closing','attributes','attributeCount']);
 assert.deepEqual(run('null-attributes').trace,['identity','born','clock','id','hp','clock','closing','attributes']);
 for(const mode of ['normal','unborn','nonenemy','trap','dirty-nonhp','pending-rebirth','unchanged','empty-maxhp','null-attributes'])assert.equal(run(mode).active,0,mode);
+{
+ const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),enemyHpState:true});
+ f.context.observationMeta={clock:vm.runInContext('clock',f.context),string_class:'0x1000',classes:{Enemy:f.enemyClass.toString()},skill_offsets:{}};
+ const plan=vm.runInContext('nativeCapturePlan("hp.Entity.SetHpInternal",ptr(1),observationMeta)',f.context);
+ for(const field of plan.fields){assert(field.observation,field.name);assert.equal(field.observation.name,field.name);for(const value of field.observation.values){assert(['u8','u32','u64','i64','utf16'].includes(value.kind));assert(Number.isInteger(value.offset));}}
+ f.context.rawObservationPlan=plan;
+ const sealed=vm.runInContext('sealedCaptureContract(rawObservationPlan)',f.context);
+ const original=plan.fields.find(field=>field.name==='hp.identity'),copied=sealed.fields.find(field=>field.name==='hp.identity');
+ assert.deepEqual(JSON.parse(JSON.stringify(copied.observation.values)),[{kind:'u64',offset:0},{kind:'u32',offset:24}]);
+ original.observation.values[0].offset=99;original.pointer_offsets.push(999);
+ assert.equal(copied.observation.values[0].offset,0);assert.equal(copied.pointer_offsets.length,0);
+ assert(Object.isFrozen(copied.observation.values));assert(Object.isFrozen(copied.observation.values[0]));assert(!Object.isFrozen(original.observation.values));
+}
 console.log('PASS_HP_OBSERVATION_OWNER count1 original branch-demand and active closure');

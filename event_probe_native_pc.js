@@ -235,12 +235,18 @@ function captureNativeInvocationRead(scope,read){
  if(matches.length!==1||!Number.isSafeInteger(matches[0].checkpoint))__arkdpsReplayGap('missing exact parent checkpoint');
  return __arkdpsReplayCheckpoint('parent.body',matches[0].checkpoint,read);
 }
+function sealedCaptureContract(value){
+ if(value===null||typeof value!=='object')return value;
+ if(Array.isArray(value))return Object.freeze(value.map(sealedCaptureContract));
+ const result={};for(const key of Object.keys(value))result[key]=sealedCaptureContract(value[key]);
+ return Object.freeze(result);
+}
 function prepareNativeCaptureHook(address,callbacks){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;
  if(!nativeCaptureMetadata||typeof callbacks.arkdpsName!=='string')throw new Error('native hook capture metadata/name missing');
  const plan=nativeCapturePlan(callbacks.arkdpsName,address,nativeCaptureMetadata);
  const capabilities=typeof __nativeCaptureCapabilities==='function'?__nativeCaptureCapabilities():null;
- callbacks.arkdpsCaptureContract={...finalizeNativeCapturePlan(plan,nativeCaptureMetadata,capabilities),mode_epoch:nativeCaptureModeEpoch};
+ callbacks.arkdpsCaptureContract=sealedCaptureContract({...finalizeNativeCapturePlan(plan,nativeCaptureMetadata,capabilities),mode_epoch:nativeCaptureModeEpoch});
  for(const edge of ['onEnter','onLeave'])if(typeof callbacks[edge]==='function'){
   const callback=callbacks[edge];
   callbacks[edge]=function(...args){
@@ -417,6 +423,13 @@ function nativeCapturePlan(name,address,metadata){
   // Entry ID text is owned BEFORE the write; no-change cannot delay it.
   // The native profile may skip only changed-tier MaxHP/closing scope when
   // exact opening/closing HP agrees and this is not a max-HP dirty callback.
+  // Mechanical raw projection descriptions belong to the very same capture
+  // fields. They do not decode Q32, XOR, eligibility, identity or scope.
+  const observationValues={clock_open:[['u32',0],['i64',4]],clock_close:[['u32',0]],
+   'hp.identity':[['u64',0],['u32',0x18]],'hp.born':[['u8',0]],'hp.before':[['i64',0]],
+   'hp.id':[['utf16',0]],'hp.closing':[['u32',0],['i64',0x28]],
+   'attributes.count':[['u32',0]],'attributes.slot0':[['u64',0],['u64',8],['u8',0x10]]};
+  for(const field of fields){const values=observationValues[field.name];if(values)field.observation={name:field.name,values:values.map(([kind,offset])=>({kind,offset}))};}
  }else if(['Enemy.Born','Enemy._UpdatePlayerSideAndMapLayer','Enemy.DoFakeDeath','Enemy.DoReborn','Enemy.OnFinish','Entity.OnFinish','BObject.OnRecycle','Character.Born'].includes(normalized)){
   profile='lifecycle';for(const phase of ['entry','leave']){clock(phase);entity(phase,'actor',0,[],false,null,normalized==='Character.Born');add(phase,'actor.tile',phase==='entry'?'arg':'entry_ref',0,[],0x360,8,{required:false});add(phase,'actor.finish_reason',phase==='entry'?'arg':'entry_ref',0,[],0x158,4,{required:false});}
   if(normalized==='Enemy.Born'||normalized==='Enemy._UpdatePlayerSideAndMapLayer')attr('leave',0,true);
