@@ -470,7 +470,7 @@ function nativeCapturePlan(name,address,metadata){
   const overload=metadata.factory_addresses.indexOf(address.toString());
   if(overload<0)throw new Error('unverified factory overload address');argumentsFor(overload+8);
  }
- return {schema_version:1,complete:false,name:normalized,address:address.toString(),abi:'win64-gp',profile,arg_count:argCount,arg_mask:argMask,
+ return {schema_version:1,complete:false,raw_collection:'all',name:normalized,address:address.toString(),abi:'win64-gp',profile,arg_count:argCount,arg_mask:argMask,
   globals,fields,max_bytes:profile==='shield'?131072:65536,max_reads:4096,
   ...(profile==='hp'?{hp_filter:{receiver_arg:0,attribute_index_arg:normalized==='Entity.OnAttributeDirty'?1:null,max_hp_attribute:0,enemy_class:metadata.classes.Enemy??null,enemy_base_class:metadata.classes.BObject??null,normal_setter:normalized==='Entity.SetHpInternal',nochange_preserve_epoch:true,preserve_nested_max_hp_dirty:true}}:{}),
   metadata:{classes:metadata.classes,skill_offsets:metadata.skill_offsets,attack_type_offset:metadata.attack_type_offset},

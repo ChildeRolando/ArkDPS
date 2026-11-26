@@ -9,6 +9,7 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
  const actualSource=platform==='mumu'?path.join(process.env.ARKDPS_PROBE_FIXTURE_ROOT ?? path.join(__dirname,'..'),'event_probe_android2791.js'):sourcePath;
  const f=fixture({platform,sourcePath:actualSource,...fixtureOptions}),zero=f.ptr(0),NS='Torappu.Battle.AutoChess';
  const adapter=vm.runInContext('probeAdapter',f.context);
+ const ownedClasses=new Map();
  const oldMark=f.context.rpc.exports.mark();
  assert.equal(oldMark.native_autochess_context,undefined,'ordinary stages must not read an absent host');
  function type(kind,data=zero){const p=f.alloc();f.write(p,data);f.write(p.add(8),kind<<16);return p;}
@@ -21,7 +22,7 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
    const p=table.add(index*32);f.write(p,f.text(name));f.write(p.add(8),type(kind,data));
    f.write(p.add(16),k);f.write(p.add(24),offset);
   }
-  return k;
+  ownedClasses.set(k.toString(),{name,namespace:ns,klass:k});return k;
  }
  function obj(k){const p=f.alloc();f.write(p,k);return p;}
  const stringClass=klass('String','System',0);
@@ -160,7 +161,7 @@ function world({sameCid=true,conflictingUid=false,duplicatePlayer=false,token=fa
   f.write(container.add(0x10),array);f.write(container.add(0x20),tokenCount);
  }
  const apiCount=f.apiCalls.length;
- return {...f,adapter,machine,center,manager,dict,playerList,players,roles,roleData,roleList,apiCount,phaseEnum,enumValues,
+ return {...f,ownedClasses,adapter,machine,center,manager,dict,playerList,players,roles,roleData,roleList,apiCount,phaseEnum,enumValues,
   tokenData,text,klass,data,list,pairs,mark:()=>f.context.rpc.exports.mark(),
   stamp(when={frame:0,game_time:0}){adapter.stampClock(when);return when;}};
 }

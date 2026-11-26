@@ -74,6 +74,17 @@ context.meta={found,clock:object};
 const metadata=vm.runInContext('__arkdpsPrepareColdMetadata(meta)',context);
 assert.equal(metadata.cold_metadata_ready,true);
 assert.equal(metadata.classes.AutoChessGameManager,found.AutoChessGameManager.toString());
+// Run the production adapter setup, rather than only its builder in isolation.
+const skillData=klass('SkillData','Torappu.Battle',systemObject),fieldTable=alloc(),prefabName=alloc(),prefabType=alloc(),systemNamespace=alloc();
+write(prefabName,'prefabKey');write(fieldTable,prefabName);write(fieldTable.add(8),prefabType);types.set(prefabType.toString(),string);
+write(skillData.add(0x80),fieldTable);write(skillData.add(0x124),1);write(systemNamespace,'System');write(string.add(0x18),systemNamespace);
+found.SkillData=skillData;apiTable.il2cpp_field_get_type=f=>f.add(8).readPointer();
+const adapter=fs.readFileSync(path.join(__dirname,'../event_probe_native_pc.js'),'utf8');
+const setup=adapter.slice(adapter.indexOf('function prepareNativeCaptureMetadata('),adapter.indexOf('const nativeCaptureColdBindings='));
+vm.runInContext("let nativeCaptureMetadata=null;const nativeCaptureModeHistory=new Map();const nativeAutoDesiredMode='all';globalThis.arkdpsNativeAsyncCapture=true;"+setup,context);
+vm.runInContext('prepareNativeCaptureMetadata({...meta,skillF:{charSkill:1,owner:2,data:3,prefab:4,id:5,name:6}});globalThis.adapterMetadata=nativeCaptureMetadata;',context);
+assert.equal(context.adapterMetadata.cold_metadata_ready,true);assert.equal(context.adapterMetadata.immutable_class_parents,true);
+assert.equal(context.adapterMetadata.cold_plan.fields.length,3);assert.equal(context.adapterMetadata.classes.AutoChessGameManager,found.AutoChessGameManager.toString());
 const before={reads,calls};replaying=true;
 context.manager=found.AutoChessGameManager;
 assert.equal(vm.runInContext('__arkdpsColdClassIdentity(manager,"AutoChessGameManager","Torappu.Battle.AutoChess")',context),true);
