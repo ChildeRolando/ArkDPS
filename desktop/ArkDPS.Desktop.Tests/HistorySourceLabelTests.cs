@@ -37,6 +37,13 @@ internal static class HistorySourceLabelTests
         Check("legacy practice filter position unchanged", legacy.Practice == "演习");
         Check("unrecognised platform stays unknown", Item("unknown").SourceLabel == "来源未记录");
         Check("shared projection is authoritative", Item("native_pc", "共享来源提示").SourceLabel == "共享来源提示");
+        var segment = new HistoryItem { Data = JsonSerializer.SerializeToElement(new
+        {
+            source_label = "PC", outcome = "采样片段", duration = "17.3 秒",
+            scope_warning = "范围未认证", capture_segment_label = "采样片段 · 事件暂停",
+        }) };
+        Check("capture segments retain the Python reason beside existing scope warnings",
+            segment.Summary == "范围未认证 · PC · 采样片段 · 事件暂停 · 17.3 秒");
         Console.WriteLine($"PASS_HISTORY_SOURCE_LABEL {passed} assertions (loaded projection only; no windows/input)");
     }
 }

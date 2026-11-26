@@ -28,7 +28,8 @@ internal sealed class HistoryItem
     {
         "native_pc"=>"PC", "android"=>"Android（ADB）", _=>"来源未记录",
     };
-    public string Summary=>string.Join(" · ",new[]{Data.Text("scope_warning"),SourceLabel,Outcome,Data.Text("duration")}
+    public string Summary=>string.Join(" · ",new[]{Data.Text("scope_warning"),SourceLabel,
+        Data.Text("capture_segment_label") is {Length:>0} segment ? segment : Outcome,Data.Text("duration")}
         .Where(value=>value.Length>0));
     public string Date=>Data.Text("date");
 }
@@ -295,7 +296,12 @@ public partial class MainWindow : Window
         }
         catch(BridgeTransportException ex){ReportTransportFailure(source,ex);}
         // Never raise a modal dialog once shutdown has begun: it would block the close.
-        catch(BridgeCommandException ex){if(App.Verification!=null)throw;if(!closingRequested)MessageBox.Show(this,ex.Message,"操作未完成");else WriteQuitLog("命令失败："+ex.Message);}
+        catch(BridgeCommandException ex)
+        {
+            if(op=="event_pause") { SetEventCaptureRequestError(ex.Message); return; }
+            if(App.Verification!=null)throw;
+            if(!closingRequested)MessageBox.Show(this,ex.Message,"操作未完成");else WriteQuitLog("命令失败："+ex.Message);
+        }
         catch(Exception ex)
         {
             if(App.Verification!=null) throw;
@@ -598,6 +604,7 @@ public partial class MainWindow : Window
     }
     private void RefreshLiveAvailability()
     {
+        UpdateEventCaptureControl();
         MultiplayerEnabledSetting.IsEnabled=MultiplayerSupported && !multiplayerSettingPending && !workerUnavailable && !closingRequested && !quitting && !updateShutdownPreparing;
         bool available=!workerUnavailable && !ShowingPreviousBattle;
         AddPanelButton.IsEnabled=available;
@@ -1628,6 +1635,7 @@ public partial class MainWindow : Window
         RequestStackCaptureStop();
         StopGameFpsStatus();
         recoveryCancellation.Cancel();
+        UpdateEventCaptureControl();
         updateDownloadCancellation?.Cancel();
         poll.Stop();save.Stop();SideAttachmentTimer.Stop();
         // Exit must never depend on a healthy worker or on a dialog. Every step is
