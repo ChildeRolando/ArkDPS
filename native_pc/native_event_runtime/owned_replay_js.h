@@ -20,6 +20,7 @@ struct Binding {
     capture::Error error = capture::Error::missing_plan_field;
     void (*poison)() noexcept = nullptr;
     bool active = false;
+    bool concurrent = false;
     bool js_exception = false;
 };
 inline Binding& binding() { static auto* value = new Binding; return *value; }
@@ -31,8 +32,8 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
                            const void* fields,std::size_t field_count,
                            const std::byte* payload,std::size_t payload_bytes,
                            const std::vector<std::string>& roles,std::uint64_t ticket,
-                           capture::Error record_error) noexcept {
-    auto& owner=binding();owner.roles=&roles;owner.ticket=ticket;
+                           capture::Error record_error,bool concurrent=false) noexcept {
+    auto& owner=binding();owner.roles=&roles;owner.ticket=ticket;owner.concurrent=concurrent;
     owner.js_exception=false;
     owner.error=owner.view.initialize(segments,segment_count,fields,field_count,payload,payload_bytes,
                                      static_cast<std::uint16_t>(roles.size()),record_error);
@@ -41,7 +42,7 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
     return owner.error;
 }
 inline void end() noexcept {
-    auto& owner=binding();owner.active=false;owner.ticket=0;owner.roles=nullptr;owner.view.reset();
+    auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.view.reset();
 }
 struct Lease {
     Lease()=default;Lease(const Lease&)=delete;Lease& operator=(const Lease&)=delete;
@@ -119,6 +120,7 @@ inline JSValue bytes(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     const auto result=binding().view.read(point.role_id,point.checkpoint,point.field,point.address,size);
     error(result.error);
     if (result.error!=capture::Error::ok) return JS_UNDEFINED;
+    if (binding().concurrent) {error(capture::Error::changed_guard);return JS_UNDEFINED;}
     return allocated(JS_NewArrayBufferCopy(c,reinterpret_cast<const std::uint8_t*>(result.data),size));
 }
 inline JSValue scalar(JSContext* c,JSValueConst,int count,JSValueConst* args) {
@@ -129,6 +131,7 @@ inline JSValue scalar(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     const auto result=binding().view.read(point.role_id,point.checkpoint,point.field,point.address,sizes[kind]);
     error(result.error);
     if (result.error!=capture::Error::ok) return JS_UNDEFINED;
+    if (binding().concurrent) {error(capture::Error::changed_guard);return JS_UNDEFINED;}
     switch(kind){
     case 0: {std::uint8_t v;std::memcpy(&v,result.data,1);return allocated(JS_NewUint32(c,v));}
     case 1: {std::uint16_t v;std::memcpy(&v,result.data,2);return allocated(JS_NewUint32(c,v));}
@@ -148,7 +151,10 @@ inline JSValue point(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     const auto result=binding().view.point_info(role_id,static_cast<std::uint32_t>(checkpoint));
     error(result.error);
     const auto count_code=result.field_count==1?1u:result.field_count?2u:0u;
-    return JS_NewUint32(c,(count_code<<24)|(static_cast<unsigned>(result.single_field_error)<<16)|result.single_field_id);
+    const auto field_error=result.error==capture::Error::ok && result.field_count==1
+        && result.single_field_error==capture::Error::ok && binding().concurrent
+        ? capture::Error::changed_guard : result.single_field_error;
+    return JS_NewUint32(c,(count_code<<24)|(static_cast<unsigned>(field_error)<<16)|result.single_field_id);
 }
 inline JSValue lease(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     auto& owner=binding();owner.js_exception=false;

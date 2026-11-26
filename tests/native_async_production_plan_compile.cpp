@@ -39,5 +39,5 @@ int main(int argc,char** argv){
       bad=plan;bad["hp_filter"]["defer_entry_scope"]="true";reject(bad);
    }
  }
- check(accepted==fixture.value("contracts",36u));std::cout<<"PASS production recipe compiler: "<<accepted<<" exact source plans, "<<rejected<<" strict negatives; runtime gate remains closed\n";
+ check(accepted==fixture.value("contracts",36u));std::cout<<"PASS production recipe compiler: "<<accepted<<" exact source plans, "<<rejected<<" strict negatives; layout oracle, runtime initialization not exercised\n";
 }
