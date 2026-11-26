@@ -13,7 +13,11 @@ int main(){
  assert(fence.add(reinterpret_cast<std::uintptr_t>(&f.clock),reinterpret_cast<const std::byte*>(&f.clock),8));
  fence.ticket=101;fence.activity=202;
  assert(!fence.accepts(0,101,202,read,&f)); // uncertified ordinary publication
- fence.verified=true;assert(fence.accepts(0,101,202,read,&f));
+ fence.verified=true;assert(!fence.accepts(0,101,202,read,&f));
+ std::uintptr_t retained=99;assert(!fence.certify_singleton(reinterpret_cast<const std::byte*>(&retained),8));
+ assert(!fence.accepts(0,101,202,read,&f)); // Stable non-NULL never certifies fresh terminal reuse.
+ assert(fence.certify_singleton(reinterpret_cast<const std::byte*>(&f.root),8));
+ assert(fence.accepts(0,101,202,read,&f));
  assert(!fence.accepts(1,101,202,read,&f));assert(!fence.accepts(0,102,202,read,&f));
  assert(!fence.accepts(0,101,203,read,&f));
  f.root=99;assert(!fence.accepts(0,101,202,read,&f));f.root=0;

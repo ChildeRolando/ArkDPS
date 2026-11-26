@@ -770,6 +770,13 @@ void replay_record(const std::byte* bytes, std::size_t length) {
                             if (field.id!=id || field.checkpoint) continue;
                             found=field.error==Error::ok;
                             if (!found) break;
+                            if(id==hook->capture_plan.terminal_guard_fields[0]) {
+                                if(field.final_segment>=header.segment_count) {found=false;break;}
+                                Segment singleton;
+                                std::memcpy(&singleton,bytes+segment_start+field.final_segment*sizeof singleton,sizeof singleton);
+                                found=runtime.terminal_fence.certify_singleton(payload+singleton.offset,singleton.size);
+                                if(!found)break; // Retained controller requires more live vetoes; never reuse it here.
+                            }
                             unsigned copied=0;
                             for (unsigned j=0;j<header.segment_count;++j) {
                                 Segment segment;std::memcpy(&segment,bytes+segment_start+j*sizeof segment,sizeof segment);

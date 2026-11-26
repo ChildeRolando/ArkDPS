@@ -10,8 +10,13 @@ struct TerminalFence {
     std::array<Witness,32> witnesses{};
     unsigned count=0;
     std::uint64_t ticket=0, activity=0;
-    bool verified=false;
-    void clear() noexcept { verified=false;count=0;ticket=0;activity=0; }
+    bool verified=false,singleton_null=false;
+    void clear() noexcept { verified=false;singleton_null=false;count=0;ticket=0;activity=0; }
+    bool certify_singleton(const std::byte* bytes,std::size_t size) noexcept {
+        std::uintptr_t value=1;
+        if(size==sizeof value)std::memcpy(&value,bytes,sizeof value);
+        singleton_null=value==0;return singleton_null;
+    }
     bool add(std::uintptr_t address,const std::byte* bytes,std::size_t size) noexcept {
         if (!address || !size || size>16 || count==witnesses.size()) return false;
         auto& witness=witnesses[count++];witness.address=address;witness.size=size;
@@ -19,7 +24,7 @@ struct TerminalFence {
     }
     bool accepts(unsigned active,std::uint64_t reserved,std::uint64_t generation,
                  ReadMemory reader,void* user) const noexcept {
-        if (!verified || !count || active || reserved!=ticket || generation!=activity) return false;
+        if (!verified || !singleton_null || !count || active || reserved!=ticket || generation!=activity) return false;
         std::array<std::byte,16> actual;
         for (unsigned i=0;i<count;++i) {
             const auto& witness=witnesses[i];
