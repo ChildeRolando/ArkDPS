@@ -2,6 +2,8 @@
 #include "engine_worker.h"
 #include "engine_capture_lane.h"
 #include "engine_capture_plan.h"
+#include "engine_capture_config.h"
+#include "engine_capture_pipeline.h"
 #include <windows.h>
 #include <psapi.h>
 #include <MinHook.h>
@@ -47,6 +49,7 @@ struct Runtime {
     arkdps::EngineWorker worker;
     std::unique_ptr<arkdps::capture::CaptureLanes> lanes;
     std::atomic<arkdps::capture::CaptureLanes*> ingress{nullptr};
+    arkdps::capture::CaptureConfigurations configurations;
     std::uint64_t processed_ticket = 0, closed_ticket = 0, delivered_sequence = 0, published_sequence = 0;
     bool replay_active = false;
     JSValue prefix_projection = JS_UNDEFINED;
@@ -440,6 +443,30 @@ JSValue js_native_call(JSContext* c, JSValueConst, int count, JSValueConst* args
         return JS_NewBigUint64(c, result);
     });
 }
+JSValue js_publish_scope(JSContext* c, JSValueConst, int count, JSValueConst* args) {
+    return guarded(c,[&] {
+        if (count!=1) throw std::runtime_error("capture scope publication requires one graph");
+        auto encoded=JS_JSONStringify(c,args[0],JS_UNDEFINED,JS_UNDEFINED);
+        if (JS_IsException(encoded)) throw std::runtime_error(exception(c));
+        std::string text;
+        try { text=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); throw; }
+        JS_FreeValue(c,encoded);
+        state().configurations.publish(nlohmann::json::parse(text),false);
+        return JS_UNDEFINED;
+    });
+}
+JSValue js_publish_publication(JSContext* c, JSValueConst, int count, JSValueConst* args) {
+    return guarded(c,[&] {
+        if (count!=1) throw std::runtime_error("capture publication requires one graph");
+        auto encoded=JS_JSONStringify(c,args[0],JS_UNDEFINED,JS_UNDEFINED);
+        if (JS_IsException(encoded)) throw std::runtime_error(exception(c));
+        std::string text;
+        try { text=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); throw; }
+        JS_FreeValue(c,encoded);
+        state().configurations.publish(nlohmann::json::parse(text),true);
+        return JS_UNDEFINED;
+    });
+}
 JSValue js_attach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] {
         if (count != 2 || !JS_IsObject(args[1])) throw std::runtime_error("hook requires address and callbacks");
@@ -462,6 +489,11 @@ JSValue js_attach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
         try { capture_json=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); throw; }
         JS_FreeValue(c,encoded);
         hook->capture_plan=arkdps::capture::compile_plan(nlohmann::json::parse(capture_json), reinterpret_cast<std::uintptr_t>(hook->address));
+        for (unsigned i=0;i<hook->capture_plan.plan->field_count;++i)
+            if (hook->capture_plan.plan->fields[i].id>=arkdps::capture::scope_field_base
+                || hook->capture_plan.plan->fields[i].guard_id>=arkdps::capture::scope_guard_base)
+                throw std::runtime_error("base capture fields overlap graph namespaces");
+        runtime.configurations.intern(hook->capture_plan);
 
         hook->callbacks = JS_DupValue(c, args[1]);
         // A leaf thunk: movabs volatile r11,Hook*; jmp [rip+0]; .quad entry.
@@ -633,6 +665,10 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     auto facts=JS_NewObject(c);
     js_property(c,facts,"mode_epoch",JS_NewInt64(c,header.mode_epoch));
     js_property(c,facts,"scope_mode_epoch",JS_NewInt64(c,header.scope_mode_epoch));
+    js_property(c,facts,"scope_unavailable",JS_NewBool(c,header.scope_unavailable));
+    if (header.scope_revision) js_property(c,facts,"scope_revision",JS_NewInt64(c,header.scope_revision));
+    if (header.publication_captured) js_property(c,facts,"publication_revision",JS_NewInt64(c,header.publication_revision));
+    if (header.cold_revision) js_property(c,facts,"cold_revision",JS_NewInt64(c,header.cold_revision));
     js_property(c,record,"facts",facts);
     const auto segment_start=sizeof header;
     const auto field_start=segment_start+header.segment_count*sizeof(Segment);
@@ -642,7 +678,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     for (unsigned i=0;i<header.field_count;++i) {
         FieldState field;
         std::memcpy(&field,bytes+field_start+i*sizeof field,sizeof field);
-        if (!field.id || !field.role || field.role>hook->capture_plan.roles.size()
+        if (!field.id || !field.role || field.role>runtime.configurations.roles.size()
             || structural_error(field.error))
             throw std::runtime_error("native capture field has a structural failure");
         const auto key=status_key(field.role,field.checkpoint,field.id);
@@ -657,12 +693,12 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     for (unsigned i=0;i<header.segment_count;++i) {
         Segment segment;
         std::memcpy(&segment,bytes+segment_start+i*sizeof segment,sizeof segment);
-        if (!segment.role || segment.role>hook->capture_plan.roles.size()
+        if (!segment.role || segment.role>runtime.configurations.roles.size()
             || segment.offset>header.byte_count || segment.size>header.byte_count-segment.offset)
             throw std::runtime_error("invalid captured segment");
         auto value=JS_NewObject(c);
         js_property(c,value,"field_id",JS_NewUint32(c,segment.field_id));
-        js_property(c,value,"role",JS_NewString(c,hook->capture_plan.roles[segment.role-1].c_str()));
+        js_property(c,value,"role",JS_NewString(c,runtime.configurations.roles[segment.role-1].c_str()));
         js_property(c,value,"checkpoint",JS_NewUint32(c,segment.checkpoint));
         js_property(c,value,"address",JS_NewBigUint64(c,segment.address));
         js_property(c,value,"bytes",JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(payload+segment.offset),segment.size));
@@ -678,10 +714,10 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     for (unsigned i=0;i<header.field_count;++i) {
         FieldState field;
         std::memcpy(&field,bytes+field_start+i*sizeof field,sizeof field);
-        if (!field.role || field.role>hook->capture_plan.roles.size()) throw std::runtime_error("invalid captured field");
+        if (!field.role || field.role>runtime.configurations.roles.size()) throw std::runtime_error("invalid captured field");
         auto value=JS_NewObject(c);
         js_property(c,value,"field_id",JS_NewUint32(c,field.id));
-        js_property(c,value,"role",JS_NewString(c,hook->capture_plan.roles[field.role-1].c_str()));
+        js_property(c,value,"role",JS_NewString(c,runtime.configurations.roles[field.role-1].c_str()));
         js_property(c,value,"checkpoint",JS_NewUint32(c,field.checkpoint));
         js_property(c,value,"status",JS_NewString(c,field.error==Error::ok ? "ok" : field.error==Error::changed_guard ? "guard_changed" : "unreadable"));
         js_property(c,value,"attempted_address",JS_NewBigUint64(c,field.attempted_address));
@@ -860,6 +896,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     if (lane->depth>=invocation_depth) { lanes.poison(LaneFault::depth_full); return hook->original; }
     auto& call=lane->calls[lane->depth];
     call.hook=hook; call.mode_epoch=pinned_mode;
+    call.configuration=runtime.configurations.pin(pinned_mode);
     if (!capture_read(nullptr,frame->stack,&call.return_address,sizeof call.return_address)) { lanes.poison(LaneFault::invalid_stack); return hook->original; }
     call.id=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
     call.parent=lane->depth ? lane->calls[lane->depth-1].id : 0;
@@ -887,7 +924,8 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId(); header.thread_birth=lane->birth;
     for (unsigned i=0;i<lane_count;++i) if (lanes.lanes[i].get()==lane) header.lane=i;
     header.depth=lane->depth; header.phase=Phase::entry; header.arg_mask=context.args_valid;
-    capture(*hook->capture_plan.plan,Phase::entry,context,capture_read,nullptr,lane->snapshot);
+    capture_scope_point(hook->capture_plan,Phase::entry,context,call.configuration,
+                        capture_read,nullptr,lane->snapshot,header);
     save_entry_roots(hook->capture_plan,lane->snapshot,context);
     lanes.publish(*lane,header);
     return hook->original;
@@ -924,7 +962,8 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
     header.active=runtime.active.load(std::memory_order_acquire);
     call.context.return_value=frame->rax; call.context.return_valid=true;
-    capture(*hook->capture_plan.plan,Phase::leave,call.context,capture_read,nullptr,lane->snapshot);
+    capture_scope_point(hook->capture_plan,Phase::leave,call.context,call.configuration,
+                        capture_read,nullptr,lane->snapshot,header);
     header.activity=runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel)+1;
     header.active_after=runtime.active.fetch_sub(1,std::memory_order_acq_rel)-1;
     header.closed_after=header.active_after==0 && header.activity==header.activity_begin+1;
@@ -952,6 +991,8 @@ void initialize_on_worker(const std::string& source) {
     function(c,global,"__cstring",js_cstring,1);function(c,global,"__utf16",js_utf16,2);
     function(c,global,"__moduleInfo",js_module,1);function(c,global,"__findModule",js_find_module,1);function(c,global,"__export",js_export,2);
     function(c,global,"__nativeCall",js_native_call,2);function(c,global,"__attach",js_attach,2);function(c,global,"__detach",js_detach,1);
+    function(c,global,"__publishCaptureScope",js_publish_scope,1);
+    function(c,global,"__publishCapturePublication",js_publish_publication,1);
     function(c,global,"__send",js_send,1);function(c,global,"__nativeActive",js_active,0);function(c,global,"__pid",js_pid,0);
     try {
         evaluate(c, arkdps_bridge_source, "native-bridge.js");

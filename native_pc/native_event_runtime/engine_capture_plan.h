@@ -20,6 +20,8 @@ struct CompiledPlan {
     std::array<std::uintptr_t, max_roots> globals{};
     std::uint16_t globals_valid = 0;
     std::vector<std::string> roles;
+    // Initialized once; callback dispatch never reads the mutable role registry.
+    std::array<std::uint8_t,max_fields> field_stage{};
     std::array<SavedEntryRoot, max_roots> entry_roots{};
     std::uint8_t entry_root_count=0;
 };

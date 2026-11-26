@@ -8,6 +8,7 @@
 #include <memory>
 
 namespace arkdps::capture {
+struct CaptureConfiguration;
 constexpr unsigned lane_count = 16, invocation_depth = 256;
 inline bool structural_error(Error error) noexcept {
     return error==Error::invalid_plan || error==Error::invalid_phase || error==Error::bounds
@@ -30,12 +31,15 @@ struct InvocationState {
     void* hook = nullptr;
     std::uint64_t id = 0, parent = 0, mode_epoch = 0;
     std::uintptr_t return_address = 0;
+    const CaptureConfiguration* configuration=nullptr;
     Context context;
 };
 struct RecordHeader {
     std::uint64_t ticket = 0, invocation = 0, parent = 0, activity = 0, activity_begin = 0;
     std::uint64_t return_value = 0, thread_birth = 0, captured_qpc = 0;
     std::uint64_t publication_request = 0, mode_epoch = 0, scope_mode_epoch = 0;
+    std::uint64_t configuration_id=0, scope_revision=0, publication_revision=0, cold_revision=0;
+    bool scope_unavailable=true, publication_captured=false;
     std::uintptr_t return_address = 0;
     std::array<std::uint64_t, 16> args{};
     std::uint32_t hook_id = 0, thread_id = 0, lane = 0, depth = 0;
