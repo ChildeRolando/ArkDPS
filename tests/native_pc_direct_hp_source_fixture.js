@@ -47,7 +47,7 @@ const demanded=run(true,'demanded-error');assert.equal(demanded.leave.complete,f
  const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),enemyHpState:true});
  const h=ownedFields(f,{clock:vm.runInContext('clock',f.context),string_class:'0x1000',classes:{Enemy:f.enemyClass.toString()},skill_offsets:{}});
  f.context.normal=f.callback('SetHpInternal',f.entity);f.context.other=f.callback('SetHpInternalDirectly',f.entity);
- vm.runInContext("arkdpsNativeAsyncCapture=true;prepareNativeCaptureHook(ptr(0x9100),normal);globalThis.oldApiFallback=normal.arkdpsDirectHpEntry===undefined&&normal.arkdpsDirectHpLeave===undefined;globalThis.__arkdpsIsPreparedHpObservation=()=>true;prepareNativeCaptureHook(ptr(0x9200),other);globalThis.nonNormalFallback=other.arkdpsDirectHpEntry===undefined&&other.arkdpsDirectHpLeave===undefined;",f.context);
+ vm.runInContext("arkdpsNativeAsyncCapture=true;globalThis.__arkdpsIsPreparedHpObservation=undefined;prepareNativeCaptureHook(ptr(0x9100),normal);globalThis.oldApiFallback=normal.arkdpsDirectHpEntry===undefined&&normal.arkdpsDirectHpLeave===undefined;globalThis.__arkdpsIsPreparedHpObservation=()=>true;prepareNativeCaptureHook(ptr(0x9200),other);globalThis.nonNormalFallback=other.arkdpsDirectHpEntry===undefined&&other.arkdpsDirectHpLeave===undefined;",f.context);
  assert(f.context.oldApiFallback);assert(f.context.nonNormalFallback);h.restore();
 }
 console.log('PASS_DIRECT_HP_SOURCE actual source owner/golden/unchanged writer/forgery/oldlease + strict owned recipes');
