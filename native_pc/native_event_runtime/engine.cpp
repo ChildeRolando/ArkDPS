@@ -67,7 +67,7 @@ struct Runtime {
     std::string captured_publication;
     std::uint64_t published_ticket = 0;
     arkdps::capture::RecordHeader replay_header;
-    JSValue replay_begin = JS_UNDEFINED, replay_end = JS_UNDEFINED, record_factory = JS_UNDEFINED;
+    JSValue replay_dispatch = JS_UNDEFINED;
     struct WorkerInvocation { JSValue receiver = JS_UNDEFINED; std::uint64_t id = 0; Hook* hook = nullptr; };
     std::array<std::array<WorkerInvocation, 256>, 16> receivers{};
     std::array<unsigned, 16> replay_depth{};
@@ -75,7 +75,6 @@ struct Runtime {
     JSRuntime* runtime = nullptr;
     JSContext* context = nullptr;
     JSValue pointer = JS_UNDEFINED;
-    JSValue argument_view = JS_UNDEFINED;
     JSValue dispatch = JS_UNDEFINED;
     std::vector<std::unique_ptr<Hook>> hooks;
     std::vector<Allocation> allocations;
@@ -573,6 +572,11 @@ JSValue js_active(JSContext* c, JSValueConst, int, JSValueConst*) {
     auto& runtime=state();
     return JS_NewUint32(c, runtime.replay_active ? runtime.replay_header.active : runtime.active.load());
 }
+JSValue js_replay_healthy(JSContext* c, JSValueConst, int, JSValueConst*) {
+    auto& runtime=state();
+    return JS_NewBool(c,runtime.replay_active && arkdps::owned_js::binding().active
+        && runtime.lanes->failure.load(std::memory_order_acquire)==0);
+}
 JSValue js_pid(JSContext* c, JSValueConst, int, JSValueConst*) { return JS_NewUint32(c, GetCurrentProcessId()); }
 void function(JSContext* c, JSValueConst global, const char* name, JSCFunction* callback, int arguments) {
     JS_SetPropertyStr(c, global, name, JS_NewCFunction(c, callback, name, arguments));
@@ -582,18 +586,7 @@ void evaluate(JSContext* c, const std::string& source, const char* filename) {
     if (JS_IsException(value)) throw std::runtime_error(exception(c));
     JS_FreeValue(c, value);
 }
-void callback(JSContext* c, Hook* hook, const char* name, JSValueConst receiver, int arguments, JSValueConst* args) {
-    auto method = JS_GetPropertyStr(c, hook->callbacks, name);
-    if (JS_IsFunction(c, method)) {
-        auto* measured = timing_active;
-        const auto began = measured ? ticks_now() : 0;
-        auto result = JS_Call(c, method, receiver, arguments, args);
-        if (measured) measured->js += ticks_now()-began;
-        if (JS_IsException(result)) { JS_FreeValue(c, method); throw std::runtime_error(exception(c)); }
-        JS_FreeValue(c, result);
-    }
-    JS_FreeValue(c, method);
-}
+
 }
 
 
@@ -694,9 +687,6 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     std::memcpy(packed.data()+header_words,bytes+sizeof header,parent_bytes);
     auto packed_bytes=JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(packed.data()),header_words*8+parent_bytes);
     if (JS_IsException(packed_bytes)) throw std::runtime_error(exception(c));
-    auto record=JS_Call(c,runtime.record_factory,JS_UNDEFINED,1,&packed_bytes);
-    JS_FreeValue(c,packed_bytes);
-    if (JS_IsException(record)) throw std::runtime_error(exception(c));
     const auto segment_start=sizeof header+header.parent_checkpoint_count*sizeof(ParentCheckpoint);
     const auto field_start=segment_start+header.segment_count*sizeof(Segment);
     const auto payload=bytes+field_start+header.field_count*sizeof(FieldState);
@@ -704,56 +694,34 @@ void replay_record(const std::byte* bytes, std::size_t length) {
         bytes+field_start,header.field_count,payload,header.byte_count,
         runtime.configurations.roles,header.ticket,header.error);
     arkdps::owned_js::Lease view_lease;
-    if (view_error!=Error::ok) {JS_FreeValue(c,record);throw std::runtime_error("native owned view rejected structural capture");}
+    if (view_error!=Error::ok) {JS_FreeValue(c,packed_bytes);throw std::runtime_error("native owned view rejected structural capture");}
     runtime.replay_header=header; runtime.replay_active=true;
-    auto entered=JS_Call(c,runtime.replay_begin,JS_UNDEFINED,1,&record);
-    if (JS_IsException(entered)) { JS_FreeValue(c,record); runtime.replay_active=false; throw std::runtime_error(exception(c)); }
-    JS_FreeValue(c,entered);
-    std::exception_ptr callback_failure;
-    try {
-        if (header.phase==Phase::entry) {
-            std::array<JSValue,2> arguments{{
-                JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(header.args.data()),hook->capture_plan.plan->arg_count*8),
-                JS_NewUint32(c,header.arg_mask)}};
-            auto view=JS_Call(c,runtime.argument_view,JS_UNDEFINED,2,arguments.data());
-            for (auto value : arguments) JS_FreeValue(c,value);
-            if (JS_IsException(view)) throw std::runtime_error(exception(c));
-            try { callback(c,hook,"onEnter",call.receiver,1,&view); }
-            catch (...) { JS_FreeValue(c,view); throw; }
-            JS_FreeValue(c,view);
-        } else {
-            auto result=pointer(c,header.return_value);
-            try { callback(c,hook,"onLeave",call.receiver,1,&result); }
-            catch (...) { JS_FreeValue(c,result); throw; }
-            JS_FreeValue(c,result);
-        }
-    } catch (...) { callback_failure=std::current_exception(); }
-    if (runtime.lanes->failure.load(std::memory_order_acquire))
-        callback_failure=std::make_exception_ptr(std::runtime_error("native replay violated the capture boundary"));
-    JSValue projection=JS_UNDEFINED;
-    if (!callback_failure && header.projection_candidate && header.closed_after && JS_IsFunction(c,runtime.prefix_projection)) {
-        auto frozen=JS_Call(c,runtime.prefix_projection,JS_UNDEFINED,1,&record);
-        if (JS_IsException(frozen)) callback_failure=std::make_exception_ptr(std::runtime_error(exception(c)));
-        else projection=JS_DupValue(c,frozen);
-        JS_FreeValue(c,frozen);
-    }
-    auto ended=JS_Call(c,runtime.replay_end,JS_UNDEFINED,0,nullptr);
+    auto method=JS_GetPropertyStr(c,hook->callbacks,header.phase==Phase::entry ? "onEnter" : "onLeave");
+    auto callback_payload=header.phase==Phase::entry
+        ? JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(header.args.data()),hook->capture_plan.plan->arg_count*8)
+        : JS_NewBigUint64(c,header.return_value);
+    std::array<JSValue,6> dispatch_args{{packed_bytes,method,call.receiver,callback_payload,
+        JS_NewUint32(c,header.arg_mask),header.projection_candidate && header.closed_after ? runtime.prefix_projection : JS_UNDEFINED}};
+    JSValue answer=JS_EXCEPTION;
+    if (!JS_IsException(method) && !JS_IsException(callback_payload))
+        answer=JS_Call(c,runtime.replay_dispatch,JS_UNDEFINED,dispatch_args.size(),dispatch_args.data());
+    JS_FreeValue(c,packed_bytes);JS_FreeValue(c,method);JS_FreeValue(c,callback_payload);
     runtime.replay_active=false;
-    if (JS_IsException(ended)) throw std::runtime_error(exception(c));
-    auto complete=JS_GetPropertyStr(c,ended,"complete");
-    const bool valid=JS_ToBool(c,complete)==1;
-    JS_FreeValue(c,complete); JS_FreeValue(c,ended);
     if (const auto failure=runtime.lanes->failure.load(std::memory_order_acquire)) {
-        JS_FreeValue(c,record); JS_FreeValue(c,projection);
+        if (JS_IsException(answer)) {auto ignored=JS_GetException(c);JS_FreeValue(c,ignored);}
+        JS_FreeValue(c,answer);
         throw std::runtime_error("native capture failed: code="+std::to_string(failure));
     }
-    if (!valid) {
-        JS_FreeValue(c,record); JS_FreeValue(c,projection);
+    if (JS_IsException(answer)) throw std::runtime_error(exception(c));
+    if (JS_IsArray(c,answer)!=1) {JS_FreeValue(c,answer);throw std::runtime_error("invalid native replay dispatch result");}
+    auto record=JS_GetPropertyUint32(c,answer,0);
+    auto projection=JS_GetPropertyUint32(c,answer,1);
+    auto complete=JS_GetPropertyUint32(c,answer,2);
+    const bool valid=JS_IsBool(complete) && JS_ToBool(c,complete)==1;
+    JS_FreeValue(c,complete);JS_FreeValue(c,answer);
+    if (!valid || JS_IsException(record) || JS_IsException(projection)) {
+        JS_FreeValue(c,record);JS_FreeValue(c,projection);
         throw std::runtime_error("native callback replay has structural gaps");
-    }
-    if (callback_failure) {
-        JS_FreeValue(c,record); JS_FreeValue(c,projection);
-        std::rethrow_exception(callback_failure);
     }
     if (header.phase==Phase::leave) {
         JS_FreeValue(c,call.receiver); call={}; --depth;
@@ -1045,6 +1013,7 @@ void initialize_on_worker(const std::string& source) {
     function(c,global,"__nativeCall",js_native_call,2);function(c,global,"__attach",js_attach,2);function(c,global,"__detach",js_detach,1);
     function(c,global,"__publishCaptureScope",js_publish_scope,1);
     function(c,global,"__publishCapturePublication",js_publish_publication,1);
+    function(c,global,"__nativeReplayHealthy",js_replay_healthy,0);
     function(c,global,"__send",js_send,1);function(c,global,"__nativeActive",js_active,0);function(c,global,"__pid",js_pid,0);
     try {
         arkdps::owned_js::install(c,[]() noexcept {
@@ -1054,12 +1023,9 @@ void initialize_on_worker(const std::string& source) {
         evaluate(c, arkdps_publication_source, "native-publication.js");
         evaluate(c, arkdps_cold_plan_source, "native-cold-plan.js");
         evaluate(c, "globalThis.arkdpsNativeAsyncCapture=true;", "native-async.js");
-        runtime.record_factory=JS_GetPropertyStr(c,global,"__arkdpsPackedCaptureRecord");
-        if (!JS_IsFunction(c,runtime.record_factory)) throw std::runtime_error("native packed record factory unavailable");
-        runtime.replay_begin=JS_GetPropertyStr(c,global,"__arkdpsReplayBegin");
-        runtime.replay_end=JS_GetPropertyStr(c,global,"__arkdpsReplayEnd");
+        runtime.replay_dispatch=JS_GetPropertyStr(c,global,"__arkdpsReplayDispatch");
+        if (!JS_IsFunction(c,runtime.replay_dispatch)) throw std::runtime_error("native replay dispatch unavailable");
         runtime.pointer = JS_GetPropertyStr(c, global, "__arkdpsPointer");
-        runtime.argument_view = JS_GetPropertyStr(c, global, "__arkdpsArguments");
         runtime.dispatch = JS_GetPropertyStr(c, global, "__arkdpsRequest");
         evaluate(c, source, "event-probe.js");
         runtime.prefix_projection=JS_GetPropertyStr(c,global,"__arkdpsOnClosedRecord");
