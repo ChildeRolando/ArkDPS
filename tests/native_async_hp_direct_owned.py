@@ -77,7 +77,10 @@ def run(binary,source_root,case):
             if fault:
                 assert isinstance(result,RuntimeError),repr(result)
                 if case=='constructor':
-                    assert 'structural gaps' in str(result) or 'native capture failed: code=6' in str(result),str(result)
+                    # JS proof rejection is reported through the bounded replay
+                    # audit; native boundary rejection uses capture code 6.
+                    assert any(marker in str(result) for marker in (
+                        'structural gaps','native_replay_gap:v1,','native capture failed: code=6')),str(result)
                 else:
                     assert 'native capture failed: code=6' in str(result),str(result)
                 assert pipe._poisoned is True
