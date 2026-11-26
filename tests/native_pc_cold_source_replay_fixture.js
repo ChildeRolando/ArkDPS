@@ -4,7 +4,10 @@
 // C++ capture ordering/budgets are independently exercised by native_capture_cold.
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const {world}=require('./native_pc_autochess_context_fixture.js');
-const f=world({fixtureOptions:{roundResetMethod:true}}),P=f.ptr(0).constructor,c=f.context;
+const f=world({fixtureOptions:{roundResetMethod:true,settlement:true}}),P=f.ptr(0).constructor,c=f.context;
+f.write(f.character.add(0x58),f.unitClass);f.write(f.unitClass.add(0x58),f.entity);f.write(f.entity.add(0x58),f.bObject);f.write(f.bObject.add(0x58),f.ptr(0));
+f.klass('BattleCharacterData','Torappu.Battle',36,[[4,'prefabKey',0x50,14],[8,'uniqueId',0x6c,9],[14,'isToken',0x90,2],[15,'isPredefined',0x91,2],[18,'tokenOrHostKey',0x98,14],[19,'tokenOrHostUniqueId',0xa0,9]],f.ptr(0),f.characterData);
+for(const data of f.roleData)f.write(data,f.characterData);
 const methods=['readByteArray','readPointer','readU8','readU16','readU32','readS32','readU64','readS64','readFloat','readUtf16String','readCString'];
 const original=Object.fromEntries(methods.map(name=>[name,P.prototype[name]]));
 const metadata=new Map();let replaying=false,late=0;
@@ -21,13 +24,14 @@ const bridge=fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8');
 vm.runInContext(bridge.slice(bridge.indexOf('function __integer('),bridge.indexOf('class NativeInteger')),c);
 vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/cold_plan.js','utf8'),c);
 const classes=Object.fromEntries([...f.ownedClasses.values()].map(x=>[x.name,x.klass.toString()]));
-classes.BattleController=f.controllerClass.toString();classes.Character=f.character.toString();
+classes.BattleController=f.controllerClass.toString();classes.Character=f.character.toString();classes.BObject=f.bObject.toString();
 vm.runInContext("nativeCaptureModeHistory.set(0,'all');",c);
 c.metadata={cold_metadata_ready:true,classes,string_class:classes.String};
 const plan=JSON.parse(vm.runInContext('JSON.stringify(__arkdpsBuildColdCapturePlan(metadata))',c));
 // The fixture's AutoChess classes are installed after initial reflection; expose
 // their setup-owned exact identities, never infer a name from a replay pointer.
 c.frozenIdentity=(k,name,ns)=>{const value=f.ownedClasses.get(k.toString());return !!value&&value.name===name&&value.namespace===ns;};
+for(const k of [f.character,f.unitClass,f.entity,f.bObject]){const b=new ArrayBuffer(8);new DataView(b).setBigUint64(0,original.readPointer.call(k.add(0x58)).value,true);metadata.set(k.add(0x58).toString()+':8',b);}
 c.frozenMetadata=(p,n)=>{const b=metadata.get(p.toString()+':'+n);if(!b)throw Error('metadata not frozen '+p+':'+n);return b.slice(0);};
 vm.runInContext('__arkdpsColdClassIdentity=frozenIdentity;__arkdpsColdMetadataRead=frozenMetadata;',c);
 function raw(p,n){
@@ -72,8 +76,8 @@ P.prototype.readPointer=function(){return replaying?f.ptr(view(this,8).getBigUin
 for(const name of ['readU64','readS64'])P.prototype[name]=function(){if(!replaying)return original[name].call(this);const x=view(this,8)[name==='readS64'?'getBigInt64':'getBigUint64'](0,true);return{toString:()=>x.toString(),toNumber:()=>Number(x)};};
 P.prototype.readUtf16String=function(n){if(!replaying)return original.readUtf16String.call(this,n);const v=view(this,n*2);let text='';for(let i=0;i<n;i++)text+=String.fromCharCode(v.getUint16(i*2,true));return text;};
 P.prototype.readCString=function(){if(replaying){late++;throw Error('metadata live read');}return original.readCString.call(this);};
-for(const[name,native]of Object.entries(f.metadataExports))f.metadataExports[name]=(...args)=>{if(replaying){late++;throw Error('NativeFunction in replay');}return native(...args);};
-function reduce(record){c.record=record;replaying=true;try{return vm.runInContext('__arkdpsReplayBegin(record);try{globalThis.binding=prepareCapturedColdBinding(record);}finally{globalThis.summary=__arkdpsReplayEnd();}binding;',c);}finally{replaying=false;}}
+for(const[name,native]of Object.entries(f.metadataExports))f.metadataExports[name]=(...args)=>{if(replaying){if(name==='il2cpp_class_is_assignable_from')return c.__arkdpsCapturedAssignable(...args);late++;throw Error('NativeFunction in replay');}return native(...args);};
+function reduce(record){c.ownedRecord=record;replaying=true;try{return vm.runInContext('__arkdpsReplayBegin(ownedRecord);try{globalThis.binding=prepareCapturedColdBinding(ownedRecord);}finally{globalThis.summary=__arkdpsReplayEnd();}binding;',c);}finally{replaying=false;}}
 const record=capture(),binding=reduce(record);
 assert.equal(c.summary.complete,true,JSON.stringify(c.summary));
 assert(binding,vm.runInContext('JSON.stringify(nativeAutoBindingDiagnostic)',c));
@@ -94,14 +98,14 @@ const changed=capture(),link=changed.segments.find(s=>s.role==='cold.root_close'
 assert(link);link.bytes=new ArrayBuffer(8);assert.equal(reduce(changed),null);
 assert.equal(c.summary.complete,true,JSON.stringify(c.summary));
 // Exercise the real PLAYING transition callback with this cold tree on return.
-c.planMetadata={...c.metadata,clock:vm.runInContext('clock',c),skill_offsets:{},immutable_class_parents:true};
+c.planMetadata={...c.metadata,clock:vm.runInContext('clock',c),skill_offsets:{},immutable_class_parents:true};vm.runInContext('nativeCaptureMetadata=planMetadata;',c);
 const statePlan=vm.runInContext('nativeCapturePlan("BattleController.set_state",ptr(1),planMetadata)',c);
-function captureState(edge,cold,sourcePlan=statePlan){
+function captureState(edge,cold,sourcePlan=statePlan,args=[f.controller]){
  const r=cold?capture():{version:1,edge,checkpoint:0,segments:[],fields:[],facts:{mode_epoch:0,scope_mode_epoch:0}};
  r.edge=edge;r.segments=r.segments.filter(s=>!['clock_open','clock_close'].includes(s.role));r.fields=r.fields.filter(s=>!['clock_open','clock_close'].includes(s.role));
  for(const field of sourcePlan.fields.filter(x=>x.phase===edge)){
   const add=(p,b)=>r.segments.push({field_id:field.field_id,role:field.role,checkpoint:0,address:p.toString(),bytes:b,status:'ok',guard_id:field.guard_id});
-  try{let p=field.root==='global_slot'?c.planMetadata.clock:field.root==='absolute'?f.ptr(field.absolute_address):f.controller;
+  try{let p=field.root==='global_slot'?c.planMetadata.clock:field.root==='absolute'?f.ptr(field.absolute_address):args[field.root_index];
    for(const offset of field.pointer_offsets){add(p.add(offset),raw(p.add(offset),8));p=original.readPointer.call(p.add(offset));}p=p.add(field.offset);
    if(field.kind==='utf16'){add(p,raw(p,8));add(p.add(16),raw(p.add(16),4));const n=original.readS32.call(p.add(16)),text=original.readUtf16String.call(p.add(20)),b=new ArrayBuffer(n*2),v=new DataView(b);for(let i=0;i<n;i++)v.setUint16(i*2,text.charCodeAt(i),true);add(p.add(20),b);}else add(p,raw(p,field.bytes));
    r.fields.push({field_id:field.field_id,role:field.role,checkpoint:0,status:'ok'});
@@ -109,7 +113,7 @@ function captureState(edge,cold,sourcePlan=statePlan){
  }
  return r;
 }
-function dispatch(record,fn){c.record=record;c.stateCallback=fn;replaying=true;try{vm.runInContext('__arkdpsReplayBegin(record);try{__arkdpsReplayPoint("body",stateCallback);}finally{globalThis.summary=__arkdpsReplayEnd();}',c);}finally{replaying=false;}assert.equal(c.summary.complete,true,JSON.stringify(c.summary));}
+function dispatch(record,fn){c.ownedRecord=record;c.stateCallback=fn;replaying=true;try{vm.runInContext('__arkdpsReplayBegin(ownedRecord);try{__arkdpsReplayPoint("body",stateCallback);}finally{globalThis.summary=__arkdpsReplayEnd();}',c);}finally{replaying=false;}assert.equal(c.summary.complete,true,JSON.stringify(c.summary));}
 f.write(f.controller.add(0x228),1);const stateHook=f.callback('set_state',f.controllerClass),stateCall={threadId:1};
 dispatch(captureState('entry',false),()=>stateHook.onEnter.call(stateCall,[f.controller,f.ptr(2)]));
 f.write(f.controller.add(0x228),2);dispatch(captureState('leave',true),()=>stateHook.onLeave.call(stateCall));
@@ -121,5 +125,27 @@ f.clock(0,0n);f.write(f.center.add(0x3c),2);
 dispatch(captureState('leave',true,resetPlan),()=>resetHook.onLeave.call(resetCall));
 assert.equal(vm.runInContext('autoChessRoundStart?.native_autochess_context.round',c),2);
 assert.equal(vm.runInContext('autoChessRoundStart?.native_fixed_time',c),'0');
+// The real ApplyModifier path must derive token/form evidence exclusively
+// from the same record's actor/data fields and full AutoChess membership tree.
+f.clock(30,4294967296n);
+const applyPlan=vm.runInContext('nativeCapturePlan("Entity.ApplyModifier",ptr(1),planMetadata)',c),applyHook=f.callback('ApplyModifier',f.entity);
+function actorHit(id,dataId,uid,token,fault=null){
+ const before=vm.runInContext('sequence',c);
+ const actor=f.unit(id,100+uid),data=actor.add(0x538).readPointer(),enemy=f.unit('enemy_owned_target',200+uid);
+ f.write(actor.add(0x148),f.text(id));f.write(enemy.add(0x148),f.text('enemy_owned_target'));
+ f.write(data.add(0x50),f.text(dataId));f.write(data.add(0x6c),uid);f.write(data.add(0x90),token?1:0);f.write(data.add(0x91),0);f.write(data.add(0x98),token?f.text('char_shared'):f.ptr(0));f.write(data.add(0xa0),token?101:0);f.write(actor.add(0x20),1);
+ f.write(enemy.add(0x40),50n*4294967296n);const mod=f.modifier(actor,enemy,40,-40,1),call={threadId:1,nativeCaptureInvocation:String(uid)},args=[enemy,mod];
+ const entry=captureState('entry',true,applyPlan,args);entry.invocation_id=String(uid);entry.thread_id=1;dispatch(entry,()=>applyHook.onEnter.call(call,args));
+ f.write(enemy.add(0x40),10n*4294967296n);if(fault==='data_uid')f.write(data.add(0x6c),uid+1);if(fault==='side')f.write(actor.add(0x20),5);
+ const leave=captureState('leave',true,applyPlan,args);leave.invocation_id=String(uid);leave.thread_id=1;dispatch(leave,()=>applyHook.onLeave.call(call));return JSON.parse(vm.runInContext('JSON.stringify(queue)',c)).filter(e=>e.sequence>before);
+}
+f.write(f.roleData[1].add(0x50),f.text('char_1037_amiya3'));
+actorHit('char_002_amiya','char_1037_amiya3',102,false);
+actorHit('token_owned','token_owned',999,true);
+const actorEvents=JSON.parse(vm.runInContext('JSON.stringify(queue)',c));
+assert(actorEvents.some(e=>e.proof?.native_autochess_character_form),JSON.stringify(actorEvents));
+assert(actorEvents.some(e=>e.proof?.native_autochess_token_host),JSON.stringify(actorEvents));
+const badForm=actorHit('char_002_amiya','char_1037_amiya3',102,false,'data_uid');assert(badForm.every(e=>!e.proof?.native_autochess_character_form));
+const badToken=actorHit('token_owned','token_owned',998,true,'side');assert(badToken.every(e=>!e.proof?.native_autochess_token_host));
 assert.equal(late,0);
 console.log(JSON.stringify({status:'PASS_COLD_SOURCE_REPLAY',fields:record.fields.length,segments:record.segments.length,late_reads:late,scope:binding.native_autochess_context.scope_key}));
