@@ -81,9 +81,9 @@ write(skillData.add(0x80),fieldTable);write(skillData.add(0x124),1);write(system
 found.SkillData=skillData;apiTable.il2cpp_field_get_type=f=>f.add(8).readPointer();
 const adapter=fs.readFileSync(path.join(__dirname,'../event_probe_native_pc.js'),'utf8');
 const setup=adapter.slice(adapter.indexOf('function prepareNativeCaptureMetadata('),adapter.indexOf('const nativeCaptureColdBindings='));
-vm.runInContext("let nativeCaptureMetadata=null;const nativeCaptureModeHistory=new Map();const nativeAutoDesiredMode='all';globalThis.arkdpsNativeAsyncCapture=true;"+setup,context);
+vm.runInContext("let nativeCaptureMetadata=null;const nativeCaptureModeHistory=new Map();const nativeAutoDesiredMode='all';const coalesceEnemyHp=true;globalThis.arkdpsNativeAsyncCapture=true;"+setup,context);
 vm.runInContext('prepareNativeCaptureMetadata({...meta,skillF:{charSkill:1,owner:2,data:3,prefab:4,id:5,name:6}});globalThis.adapterMetadata=nativeCaptureMetadata;',context);
-assert.equal(context.adapterMetadata.cold_metadata_ready,true);assert.equal(context.adapterMetadata.immutable_class_parents,true);
+assert.equal(context.adapterMetadata.cold_metadata_ready,true);assert.equal(context.adapterMetadata.immutable_class_parents,true);assert.equal(context.adapterMetadata.coalesce_enemy_hp,true);
 assert.equal(context.adapterMetadata.cold_plan.fields.length,3);assert.equal(context.adapterMetadata.classes.AutoChessGameManager,found.AutoChessGameManager.toString());
 const before={reads,calls};replaying=true;
 context.manager=found.AutoChessGameManager;

@@ -54,3 +54,5 @@ const witness=context.__arkdpsReplayWitness;delete context.__arkdpsReplayWitness
 assert.throws(()=>finish(coldMeta,{...capabilities,raw_collection:'local'}));assert.throws(()=>finish(coldMeta,{...capabilities,version:2}));
 assert.throws(()=>finish(coldMeta,{...capabilities,lowered_projections:[...required,required[0]]}));
 console.log('PASS_CAPTURE_CAPABILITY_GATE fake API only; six operations/raw-all/cold/owned-points mandatory, requirements retained');
+
+assert.equal(hp.hp_filter.defer_entry_scope,false);for(const name of ['Entity.SetHpInternal','Entity.SetHpInternalDirectly','Entity.OnAttributeDirty']){const plan=context.nativeCapturePlan(name,{toString:()=> '0x9000'},{...meta,coalesce_enemy_hp:true});assert.equal(plan.hp_filter.defer_entry_scope,name==='Entity.SetHpInternal');}
