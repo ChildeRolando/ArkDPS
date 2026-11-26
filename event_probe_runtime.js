@@ -741,11 +741,14 @@ function checkedNativeView(address,size){
  if(bytes===null||bytes.byteLength!==size)throw new Error('native block read unavailable');
  return new DataView(bytes);
 }
-function validatedClockStamp(view,closingFrame,allowRetry,withEventScope){
- const frame=view.getUint32(0,true),game_time=Number(view.getBigInt64(4,true))/4294967296;
+function validatedClockValues(frame,fixed,closingFrame,allowRetry,withEventScope){
+ const game_time=Number(fixed)/4294967296;
  if(closingFrame!==frame){if(allowRetry)return null;throw new Error('unstable callback clock');}
  if(!Number.isFinite(game_time)||game_time<0)throw new Error('invalid clock');
  return damageSettlementStamp(frame,game_time,withEventScope);
+}
+function validatedClockStamp(view,closingFrame,allowRetry,withEventScope){
+ return validatedClockValues(view.getUint32(0,true),view.getBigInt64(4,true),closingFrame,allowRetry,withEventScope);
 }
 function time(allowRetry = false, withEventScope = true) {
  // The closing frame remains a separate, independently captured witness.
@@ -1895,8 +1898,8 @@ function isEnemy(object,klass=object.readPointer()) {
  if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
  return enemyClassCache.get(key);
 }
-function stageTrapId(object,id=targetKey(object)) {
- return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,object.readPointer())?id:null;
+function stageTrapId(object,id=targetKey(object),readClass=null) {
+ return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,readClass?ptr(readClass(object)):object.readPointer())?id:null;
 }
 function beginEnemyHook(label) {
  epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
@@ -2539,25 +2542,22 @@ function enemyAttribute(data,index) {
  const value=Number(BigInt.asIntN(64,hidden^key))/4294967296;
  return Math.abs(value)<1e10&&(index!==MAX_HP_ATTRIBUTE||value>0)?value:null;
 }
+function decodeEnemyMaxHpWords(key,value,ready){
+ if(ready!==1)return null;
+ const decoded=Number(BigInt.asIntN(64,key^value))/4294967296;
+ return decoded>0&&decoded<1e10?decoded:null;
+}
 function decodeEnemyMaxHp(view){
  if(view.byteLength!==0x14)throw new Error('native block read unavailable');
- if(view.getUint8(0x10)!==1)return null;
- const value=Number(BigInt.asIntN(64,view.getBigUint64(0,true)^view.getBigUint64(8,true)))/4294967296;
- return value>0&&value<1e10?value:null;
+ return decodeEnemyMaxHpWords(view.getBigUint64(0,true),view.getBigUint64(8,true),view.getUint8(0x10));
 }
-function enemyMaxHp(enemy) {
+function enemyMaxHp(enemy,io=pointerHpIo) {
  if(!enemyAttributesReady)return null;
  try{
-  const attributes=enemy.add(0xb0).readPointer();
-  if(attributes.isNull())return null;
-  const cached=attributes.add(0x68).readPointer();
-  if(cached.isNull())return null;
-  const count=cached.add(0x18).readU32();
-  if(!count||count>64)return null;
-  // Only after the live length admits slot zero, copy its obscuring key,
-  // current value and ready flag. No live field survives this invocation.
-  const view=checkedNativeView(cached.add(0x20),0x14);
-  return decodeEnemyMaxHp(view);
+  const attributes=io.attributes(enemy);if(attributes===null)return null;
+  const count=io.attributeCount(attributes);if(!count||count>64)return null;
+  const words=io.attributeWords(attributes);
+  return decodeEnemyMaxHpWords(words[0],words[1],words[2]);
  }catch(e){return null;}
 }
 function enemyEntryAttributes(enemy) {
@@ -2758,6 +2758,104 @@ function installEnemyPhaseHook() {
   cfg.enemyPhaseError=String(e);
  }
 }
+// Raw acquisition is separate from the single HP state owner. The ordinary
+// provider preserves independent reads and nullable pointer-chain boundaries.
+const pointerHpIo=Object.freeze({
+ identity(enemy){const view=checkedNativeView(enemy,0x1c);return [view.getBigUint64(0,true),view.getUint32(0x18,true)];},
+ born(enemy){return enemy.add(0x25).readU8();},
+ id(enemy){return str(enemy.add(0x148).readPointer());},
+ hp(enemy){return BigInt(enemy.add(0x40).readS64().toString());},
+ clock(){const bytes=captureRead('clock_open',()=>clock.readByteArray(12));if(bytes===null||bytes.byteLength!==12)throw new Error('callback clock unavailable');const view=new DataView(bytes);return [view.getUint32(0,true),view.getBigInt64(4,true),captureClockFrame()];},
+ closing(enemy){const view=checkedNativeView(enemy.add(0x18),0x30);return [view.getUint32(0,true),view.getBigInt64(0x28,true)];},
+ trapClass(enemy){return BigInt(enemy.readPointer().toString());},
+ attributes(enemy){const attributes=enemy.add(0xb0).readPointer();if(attributes.isNull())return null;const cached=attributes.add(0x68).readPointer();return cached.isNull()?null:cached;},
+ attributeCount(attributes){return attributes.add(0x18).readU32();},
+ attributeWords(attributes){const view=checkedNativeView(attributes.add(0x20),0x14);return [view.getBigUint64(0,true),view.getBigUint64(8,true),view.getUint8(0x10)];}
+});
+function applyHpEntry(receiver,args,io,label,attributeChange){
+ if(stopped||fatal||(attributeChange&&args[1].toInt32()!==MAX_HP_ATTRIBUTE))return;
+ let enemyTarget=true;
+ try{
+  const enemy=args[0],key=enemy.toString();
+  if(enemy.isNull())return;
+  noteModifierHpWriterAttempt(enemy);
+  const existing=enemyHpWrites.get(key);
+  if(existing){
+   // Same-thread nested setters may implement the outer write. A concurrent
+   // writer cannot share its before/after certificate or coalescing tail.
+   if(existing.thread!==undefined&&receiver.threadId!==undefined&&existing.thread!==receiver.threadId){
+    if(coalesceEnemyHp)flushCoalescedEnemyHp();
+    existing.superseded=true;enemyStateUnknown=true;return;
+   }
+   if(attributeChange&&existing.enemyTarget&&existing.maxHpBefore===null){
+    if(coalesceEnemyHp)flushCoalescedEnemyHp();
+    existing.maxHpBefore=fixedArg(args[2]);
+   }
+   return;
+  }
+  const identity=io.identity(enemy);
+  const klass=ptr(identity[0]),uid=identity[1];
+  enemyTarget=isEnemy(enemy,klass);
+  // Before Born, enemy HP initialization is covered by enemy_enter.
+  // Stage traps never create an entry; the host admits them via snapshot.
+  if(enemyTarget&&!(io.born(enemy)))return;
+  let capturedId;
+  if(!enemyTarget){
+   if(attributeChange)return;
+   try{capturedId=io.id(enemy)||null;}catch(error){return;}
+   if(!stageTrapId(enemy,capturedId,io.trapClass))return;
+  }
+  // This setter publishes only the closing scope. The opening clock still
+  // detects a new round and brackets the write with the closing clock.
+  const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
+  const clockValues=io.clock();
+  const when=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope);
+  refreshEnemyEntryFrame(when.frame);
+  if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
+  if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
+  if(!uid)throw new Error('missing enemy instance UID');
+  const eid=io.id(enemy);if(!eid)throw new Error('missing source identity');
+  const evidence={target:eid,target_instance:String(uid)};
+  const rawHp=Number(io.hp(enemy))/4294967296;
+  const hpBefore=Number.isFinite(rawHp)&&rawHp>=0&&rawHp<1e9?rawHp:null;
+  if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
+  const maxHpBefore=attributeChange?fixedArg(args[2]):null;
+  receiver.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,deferScope,thread:receiver.threadId,superseded:false};
+  beginModifierHpWriter(receiver.write,klass,label);
+  enemyHpWrites.set(key,receiver.write);
+  beginEnemyHook(label);
+ }catch(e){
+  if(coalesceEnemyHp)flushCoalescedEnemyHp();
+  if(enemyTarget)enemyStateUnknown=true;
+ }
+}
+function applyHpLeave(receiver,io,label){
+ const write=receiver.write;
+ if(!write)return;
+ try{
+  const {enemy,key,uid,when,evidence,hpBefore,maxHpBefore,deferScope,superseded}=write;
+  if(enemyHpWrites.get(key)!==write)return;
+  enemyHpWrites.delete(key);
+  if(stopped||fatal||superseded)return;
+  const clockValues=io.clock();
+  const end=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope);
+  const closing=io.closing(enemy);
+  if(end.frame!==when.frame||end.game_time!==when.game_time||closing[0]!==uid)
+   throw new Error('enemy HP callback changed identity or crossed a frame');
+  const hp=Number(closing[1])/4294967296;
+  if(!Number.isFinite(hp)||hp<0||hp>=1e9)throw new Error('enemy HP unreadable after callback');
+  finishModifierHpWriter(write,end,hp);
+  if(hp===hpBefore&&maxHpBefore===null)return;
+  const maxHp=write.enemyTarget?enemyMaxHp(enemy,io):null;
+  if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
+  if(deferScope)stampEventScope(end);
+  recordEnemyHp(write,end,label,hp,maxHp);
+ }catch(e){
+  if(coalesceEnemyHp)flushCoalescedEnemyHp();
+  if(write.enemyTarget)enemyStateUnknown=true;
+ }
+ finally{endEnemyHook(label);}
+}
 function installEnemyStateHooks() {
  if(!enemyEntryReady||!enemyStateMethods)return;
  const installed=[];
@@ -2768,87 +2866,8 @@ function installEnemyStateHooks() {
   for(const [label,address] of writes){
    const attributeChange=label==='Entity.OnAttributeDirty';
    const callbacks={
-    onEnter(args){
-     if(stopped||fatal||(attributeChange&&args[1].toInt32()!==MAX_HP_ATTRIBUTE))return;
-     let enemyTarget=true;
-     try{
-      const enemy=args[0],key=enemy.toString();
-      if(enemy.isNull())return;
-      noteModifierHpWriterAttempt(enemy);
-      const existing=enemyHpWrites.get(key);
-      if(existing){
-       // Same-thread nested setters may implement the outer write. A concurrent
-       // writer cannot share its before/after certificate or coalescing tail.
-       if(existing.thread!==undefined&&this.threadId!==undefined&&existing.thread!==this.threadId){
-        if(coalesceEnemyHp)flushCoalescedEnemyHp();
-        existing.superseded=true;enemyStateUnknown=true;return;
-       }
-       if(attributeChange&&existing.enemyTarget&&existing.maxHpBefore===null){
-        if(coalesceEnemyHp)flushCoalescedEnemyHp();
-        existing.maxHpBefore=fixedArg(args[2]);
-       }
-       return;
-      }
-      const identity=checkedNativeView(enemy,0x1c);
-      const klass=ptr(identity.getBigUint64(0,true)),uid=identity.getUint32(0x18,true);
-      enemyTarget=isEnemy(enemy,klass);
-      // Before Born, enemy HP initialization is covered by enemy_enter.
-      // Stage traps never create an entry; the host admits them via snapshot.
-      if(enemyTarget&&!(enemy.add(0x25).readU8()))return;
-      let capturedId;
-      if(!enemyTarget){
-       if(attributeChange)return;
-       try{capturedId=targetKey(enemy);}catch(error){return;}
-       if(!stageTrapId(enemy,capturedId))return;
-      }
-      // This setter publishes only the closing scope. The opening clock still
-      // detects a new round and brackets the write with the closing clock.
-      const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
-      const when=time(false,!deferScope);
-      refreshEnemyEntryFrame(when.frame);
-      if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
-      if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
-      if(!uid)throw new Error('missing enemy instance UID');
-      const evidence=enemyIdentity(enemy,uid);
-      const rawHp=targetHp(enemy);
-      const hpBefore=Number.isFinite(rawHp)&&rawHp>=0&&rawHp<1e9?rawHp:null;
-      if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
-      const maxHpBefore=attributeChange?fixedArg(args[2]):null;
-      this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,deferScope,thread:this.threadId,superseded:false};
-      beginModifierHpWriter(this.write,klass,label);
-      enemyHpWrites.set(key,this.write);
-      beginEnemyHook(label);
-     }catch(e){
-      if(coalesceEnemyHp)flushCoalescedEnemyHp();
-      if(enemyTarget)enemyStateUnknown=true;
-     }
-    },
-    onLeave(){
-     const write=this.write;
-     if(!write)return;
-     try{
-      const {enemy,key,uid,when,evidence,hpBefore,maxHpBefore,deferScope,superseded}=write;
-      if(enemyHpWrites.get(key)!==write)return;
-      enemyHpWrites.delete(key);
-      if(stopped||fatal||superseded)return;
-      const end=time(false,!deferScope);
-      const closing=checkedNativeView(enemy.add(0x18),0x30);
-      if(end.frame!==when.frame||end.game_time!==when.game_time||closing.getUint32(0,true)!==uid)
-       throw new Error('enemy HP callback changed identity or crossed a frame');
-      const hp=Number(closing.getBigInt64(0x28,true))/4294967296;
-      if(!Number.isFinite(hp)||hp<0||hp>=1e9)throw new Error('enemy HP unreadable after callback');
-      finishModifierHpWriter(write,end,hp);
-      if(hp===hpBefore&&maxHpBefore===null)return;
-      const maxHp=write.enemyTarget?enemyMaxHp(enemy):null;
-      if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
-      if(deferScope)stampEventScope(end);
-      recordEnemyHp(write,end,label,hp,maxHp);
-     }catch(e){
-      if(coalesceEnemyHp)flushCoalescedEnemyHp();
-      if(write.enemyTarget)enemyStateUnknown=true;
-     }
-     finally{endEnemyHook(label);}
-    }
+    onEnter(args){return applyHpEntry(this,args,pointerHpIo,label,attributeChange);},
+    onLeave(){return applyHpLeave(this,pointerHpIo,label);}
    };
    try{
     callbacks.arkdpsName='hp.'+label;
