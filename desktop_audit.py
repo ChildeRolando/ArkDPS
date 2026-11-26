@@ -10,6 +10,7 @@ import time
 from uuid import uuid4
 
 from log_context import LogContext
+from metrics import sanitize_native_async_capture
 
 
 ENEMY_STATE_DELTA = 'desktop_enemy_state_delta_v1'
@@ -39,6 +40,11 @@ def _performance_fields(kind, data):
                 result['phases'][name] = numeric(row, ('calls', 'inclusive_ns', 'exclusive_ns', 'max_ns'))
         return result
     native = data.get('native')
+    if 'async_capture' in data:
+        async_data = data['async_capture']
+        identity = ((async_data.get('pid'), async_data.get('process_created_filetime'))
+                    if type(async_data) is dict else None)
+        result['async_capture'] = sanitize_native_async_capture(async_data, native=native, identity=identity)
     result['available'] = data.get('available') is True and type(native) is dict
     if not result['available']:
         return result

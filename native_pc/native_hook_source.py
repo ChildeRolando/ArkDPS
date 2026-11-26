@@ -13,7 +13,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path, PurePosixPath
-from metrics import timed
+from metrics import timed, sanitize_native_async_capture
 import re
 import secrets
 from threading import Lock
@@ -876,7 +876,9 @@ class NativeHookEventProbe:
             if report_timing and self._performance_sink is not None:
                 native = result.get('native_timing')
                 data = dict(schema=1, source='native_runtime', utc=datetime.now(timezone.utc).isoformat(),
-                            available=isinstance(native, dict), native=native if isinstance(native, dict) else None)
+                            available=isinstance(native, dict), native=native if isinstance(native, dict) else None,
+                            async_capture=sanitize_native_async_capture(result.get('native_async_capture'),
+                                native=native, identity=self._owned_process_instance))
                 try:
                     self._performance_sink('native_performance_timing', data)
                 except Exception:
@@ -903,6 +905,7 @@ class NativeHookEventProbe:
                         self._publication_token = token
                     elif token != requested_publication:
                         raise RuntimeError('PC 异步采集读取更换了已选定的发布前缀')
+            result.pop('native_async_capture', None)
             return result
 
         if self._timing_sink is None or (self._timing_enabled and not self._timing_enabled()):
@@ -967,11 +970,16 @@ class NativeHookEventProbe:
     def read_terminal_mark(self):
         self.last_terminal_response = None
         raw = self._raw_request('mark', timeout=self.terminal_mark_timeout, **self._mark_options())
+        raw.pop('native_async_capture', None)
         self.last_terminal_response = deepcopy(raw)
         return self.binding.bind_terminal_mark(raw)
 
     def read_terminal_tail(self, after, *, deadline=None):
-        return acquire_native_terminal_tail(self, self._raw_request, after, deadline=deadline)
+        def request(operation, **arguments):
+            result = self._raw_request(operation, **arguments)
+            result.pop('native_async_capture', None)
+            return result
+        return acquire_native_terminal_tail(self, request, after, deadline=deadline)
 
     def read_through(self, sequence):
         return self._read_range(self._committed_sequence, sequence)
