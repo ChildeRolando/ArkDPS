@@ -177,6 +177,10 @@ function prepareNativeCaptureMetadata(meta){
  }
  nativeCaptureMetadata.immutable_class_parents=typeof __arkdpsColdMetadataRead==='function';
  if(typeof __arkdpsBuildColdCapturePlan==='function')nativeCaptureMetadata.cold_plan=__arkdpsBuildColdCapturePlan(nativeCaptureMetadata);
+ // Reuse only snapshots made and recursively authenticated by this owner.
+ // Mutable setup objects are copied, never cached or frozen in place.
+ for(const key of ['cold_plan','classes','skill_offsets','hp_non_enemy_classes'])
+  if(nativeCaptureMetadata[key]!==undefined)nativeCaptureMetadata[key]=sealedCaptureContract(nativeCaptureMetadata[key]);
 
 }
 const nativeCaptureColdBindings=new WeakMap();
@@ -235,11 +239,26 @@ function captureNativeInvocationRead(scope,read){
  if(matches.length!==1||!Number.isSafeInteger(matches[0].checkpoint))__arkdpsReplayGap('missing exact parent checkpoint');
  return __arkdpsReplayCheckpoint('parent.body',matches[0].checkpoint,read);
 }
+const nativeContractSnapshots=new WeakSet();
 function sealedCaptureContract(value){
- if(value===null||typeof value!=='object')return value;
- if(Array.isArray(value))return Object.freeze(value.map(sealedCaptureContract));
- const result={};for(const key of Object.keys(value))result[key]=sealedCaptureContract(value[key]);
- return Object.freeze(result);
+ const path=new Set();
+ function copy(item){
+  if(item===null||item===undefined||typeof item==='string'||typeof item==='boolean')return item;
+  if(typeof item==='number'){if(!Number.isFinite(item))throw new Error('non-JSON capture contract');return item;}
+  if(typeof item!=='object')throw new Error('non-JSON capture contract');
+  if(nativeContractSnapshots.has(item))return item;
+  if(path.has(item))throw new Error('cyclic capture contract');
+  const array=Array.isArray(item),prototype=Object.getPrototypeOf(item);
+  if(!array&&prototype!==null&&prototype.constructor?.name!=='Object')throw new Error('non-JSON capture contract');
+  path.add(item);const result=array?[]:{};
+  for(const key of Object.keys(item)){
+   const property=Object.getOwnPropertyDescriptor(item,key);
+   if(!property||!Object.prototype.hasOwnProperty.call(property,'value'))throw new Error('non-JSON capture contract');
+   result[key]=copy(property.value);
+  }
+  path.delete(item);Object.freeze(result);nativeContractSnapshots.add(result);return result;
+ }
+ return copy(value);
 }
 function prepareNativeCaptureHook(address,callbacks){
  if(globalThis.arkdpsNativeAsyncCapture!==true)return;

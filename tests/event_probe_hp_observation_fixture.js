@@ -46,6 +46,9 @@ for(const mode of ['normal','unborn','nonenemy','trap','dirty-nonhp','pending-re
  assert.deepEqual(JSON.parse(JSON.stringify(copied.observation.values)),[{kind:'u64',offset:0},{kind:'u32',offset:24}]);
  original.observation.values[0].offset=99;original.pointer_offsets.push(999);
  assert.equal(copied.observation.values[0].offset,0);assert.equal(copied.pointer_offsets.length,0);
+ assert.strictEqual(vm.runInContext('sealedCaptureContract(sealedCaptureContract(rawObservationPlan))',f.context).fields[0].observation.name,plan.fields[0].name);
+ f.context.authenticatedContract=sealed;assert.strictEqual(vm.runInContext('sealedCaptureContract(authenticatedContract)',f.context),sealed);
+ for(const bad of [new Map(),new Date(),{callback(){}}]){f.context.nonJsonContract=bad;assert.throws(()=>vm.runInContext('sealedCaptureContract(nonJsonContract)',f.context),/non-JSON capture contract/);}
  assert(Object.isFrozen(copied.observation.values));assert(Object.isFrozen(copied.observation.values[0]));assert(!Object.isFrozen(original.observation.values));
 }
 console.log('PASS_HP_OBSERVATION_OWNER count1 original branch-demand and active closure');
