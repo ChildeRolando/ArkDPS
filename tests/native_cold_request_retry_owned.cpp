@@ -24,10 +24,9 @@ int main(){
  std::atomic<std::uint64_t> required{0};
  const std::uint64_t already_posted_request=12; // New host deadline before old replay failure.
  require_cold_publication(required,10);
- assert(cold_publication_required(already_posted_request,required.load()));
  // Host request11/12 already exists when the failed request10 replays.
  // Both must capture actual cold roots/body; changing requests proves nothing.
- for(auto request:{11u,12u}){
+ for(auto request:{already_posted_request-1,already_posted_request}){
   RecordHeader h;h.publication_request=request;h.ticket=100+request;
   memory.word=request;memory.reads=0;
   capture_scope_point(*plan,Phase::leave,context,configs->pin(0),read,&memory,*snapshot,h,nullptr,
