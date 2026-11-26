@@ -4,6 +4,7 @@
 #include "engine_capture_plan.h"
 #include "engine_capture_config.h"
 #include "engine_capture_pipeline.h"
+#include "engine_terminal_fence.h"
 #include <windows.h>
 #include <psapi.h>
 #include <MinHook.h>
@@ -53,6 +54,7 @@ struct Runtime {
     arkdps::capture::CaptureConfigurations configurations;
     std::uint64_t processed_ticket = 0, closed_ticket = 0, delivered_sequence = 0, published_sequence = 0;
     bool replay_active = false;
+    arkdps::capture::TerminalFence terminal_fence;
     JSValue prefix_projection = JS_UNDEFINED;
     JSValue publication_publish = JS_UNDEFINED, publication_request = JS_UNDEFINED;
     JSValue mode_state = JS_UNDEFINED, mode_install = JS_UNDEFINED, graph_retire = JS_UNDEFINED;
@@ -768,6 +770,31 @@ void replay_record(const std::byte* bytes, std::size_t length) {
                     || fence.at("closed_ticket")!=std::to_string(header.ticket)
                     || !fence.at("token").is_string() || fence.at("token").get<std::string>().empty())
                     throw std::runtime_error("published mark does not bind native closed record");
+                runtime.terminal_fence.clear();
+                if (fence.value("terminal_verified",false) && hook->capture_plan.terminal_destroy
+                    && header.phase==Phase::leave && header.closed_after && header.active_after==0) {
+                    bool complete=true;
+                    for (const auto id : hook->capture_plan.terminal_guard_fields) {
+                        bool found=false;
+                        for (unsigned i=0;i<header.field_count;++i) {
+                            FieldState field;std::memcpy(&field,bytes+field_start+i*sizeof field,sizeof field);
+                            if (field.id!=id || field.checkpoint) continue;
+                            found=field.error==Error::ok;
+                            if (!found) break;
+                            unsigned copied=0;
+                            for (unsigned j=0;j<header.segment_count;++j) {
+                                Segment segment;std::memcpy(&segment,bytes+segment_start+j*sizeof segment,sizeof segment);
+                                if (segment.field_id!=id || segment.role!=field.role || segment.checkpoint) continue;
+                                if (!runtime.terminal_fence.add(segment.address,payload+segment.offset,segment.size)) {found=false;break;}
+                                ++copied;
+                            }
+                            found=found && copied>0;break;
+                        }
+                        complete=complete && id && found;
+                    }
+                    runtime.terminal_fence.ticket=header.ticket;runtime.terminal_fence.activity=header.activity;
+                    runtime.terminal_fence.verified=complete;
+                }
                 runtime.captured_publication=text;
                 runtime.published_ticket=header.ticket;
                 if (arkdps::capture::plan_uint(parsed.at("native_capture_scope_mode_epoch"),9007199254740991ULL)!=header.scope_mode_epoch)
@@ -1136,13 +1163,24 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
     }
     const bool publication_operation=operation=="mark" || operation=="read" || operation=="terminal_read" || operation=="ack";
     if (operation=="mark") {
+        const auto terminal_ready=[&]() noexcept {
+            if (runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)) return false;
+            const auto active=runtime.active.load(std::memory_order_acquire);
+            const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
+            const auto activity=runtime.activity_generation.load(std::memory_order_acquire);
+            if (!runtime.terminal_fence.accepts(active,reserved,activity,capture_read,nullptr)) return false;
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+            return runtime.active.load(std::memory_order_acquire)==0
+                && runtime.lanes->reserved.load(std::memory_order_acquire)==reserved
+                && runtime.activity_generation.load(std::memory_order_acquire)==activity;
+        };
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(100);
-        while ((runtime.published_ticket<minimum_ticket || runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)) && std::chrono::steady_clock::now()<deadline) {
+        while (!terminal_ready() && (runtime.published_ticket<minimum_ticket || runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)) && std::chrono::steady_clock::now()<deadline) {
             const bool ready_more=drain_captures();
             if (!runtime.fatal.empty()) throw std::runtime_error(runtime.fatal);
             if (!ready_more && (runtime.published_ticket<minimum_ticket || runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire))) Sleep(1);
         }
-        if (runtime.published_ticket<minimum_ticket || runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire))
+        if (!terminal_ready() && (runtime.published_ticket<minimum_ticket || runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)))
             return nlohmann::json{{"retry",true},{"error",nullptr},{"stopped",false},
                 {"events",nlohmann::json::array()},{"hp_context",nlohmann::json::array()},
                 {"mark_retry_reason","native_fresh_publication_not_ready"},{"native_async_capture",async_state()}}.dump();

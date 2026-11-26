@@ -24,6 +24,8 @@ struct CompiledPlan {
     std::array<std::uint8_t,max_fields> field_stage{};
     std::array<SavedEntryRoot, max_roots> entry_roots{};
     std::uint8_t entry_root_count=0;
+    std::array<std::uint16_t,3> terminal_guard_fields{};
+    bool terminal_destroy=false;
     bool apply_modifier=false, buff_damage=false, parent_checkpoint_fields=false;
     bool hp_profile=false, hp_dirty=false, hp_normal=false;
     std::uintptr_t hp_enemy_class=0;
@@ -204,6 +206,15 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
                 : name=="hp.before" ? 3 : name=="hp.closing" ? 4
                 : field.value("tier",std::string())=="changed" ? 5 : 0;
         }
+    }
+    result.terminal_destroy=source.value("name",std::string())=="BattleController.Destroy";
+    if (result.terminal_destroy) for (unsigned i=0;i<source.at("fields").size();++i) {
+        const auto& value=source.at("fields")[i];
+        if (value.at("phase")!="leave") continue;
+        const auto name=value.value("name",std::string());
+        const auto role=value.at("role").get<std::string>();
+        const int slot=name=="terminal.singleton" ? 0 : role=="clock_open" ? 1 : role=="clock_close" ? 2 : -1;
+        if (slot>=0) result.terminal_guard_fields[slot]=result.plan->fields[i].id;
     }
     result.apply_modifier=source.value("name",std::string())=="Entity.ApplyModifier";
     result.buff_damage=source.value("name",std::string())=="Buff.OnTakeDamage";

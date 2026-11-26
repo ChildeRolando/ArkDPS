@@ -130,6 +130,14 @@ int main(){
  capture_scope_point(*boundary,Phase::entry,context,configs->pin(0),reader,&reads,*snapshot,header,nullptr,true);
  assert(header.cold_revision==1 && !header.scope_revision && !header.publication_revision);
  assert(snapshot->field_count==6);
+ plan.erase("hp_filter");plan["name"]="BattleController.Destroy";plan["profile"]="boundary";
+ auto singleton=field(3,"body","leave","none",0);singleton["name"]="terminal.singleton";
+ plan["fields"]=J::array({field(1,"clock_open","leave","before",1),field(2,"clock_close","leave","after",1),singleton});
+ auto destroy=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*destroy);
+ reads.count=0;header={};
+ capture_scope_point(*destroy,Phase::leave,context,configs->pin(0),reader,&reads,*snapshot,header);
+ assert(header.projection_candidate && !header.publication_request && !header.publication_captured);
+ assert(snapshot->field_count==3 && destroy->terminal_guard_fields[0]==3);
  const auto bounds=configs->collect_quiescent(0);
  assert(bounds["scope_before"]==2 && bounds["publication_before"]==1 && bounds["mode_before"]==0);
  assert(configs->pin(0)->scope->revision==2);

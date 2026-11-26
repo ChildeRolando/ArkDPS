@@ -84,12 +84,13 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
           || ((context.args_valid&(1u<<base.force_cold_arg)) && context.args[base.force_cold_arg]==base.force_cold_value));
     const bool cold=base.cold && (forced || request_cold || (header.publication_request
         && (!config || !config->scope || !config->scope->available)));
-    header.projection_candidate=forced || header.publication_request;
+    const bool terminal_leave=phase==Phase::leave && base.terminal_destroy;
+    header.projection_candidate=forced || header.publication_request || terminal_leave;
     if (cold) {
         header.cold_revision=1;
         capture_append(*base.cold->plan,Phase::checkpoint,context,reader,user,snapshot,0,1);
     }
-    const CaptureGraph* scope=!cold && !nochange && config && config->scope && config->scope->available
+    const CaptureGraph* scope=!cold && !nochange && !terminal_leave && config && config->scope && config->scope->available
         ? config->scope.get() : nullptr;
     Context graph_context=context;
     if (scope) {
@@ -118,7 +119,7 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
             capture_append(*base.plan,Phase::checkpoint,parent_context,reader,user,snapshot);
         }
     }
-    const CaptureGraph* publication=!cold && header.projection_candidate && config
+    const CaptureGraph* publication=!cold && !terminal_leave && header.projection_candidate && config
         && config->publication && config->publication->available ? config->publication.get() : nullptr;
     if (publication) {
         header.publication_revision=publication->revision;
