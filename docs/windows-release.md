@@ -66,7 +66,7 @@ python native_pc/native_event_runtime/build.py
 python tools/package_windows.py --native-hook-dll runtime/native-pc/native-event-runtime/ArkDPS.NativeEvents.dll --output runtime/packages
 ```
 
-DLL 的相邻 `.build.json`、六份运行时源码及 QuickJS、MinHook、nlohmann-json 三份许可均随包分发。
+DLL 的相邻 `.build.json`、构建清单声明的全部运行时源码及 QuickJS、MinHook、nlohmann-json 三份许可均随包分发。
 `metadata/release.json` 的 `native_pc_native_hooks` 记录 provider、协议、路径、摘要及受支持的客户端构建。
 
 发行类型、ABI/载荷支持与实机验收是不同事实。新构建默认 `performance_verified=false`、`autochess_handoff_verified=false`，标准包不会因这两项未验收而拒绝加载；加载仍严格验证字面布尔、组件/构建支持及实际载荷摘要。启动测试包仍必须为 experimental 且两项均为 false。旧发布清单中的 true 可读取，但不替本次候选或当前运行提供实机性能、稳定性或卫戍交接背书；启动成功也不改写验收事实。

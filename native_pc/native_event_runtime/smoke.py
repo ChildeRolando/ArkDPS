@@ -203,6 +203,24 @@ def child(binary):
         elif operation == 'memory':
             address = int(command['address'], 16)
             print(json.dumps(dict(value=ctypes.c_uint64.from_address(address).value)), flush=True)
+        elif operation == 'burst':
+            # This runner owns the process and this DLL. No game PID or
+            # external address is accepted by the throughput operation.
+            count = command.get('count', 1000)
+            if type(count) is not int or not 1 <= count <= 100000:
+                raise ValueError('owned burst count exceeds its bound')
+            function = libraries[0].ArkDpsTestInteger
+            function.argtypes, function.restype = [ctypes.c_uint64] * 12, ctypes.c_uint64
+            arguments = tuple(range(1, 13))
+            timings, checksum = [], 0
+            for _ in range(count):
+                started = time.perf_counter_ns()
+                checksum += function(*arguments)
+                timings.append(time.perf_counter_ns() - started)
+            timings.sort()
+            print(json.dumps(dict(count=count, checksum=checksum, total_ns=sum(timings),
+                p50_ns=timings[count//2], p99_ns=timings[min(count-1, count*99//100)],
+                maximum_ns=timings[-1])), flush=True)
         elif operation == 'owned-sret-buffer':
             result_buffer[:] = (0, 0, 0, 0)
             print(json.dumps(dict(address=hex(ctypes.addressof(result_buffer)))), flush=True)

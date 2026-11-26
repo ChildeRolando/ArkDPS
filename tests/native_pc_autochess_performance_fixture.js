@@ -54,7 +54,9 @@ check('native_lazy_arguments_preserve_production_callback_batches_and_ack',()=>{
    const convert=vm.runInContext('const NativePointer=ptr(0).constructor;\n'+source.slice(start,end)+
     '\n__arkdpsArguments',f.context);
    modifierPairs(f,false,values=>{
-    const bytes=new ArrayBuffer(128),view=new DataView(bytes);
+    // QuickJS creates the owned argument buffer in the consumer's realm.
+    // Match that boundary instead of passing a host-realm ArrayBuffer.
+    const bytes=vm.runInContext('new ArrayBuffer(128)',f.context),view=new DataView(bytes);
     for(let i=0;i<values.length;i++)view.setBigUint64(i*8,values[i].value,true);
     return convert(bytes);
    });

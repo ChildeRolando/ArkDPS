@@ -13,7 +13,9 @@ const plan=__arkdpsBuildColdCapturePlan(metadata);
 `,context);
 const {plan,metadata}=JSON.parse(JSON.stringify(result));let checks=0;
 function check(condition){assert.ok(condition);checks++;}
-check(plan.fields.length===2&&plan.fields[0].required===true&&plan.fields[1].required===false);
+check(plan.fields.length===3&&plan.fields[0].required===true&&plan.fields[1].required===false&&plan.fields[2].required===true);
+check(plan.fields[0].role==='cold.root_open'&&plan.fields[2].role==='cold.root_close'
+ &&plan.fields[0].guard_id===plan.fields[2].guard_id&&plan.fields[0].projection_root===plan.fields[2].projection_root);
 check(plan.projections.length<=128);
 let deepest=0;
 function visit(index,depth,ancestors){
@@ -21,7 +23,7 @@ function visit(index,depth,ancestors){
  const next=new Set([...ancestors,index]),node=plan.projections[index];deepest=Math.max(deepest,depth);
  check(node.pointer_offsets.length<=12&&node.max_visits<=256&&node.max_visits>0);
  check(!('type_gate'in node));
- if(node.kind==='utf16')check(node.expected_class===metadata.string_class&&node.max_units===128);
+ if(node.kind==='utf16')check(node.expected_class===metadata.string_class&&[128,200].includes(node.max_units));
  for(let i=0;i<node.child_count;i++)visit(node.child_begin+i,depth+1,next);
 }
 for(const f of plan.fields)visit(f.projection_root,1,new Set());

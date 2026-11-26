@@ -115,8 +115,8 @@ function __arkdpsBuildColdCapturePlan(metadata){
  const klass=name=>{const k=metadata.classes[name];if(typeof k!=='string'||!/^0x[0-9a-f]+$/i.test(k))throw new Error('cold class '+name);return k;};
  const object=(path,bytes,children=[],extra={})=>({kind:'object',pointer_offsets:path,offset:0,bytes,max_visits:1,children,...extra});
  const scalar=(offset,bytes,max_visits=1)=>object([],bytes,[],{offset,max_visits});
- const text=(path,max_visits,allow_null=false)=>({kind:'utf16',pointer_offsets:path,offset:0,bytes:0,max_visits,
-  expected_class:metadata.string_class,max_units:128,allow_null,children:[]});
+ const text=(path,max_visits,allow_null=false,max_units=128)=>({kind:'utf16',pointer_offsets:path,offset:0,bytes:0,max_visits,
+  expected_class:metadata.string_class,max_units,allow_null,children:[]});
  const array=(path,count_offset,items_offset,element_bytes,max_count,max_visits,children,extra={})=>({kind:'array',pointer_offsets:path,
   offset:0,bytes:0,count_offset,items_offset,data_offset:0x20,element_bytes,max_count,max_visits,children,...extra});
  const typed=(name,path,bytes,children,extra={})=>object(path,bytes,children,{gate:'exact',expected_class:klass(name),...extra});
@@ -143,8 +143,8 @@ function __arkdpsBuildColdCapturePlan(metadata){
  const character=object([0],40,[data([0x538],128)],{gate:'ancestor',expected_class:klass('Character'),ancestry_depth:10,max_visits:128});
  const container=object([0x18],36,[arrayHeader(1),array([],0x20,0x10,8,128,1,[character])]);
  const units=typed('UnitManager',[0x2c0],8,[container]);
- const root=typed('BattleController',[0x58,0xb8,0],8,[object([0x10],48),object([0xe0],56,[object([0x30],8)]),
-  object([0x160],8,[text([0x18],1)]),scalar(0x228,4)]);
+ const root=typed('BattleController',[0x58,0xb8,0],0x18,[object([0x10],48),object([0xe0],56,[object([0x30],8)]),
+  object([0x160],8,[text([0x18],1,false,200)]),scalar(0x228,4)]);
  const autoRoot=typed('BattleController',[0x58,0xb8,0],8,[host,units]);
  const projections=[];
  function flatten(node){
@@ -159,9 +159,10 @@ function __arkdpsBuildColdCapturePlan(metadata){
  }
  const projection_root=flatten(root);
  const auto_root=flatten(autoRoot);
- const field=(field_id,name,projection_root,required)=>({field_id,phase:'checkpoint',role:'cold.body',name,root:'absolute',root_index:0,
+ const field=(field_id,name,projection_root,required,role='cold.body',guard_side='none')=>({field_id,phase:'checkpoint',role,name,root:'absolute',root_index:0,
   absolute_address:klass('BattleController'),pointer_offsets:[],offset:0,bytes:0,kind:'projection_tree',projection_root,
-  guard_id:0,guard_side:'none',required});
- return {version:1,projections,fields:[field(1,'cold.native_binding',projection_root,true),field(2,'cold.autochess',auto_root,false)],
+  guard_id:guard_side==='none'?0:1,guard_side,required});
+ return {version:1,projections,fields:[field(1,'cold.native_binding_open',projection_root,true,'cold.root_open','before'),
+  field(2,'cold.autochess',auto_root,false),field(3,'cold.native_binding_close',projection_root,true,'cold.root_close','after')],
   max_bytes:1048576,max_reads:65536};
 }
