@@ -534,6 +534,9 @@ int main(int argc, char **argv) {
   for (int i = 2; i < argc; i++)
     if (std::string(argv[i]) == "--direct-hp")
       direct_enabled = true;
+  bool disable_scope_primitives = false;
+  for(int i=2;i<argc;i++) if(std::string(argv[i])=="--disable-scope-primitives") disable_scope_primitives=true;
+  JS_SetPropertyStr(c,g,"__ownedDisableScopePrimitives",JS_NewBool(c,disable_scope_primitives));
   JS_SetPropertyStr(c, g, "__ownedDirectEnabled",
                     JS_NewBool(c, direct_enabled));
   JS_FreeValue(c, g);
