@@ -13,8 +13,19 @@ let __arkdpsReplay=null;
 function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read','invalid_phase'].includes(status);}
 function __arkdpsReplayBegin(record){
  if(__arkdpsReplay!==null)throw new Error('replay already active');
- if(record?.version!==1||!Array.isArray(record.segments)||typeof record.edge!=='string')
+ if(record?.version!==1||typeof record.edge!=='string')
   throw new Error('invalid capture record');
+ const checkpoint=record.checkpoint??0;
+ if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('invalid record checkpoint');
+ if(record.native_view===true){
+  const names=['__nativeOwnedLease','__nativeOwnedRead','__nativeOwnedScalar','__nativeOwnedStatus','__nativeOwnedPoint'];
+  if(names.some(name=>typeof globalThis[name]!=='function'))throw new Error('native owned provider unavailable');
+  const native=Object.fromEntries(names.map(name=>[name,globalThis[name]]));
+  if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||native.__nativeOwnedLease(record.ticket)!==true)throw new Error('native owned lease unavailable');
+  __arkdpsReplay={record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};return;
+ }
+ if(record.native_view!==undefined&&record.native_view!==false)throw new Error('invalid owned provider selection');
+ if(!Array.isArray(record.segments))throw new Error('invalid capture segments');
  const segments=record.segments.map(segment=>{
   if(!Number.isInteger(segment.field_id)||segment.field_id<0||segment.field_id>65535||typeof segment.role!=='string'||!Number.isSafeInteger(segment.checkpoint)||segment.checkpoint<0||
      !(segment.bytes instanceof ArrayBuffer)||!['ok','unreadable','short','limit','guard_changed'].includes(segment.status))
@@ -23,8 +34,6 @@ function __arkdpsReplayBegin(record){
   if(address<0n||address>0xffffffffffffffffn||address+BigInt(segment.bytes.byteLength)>0x10000000000000000n)throw new Error('invalid segment address');
   return {...segment,address,bytes:segment.bytes.slice(0)};
  });
- const checkpoint=record.checkpoint??0;
- if(!Number.isSafeInteger(checkpoint)||checkpoint<0)throw new Error('invalid record checkpoint');
  const fields=(record.fields||[]).map(field=>{
   const point=field.checkpoint??checkpoint;
   if(!Number.isSafeInteger(point)||point<0||!Number.isInteger(field.field_id)||field.field_id<0||field.field_id>65535||typeof field.role!=='string'||typeof field.status!=='string')throw new Error('invalid captured field state');
@@ -85,14 +94,29 @@ function __arkdpsReplayCheckpoint(role,checkpoint,body){
 function __arkdpsReplayWitness(role,body){
  if(__arkdpsReplay===null)return body();
  const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId,replay.checkpoint],checkpoint=replay.record.checkpoint??0;
- const ids=replay.points.get(role+'\0'+checkpoint)?.ids??new Set();
- if(ids.size!==1)__arkdpsReplayGap('missing or ambiguous witness '+role);
- replay.role=role;replay.fieldId=[...ids][0];replay.checkpoint=checkpoint;
+ let fieldId;
+ if(replay.native){
+  const packed=__arkdpsNativePoint(role,checkpoint);
+  if((packed>>>24)!==1)__arkdpsReplayGap('missing or ambiguous witness '+role);
+  const status=(packed>>>16)&255;if(status)__arkdpsNativeReadFailure(status);
+  fieldId=packed&65535;
+ }else{
+  const ids=replay.points.get(role+'\0'+checkpoint)?.ids??new Set();
+  if(ids.size!==1)__arkdpsReplayGap('missing or ambiguous witness '+role);
+  fieldId=[...ids][0];
+ }
+ replay.role=role;replay.fieldId=fieldId;replay.checkpoint=checkpoint;
  try{return body();}finally{[replay.role,replay.fieldId,replay.checkpoint]=previous;}
 }
 function __arkdpsReplayOptional(role,read){
  if(__arkdpsReplay===null)return {available:true,value:read()};
  const replay=__arkdpsReplay,checkpoint=replay.record.checkpoint??0;
+ if(replay.native){
+  const packed=__arkdpsNativePoint(role,checkpoint),status=(packed>>>16)&255;
+  if((packed>>>24)!==1)__arkdpsReplayGap('missing or ambiguous optional capture field '+role);
+  if(status){if(__arkdpsNativeStructuralStatus(status))__arkdpsReplayGap('invalid optional native capture field '+role);replay.unreadable++;return {available:false,value:null};}
+  return {available:true,value:__arkdpsReplayWitness(role,read)};
+ }
  const states=[...(replay.points.get(role+'\0'+checkpoint)?.states.values()??[])];
  if(states.length!==1)__arkdpsReplayGap('missing optional capture field '+role);
  if(states[0].status!=='ok'){
@@ -103,12 +127,43 @@ function __arkdpsReplayOptional(role,read){
 }
 function __arkdpsReplayEnd(){
  if(__arkdpsReplay===null)throw new Error('no replay active');
+ if(__arkdpsReplay.native){
+  const replay=__arkdpsReplay;
+  try{if(replay.native.__nativeOwnedLease(replay.record.ticket)!==true)replay.structural.push('native owned lease ended');
+   const status=replay.native.__nativeOwnedStatus();if(!Number.isInteger(status)||status<0||status>10||__arkdpsNativeStructuralStatus(status))replay.structural.push('native owned structural status '+status);
+  }catch(error){replay.structural.push('native owned provider failed at end');}
+ }
  const result=Object.freeze({complete:__arkdpsReplay.structural.length===0,structural_gaps:Object.freeze([...__arkdpsReplay.structural]),unreadable_reads:__arkdpsReplay.unreadable});
  __arkdpsReplay=null;return result;
 }
 function __arkdpsReplayGap(reason){
  if(__arkdpsReplay!==null&&__arkdpsReplay.structural.length<16)__arkdpsReplay.structural.push(reason);
  throw new Error(reason);
+}
+function __arkdpsNativeStructuralStatus(status){return [1,2,3,9,10].includes(status);}
+function __arkdpsNativeReadFailure(status){
+ if(!Number.isInteger(status)||status<1||status>10||__arkdpsNativeStructuralStatus(status))__arkdpsReplayGap('native owned structural failure '+status);
+ __arkdpsReplay.unreadable++;throw new Error('native owned unreadable '+status);
+}
+function __arkdpsNativeCall(name,...args){
+ try{return __arkdpsReplay.native[name](...args);}catch(error){__arkdpsReplayGap('native owned provider failed '+name);}
+}
+function __arkdpsNativePoint(role,checkpoint){
+ const packed=__arkdpsNativeCall('__nativeOwnedPoint',role,checkpoint);
+ if(!Number.isSafeInteger(packed)||packed<0||packed>0xffffffff)__arkdpsReplayGap('invalid native owned point');
+ const count=packed>>>24,status=(packed>>>16)&255,id=packed&65535;
+ if(count>2||status>10)__arkdpsReplayGap('invalid native owned point shape');
+ return packed;
+}
+function __arkdpsOwnedScalar(address,kind){
+ const replay=__arkdpsReplay;
+ const value=__arkdpsNativeCall('__nativeOwnedScalar',replay.role,replay.checkpoint,replay.fieldId===null?-1:replay.fieldId,address,kind);
+ if(value===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
+ const bounds=[[0,255],[0,65535],[0,4294967295],[-2147483648,2147483647]];
+ if(kind<4){const [lo,hi]=bounds[kind];if(!Number.isInteger(value)||value<lo||value>hi)__arkdpsReplayGap('invalid native scalar integer');}
+ else if(kind===4||kind===5){if(typeof value!=='bigint'||value<(kind===4?0n:-0x8000000000000000n)||value>(kind===4?0xffffffffffffffffn:0x7fffffffffffffffn))__arkdpsReplayGap('invalid native scalar bigint');}
+ else if(kind!==6||typeof value!=='number')__arkdpsReplayGap('invalid native scalar float');
+ return value;
 }
 function __arkdpsOwnedRead(address,size){
  if(!Number.isSafeInteger(size)||size<0||size>1048576){
@@ -117,6 +172,14 @@ function __arkdpsOwnedRead(address,size){
  }
  const replay=__arkdpsReplay;
  if(replay===null)return __read(address,size);
+ if(replay.native){
+  address=__integer(address);
+  if(address<0n||address>0xffffffffffffffffn||address+BigInt(size)>0x10000000000000000n)__arkdpsReplayGap('invalid native captured address');
+  const bytes=__arkdpsNativeCall('__nativeOwnedRead',replay.role,replay.checkpoint,replay.fieldId===null?-1:replay.fieldId,address,size);
+  if(bytes===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
+  if(!(bytes instanceof ArrayBuffer)||bytes.byteLength!==size)__arkdpsReplayGap('invalid native owned bytes');
+  return bytes;
+ }
  const point=replay.points.get(replay.role+'\0'+replay.checkpoint);
  if(!point)__arkdpsReplayGap('missing captured point '+replay.role);
  // Most reads are scalars inside short object blocks. Binary search the
@@ -183,14 +246,14 @@ class NativePointer {
  toInt32(){return Number(BigInt.asIntN(32,this.value));}
  readByteArray(size){return __arkdpsOwnedRead(this.value,size);}
  __view(size){return new DataView(this.readByteArray(size));}
- readPointer(){return new NativePointer(this.__view(8).getBigUint64(0,true));}
- readU8(){return this.__view(1).getUint8(0);}
- readU16(){return this.__view(2).getUint16(0,true);}
- readU32(){return this.__view(4).getUint32(0,true);}
- readS32(){return this.__view(4).getInt32(0,true);}
- readU64(){return new NativeInteger(this.__view(8).getBigUint64(0,true));}
- readS64(){return new NativeInteger(this.__view(8).getBigInt64(0,true));}
- readFloat(){return this.__view(4).getFloat32(0,true);}
+ readPointer(){return new NativePointer((__arkdpsReplay?.native?__arkdpsOwnedScalar(this.value,4):this.__view(8).getBigUint64(0,true)));}
+ readU8(){return (__arkdpsReplay?.native?__arkdpsOwnedScalar(this.value,0):this.__view(1).getUint8(0));}
+ readU16(){return (__arkdpsReplay?.native?__arkdpsOwnedScalar(this.value,1):this.__view(2).getUint16(0,true));}
+ readU32(){return (__arkdpsReplay?.native?__arkdpsOwnedScalar(this.value,2):this.__view(4).getUint32(0,true));}
+ readS32(){return (__arkdpsReplay?.native?__arkdpsOwnedScalar(this.value,3):this.__view(4).getInt32(0,true));}
+ readU64(){return new NativeInteger((__arkdpsReplay?.native?__arkdpsOwnedScalar(this.value,4):this.__view(8).getBigUint64(0,true)));}
+ readS64(){return new NativeInteger((__arkdpsReplay?.native?__arkdpsOwnedScalar(this.value,5):this.__view(8).getBigInt64(0,true)));}
+ readFloat(){return (__arkdpsReplay?.native?__arkdpsOwnedScalar(this.value,6):this.__view(4).getFloat32(0,true));}
  readCString(){return __arkdpsOwnedString(this.value,0,false);}
  readUtf16String(length){return __arkdpsOwnedString(this.value,length,true);}
  writeU64(value){if(__arkdpsReplay!==null)__arkdpsReplayGap('native write during replay');const b=new ArrayBuffer(8);new DataView(b).setBigUint64(0,BigInt.asUintN(64,__integer(value)),true);__write(this.value,b);return this;}
