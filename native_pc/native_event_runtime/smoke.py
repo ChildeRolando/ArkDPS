@@ -221,8 +221,9 @@ def child(binary):
                 if rate and index % 128 == 0:
                     deadline = epoch + index * 1000000000 // rate
                     while time.perf_counter_ns() < deadline:
-                        if deadline-time.perf_counter_ns() > 500000:
-                            time.sleep(0)
+                        remaining = deadline-time.perf_counter_ns()
+                        if remaining > 200000:
+                            time.sleep((remaining-100000)/1000000000)
                 started = time.perf_counter_ns()
                 checksum += function(*arguments)
                 timings.append(time.perf_counter_ns() - started)
@@ -230,7 +231,7 @@ def child(binary):
             print(json.dumps(dict(count=count, checksum=checksum, total_ns=sum(timings), target_rate=rate,
                 producer_wall_ns=time.perf_counter_ns()-epoch,
                 p50_ns=timings[count//2], p99_ns=timings[min(count-1, count*99//100)],
-                maximum_ns=timings[-1])), flush=True)
+                maximum_ns=timings[-1], pacing='deadline_sleep_100us_tail_outside_call_timing')), flush=True)
         elif operation == 'owned-sret-buffer':
             result_buffer[:] = (0, 0, 0, 0)
             print(json.dumps(dict(address=hex(ctypes.addressof(result_buffer)))), flush=True)

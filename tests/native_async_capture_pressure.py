@@ -157,6 +157,7 @@ def main():
     receipt = dict(game_processes_accessed=False, in_game_fps_measured=False,
                    fixture='128-byte native boundary, one observed argument, twelve original arguments, not the complete HP contract',
                    synchronous_control=options.synchronous_control,
+                   pacing='deadline_sleep_100us_tail_outside_call_timing',
                    target_setters_per_second=options.rate,
                    binary_sha256=sha256(options.binary.read_bytes()).hexdigest(), cases=[])
     failed = False
