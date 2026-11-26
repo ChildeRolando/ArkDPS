@@ -65,7 +65,7 @@ struct Runtime {
     std::string captured_publication;
     std::uint64_t published_ticket = 0;
     arkdps::capture::RecordHeader replay_header;
-    JSValue replay_begin = JS_UNDEFINED, replay_end = JS_UNDEFINED;
+    JSValue replay_begin = JS_UNDEFINED, replay_end = JS_UNDEFINED, record_factory = JS_UNDEFINED;
     struct WorkerInvocation { JSValue receiver = JS_UNDEFINED; std::uint64_t id = 0; Hook* hook = nullptr; };
     std::array<std::array<WorkerInvocation, 256>, 16> receivers{};
     std::array<unsigned, 16> replay_depth{};
@@ -637,45 +637,31 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     } else if (header.depth!=depth || call.id!=header.invocation || call.hook!=hook
                || header.parent!=(depth>1 ? runtime.receivers[header.lane][depth-2].id : 0))
         throw std::runtime_error("native capture leave topology mismatch");
-    const char* edge=header.phase==Phase::entry ? "entry" : "leave";
-    auto record=JS_NewObject(c);
-    js_property(c,record,"native_view",JS_TRUE);
-    js_property(c,record,"version",JS_NewInt32(c,1));
-    js_property(c,record,"hook_id",JS_NewUint32(c,header.hook_id));
-    js_property(c,record,"edge",JS_NewString(c,edge));
-    js_property(c,record,"checkpoint",JS_NewUint32(c,header.checkpoint));
-    js_property(c,record,"ticket",JS_NewString(c,std::to_string(header.ticket).c_str()));
-    js_property(c,record,"invocation_id",JS_NewString(c,std::to_string(header.invocation).c_str()));
-    js_property(c,record,"parent_invocation_id",JS_NewString(c,std::to_string(header.parent).c_str()));
-    js_property(c,record,"activity_begin",JS_NewString(c,std::to_string(header.activity_begin).c_str()));
-    js_property(c,record,"activity_end",JS_NewString(c,std::to_string(header.activity).c_str()));
-    js_property(c,record,"active_at_capture",JS_NewUint32(c,header.active));
-    js_property(c,record,"active_after",JS_NewUint32(c,header.active_after));
-    js_property(c,record,"closed_after",JS_NewBool(c,header.closed_after));
-    js_property(c,record,"lane",JS_NewUint32(c,header.lane));
-    js_property(c,record,"thread_id",JS_NewUint32(c,header.thread_id));
-    js_property(c,record,"thread_birth",JS_NewString(c,std::to_string(header.thread_birth).c_str()));
-    js_property(c,record,"publication_request",JS_NewString(c,std::to_string(header.publication_request).c_str()));
-    auto facts=JS_NewObject(c);
-    js_property(c,facts,"mode_epoch",JS_NewInt64(c,header.mode_epoch));
-    js_property(c,facts,"scope_mode_epoch",JS_NewInt64(c,header.scope_mode_epoch));
-    js_property(c,facts,"scope_unavailable",JS_NewBool(c,header.scope_unavailable));
-    if (header.scope_revision) js_property(c,facts,"scope_revision",JS_NewInt64(c,header.scope_revision));
-    if (header.publication_captured) js_property(c,facts,"publication_revision",JS_NewInt64(c,header.publication_revision));
-    if (header.cold_revision) js_property(c,facts,"cold_revision",JS_NewInt64(c,header.cold_revision));
-    auto parents=JS_NewArray(c);
+    // Copy a small worker-owned header once. The JS record decodes only the
+    // properties a real callback reads; it never consults a later native lease.
+    constexpr unsigned header_words=22;
+    std::array<std::uint64_t,header_words+2*invocation_depth> packed{};
+    const std::array<std::uint64_t,header_words> values{{header.ticket,header.invocation,header.parent,
+        header.activity_begin,header.activity,header.thread_birth,header.publication_request,
+        header.mode_epoch,header.scope_mode_epoch,header.scope_revision,
+        header.publication_captured ? header.publication_revision : 0,header.cold_revision,
+        header.hook_id,header.checkpoint,header.active,header.active_after,header.lane,header.thread_id,
+        header.phase==Phase::entry ? 0u : 1u,header.closed_after ? 1u : 0u,
+        header.scope_unavailable ? 1u : 0u,header.parent_checkpoint_count}};
+    std::copy(values.begin(),values.end(),packed.begin());
     for (unsigned i=0;i<header.parent_checkpoint_count;++i) {
         ParentCheckpoint parent;
         std::memcpy(&parent,bytes+sizeof header+i*sizeof parent,sizeof parent);
         if (!parent.invocation || parent.invocation==header.invocation || parent.checkpoint!=i+1 || parent.reserved)
             throw std::runtime_error("invalid exact native parent checkpoint");
-        auto point=JS_NewObject(c);
-        js_property(c,point,"invocation_id",JS_NewString(c,std::to_string(parent.invocation).c_str()));
-        js_property(c,point,"checkpoint",JS_NewUint32(c,parent.checkpoint));
-        JS_SetPropertyUint32(c,parents,i,point);
     }
-    js_property(c,facts,"parent_checkpoints",parents);
-    js_property(c,record,"facts",facts);
+    const auto parent_bytes=header.parent_checkpoint_count*sizeof(ParentCheckpoint);
+    std::memcpy(packed.data()+header_words,bytes+sizeof header,parent_bytes);
+    auto packed_bytes=JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(packed.data()),header_words*8+parent_bytes);
+    if (JS_IsException(packed_bytes)) throw std::runtime_error(exception(c));
+    auto record=JS_Call(c,runtime.record_factory,JS_UNDEFINED,1,&packed_bytes);
+    JS_FreeValue(c,packed_bytes);
+    if (JS_IsException(record)) throw std::runtime_error(exception(c));
     const auto segment_start=sizeof header+header.parent_checkpoint_count*sizeof(ParentCheckpoint);
     const auto field_start=segment_start+header.segment_count*sizeof(Segment);
     const auto payload=bytes+field_start+header.field_count*sizeof(FieldState);
@@ -1027,6 +1013,8 @@ void initialize_on_worker(const std::string& source) {
         evaluate(c, arkdps_publication_source, "native-publication.js");
         evaluate(c, arkdps_cold_plan_source, "native-cold-plan.js");
         evaluate(c, "globalThis.arkdpsNativeAsyncCapture=true;", "native-async.js");
+        runtime.record_factory=JS_GetPropertyStr(c,global,"__arkdpsPackedCaptureRecord");
+        if (!JS_IsFunction(c,runtime.record_factory)) throw std::runtime_error("native packed record factory unavailable");
         runtime.replay_begin=JS_GetPropertyStr(c,global,"__arkdpsReplayBegin");
         runtime.replay_end=JS_GetPropertyStr(c,global,"__arkdpsReplayEnd");
         runtime.pointer = JS_GetPropertyStr(c, global, "__arkdpsPointer");

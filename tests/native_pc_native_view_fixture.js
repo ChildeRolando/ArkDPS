@@ -27,6 +27,32 @@ function rejects(fn){try{fn();return false;}catch(error){return true;}}
 `,c);
 vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8'),c);
 vm.runInContext(`
+const header=new ArrayBuffer(192),headerView=new DataView(header);
+const words=[0xffffffffffffffffn,9007199254740993n,7n,11n,12n,134401659939984618n,19n,3n,4n,21n,22n,23n,8n,0n,1n,0n,2n,31n,1n,1n,0n,1n];
+words.forEach((value,index)=>headerView.setBigUint64(index*8,value,true));
+headerView.setBigUint64(176,9007199254741001n,true);headerView.setUint32(184,1,true);
+const packed=__arkdpsPackedCaptureRecord(header);
+globalThis.packedProof={ticket:packed.ticket,invocation:packed.invocation_id,parent:packed.parent_invocation_id,
+ begin:packed.activity_begin,end:packed.activity_end,birth:packed.thread_birth,request:packed.publication_request,
+ hook:packed.hook_id,checkpoint:packed.checkpoint,active:packed.active_at_capture,after:packed.active_after,
+ lane:packed.lane,thread:packed.thread_id,edge:packed.edge,closed:packed.closed_after,
+ facts:{mode:packed.facts.mode_epoch,scopeMode:packed.facts.scope_mode_epoch,scope:packed.facts.scope_revision,
+ pub:packed.facts.publication_revision,cold:packed.facts.cold_revision,missing:packed.facts.scope_unavailable,
+ parents:packed.facts.parent_checkpoints},stableFacts:packed.facts===packed.facts,
+ frozen:Object.isFrozen(packed)&&Object.isFrozen(packed.facts)&&Object.isFrozen(packed.facts.parent_checkpoints)};
+const empty=__arkdpsPackedCaptureRecord(new ArrayBuffer(176));
+globalThis.packedEmpty=empty.facts.cold_revision===undefined&&empty.facts.scope_revision===undefined
+ &&empty.facts.publication_revision===undefined&&empty.facts.parent_checkpoints.length===0&&empty.edge==='entry';
+globalThis.packedInvalid=[rejects(()=>__arkdpsPackedCaptureRecord(new ArrayBuffer(175))),
+ rejects(()=>__arkdpsPackedCaptureRecord(new ArrayBuffer(184)))];
+`,c);
+assert.deepEqual(JSON.parse(vm.runInContext('JSON.stringify(packedProof)',c)),{
+ ticket:'18446744073709551615',invocation:'9007199254740993',parent:'7',begin:'11',end:'12',
+ birth:'134401659939984618',request:'19',hook:8,checkpoint:0,active:1,after:0,lane:2,thread:31,
+ edge:'leave',closed:true,facts:{mode:3,scopeMode:4,scope:21,pub:22,cold:23,missing:false,
+ parents:[{invocation_id:'9007199254741001',checkpoint:1}]},stableFacts:true,frozen:true});
+assert.equal(c.packedEmpty,true);assert.deepEqual([...c.packedInvalid],[true,true]);
+vm.runInContext(`
 __arkdpsReplayBegin(nativeRecord());
 globalThis.values=__arkdpsReplayPoint('body',()=>[ptr(4096).readU8(),ptr(4098).readU16(),ptr(4100).readU32(),ptr(4104).readS32(),ptr(4112).readU64().toString(),ptr(4120).readS64().toString(),ptr(4128).readFloat(),ptr(4112).readPointer().toString()]);
 globalThis.copy=__arkdpsReplayWitness('body',()=>ptr(4096).readByteArray(4));new Uint8Array(copy)[0]=0;
