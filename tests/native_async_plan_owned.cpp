@@ -26,5 +26,19 @@ int main() {
     plan=base; plan["arg_count"]=1; reject(plan);
     plan=base; plan["max_reads"]=4097; reject(plan);
     plan=base; plan["max_bytes"]=0; reject(plan);
+    auto tree=base;
+    tree["projections"]=Json::array({{{"kind","object"},{"bytes",8}}});
+    tree["fields"]=Json::array({{{"field_id",1},{"phase","entry"},{"role","body"},
+        {"root","absolute"},{"absolute_address","0x4567"},{"pointer_offsets",Json::array()},
+        {"offset",0},{"bytes",0},{"kind","projection_tree"},{"projection_root",0},
+        {"guard_id",0},{"guard_side","none"},{"required",true}}});
+    const auto compiled=compile_plan(tree,0x1234);
+    expect(compiled.plan.projection_count==1 && compiled.plan.projections[0].bytes==8);
+    plan=tree; plan["projections"][0]["kind"]="callback"; reject(plan);
+    plan=tree; plan["projections"][0]["max_visits"]=257; reject(plan);
+    plan=tree; plan["projections"][0]["child_count"]=2; reject(plan);
+    plan=tree; plan["projections"][0]["gate"]="fuzzy"; reject(plan);
+    plan=tree; plan["projections"][0]["skip_negative_i32_offset"]=-2; reject(plan);
+    plan=tree; plan["fields"][0]["projection_root"]=1; reject(plan);
     std::cout << "PASS native async plan: complete bound owned plan and " << rejections << " strict rejections\n";
 }

@@ -54,6 +54,48 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
     for (std::size_t i=0;i<globals.size();++i) {
         result.globals[i]=plan_address(globals[i]); result.globals_valid|=1u<<i;
     }
+    const auto nodes=source.value("projections",nlohmann::json::array());
+    if (!nodes.is_array() || nodes.size()>max_projection_nodes)
+        throw std::runtime_error("invalid capture projection nodes");
+    for (const auto& value : nodes) {
+        auto& node=result.plan.projections[result.plan.projection_count++];
+        const auto kind=value.at("kind").get<std::string>();
+        if (kind=="object") node.kind=ProjectionKind::object;
+        else if (kind=="utf16") node.kind=ProjectionKind::utf16;
+        else if (kind=="array") node.kind=ProjectionKind::array;
+        else throw std::runtime_error("invalid capture projection node kind");
+        const auto path=value.value("pointer_offsets",nlohmann::json::array());
+        if (!path.is_array() || path.size()>max_depth)
+            throw std::runtime_error("invalid projection pointer path");
+        for (const auto& offset : path) node.pointer_offsets[node.depth++]=plan_uint(offset,UINT32_MAX);
+        node.offset=plan_uint(value.value("offset",nlohmann::json(0)),UINT32_MAX);
+        node.bytes=plan_uint(value.value("bytes",nlohmann::json(0)),65535);
+        node.child_begin=plan_uint(value.value("child_begin",nlohmann::json(0)),max_projection_nodes);
+        node.child_count=plan_uint(value.value("child_count",nlohmann::json(0)),max_projection_nodes);
+        node.max_visits=plan_uint(value.value("max_visits",nlohmann::json(1)),max_projection_visits);
+        const auto gate=value.value("gate",std::string("none"));
+        if (gate=="none") node.gate=TypeGate::none;
+        else if (gate=="exact") node.gate=TypeGate::exact;
+        else if (gate=="ancestor") node.gate=TypeGate::ancestor;
+        else throw std::runtime_error("invalid capture projection type gate");
+        if (value.contains("expected_class")) node.expected_class=plan_address(value.at("expected_class"));
+        node.ancestry_depth=plan_uint(value.value("ancestry_depth",nlohmann::json(0)),10);
+        if (value.contains("allow_null")) {
+            if (!value.at("allow_null").is_boolean()) throw std::runtime_error("invalid projection null flag");
+            node.allow_null=value.at("allow_null").get<bool>();
+        }
+        node.max_units=plan_uint(value.value("max_units",nlohmann::json(0)),max_string_units);
+        node.count_offset=plan_uint(value.value("count_offset",nlohmann::json(0)),UINT32_MAX);
+        node.items_offset=plan_uint(value.value("items_offset",nlohmann::json(0)),UINT32_MAX);
+        node.data_offset=plan_uint(value.value("data_offset",nlohmann::json(0)),UINT32_MAX);
+        node.element_bytes=plan_uint(value.value("element_bytes",nlohmann::json(0)),max_element_bytes);
+        node.max_count=plan_uint(value.value("max_count",nlohmann::json(0)),max_array_elements);
+        const auto tombstone=value.value("skip_negative_i32_offset",nlohmann::json(-1));
+        if (!tombstone.is_number_integer() || tombstone.is_boolean()
+            || tombstone.get<std::int64_t>() < -1 || tombstone.get<std::int64_t>() > 32767)
+            throw std::runtime_error("invalid projection tombstone offset");
+        node.skip_negative_i32_offset=tombstone.get<std::int16_t>();
+    }
     const auto& fields=source.at("fields");
     if (!fields.is_array() || fields.size()>max_fields) throw std::runtime_error("invalid capture fields");
     for (const auto& value : fields) {
@@ -89,6 +131,7 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         else if (kind=="utf16") field.kind=Kind::utf16;
         else if (kind=="counted_bytes") field.kind=Kind::counted_bytes;
         else if (kind=="utf16_array") field.kind=Kind::utf16_array;
+        else if (kind=="projection_tree") field.kind=Kind::projection_tree;
         else throw std::runtime_error("invalid capture kind");
         field.guard_id=plan_uint(value.at("guard_id"), max_guards-1);
         const auto guard=value.at("guard_side").get<std::string>();
@@ -106,6 +149,7 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         field.element_bytes=plan_uint(value.value("element_bytes", nlohmann::json(0)), 65535);
         field.max_count=plan_uint(value.value("max_count", nlohmann::json(0)), 65535);
         field.element_pointer_offset=plan_uint(value.value("element_pointer_offset", nlohmann::json(0)), 65535);
+        field.projection_root=plan_uint(value.value("projection_root", nlohmann::json(0)),max_projection_nodes-1);
         if (value.contains("stop_utf16_literal")) {
             if (value.at("stop_utf16_literal")!="dynamic")
                 throw std::runtime_error("unsupported capture UTF16 stop literal");
