@@ -2,8 +2,9 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const adapter=fs.readFileSync('event_probe_native_pc.js','utf8'),c=vm.createContext({});
 vm.runInContext(adapter.slice(adapter.indexOf('function nativeCapturePlan(')),c);
-const start=adapter.indexOf(' captureBindingRead(read,options={}){'),end=adapter.indexOf('\n captureScopePoint:',start);
-vm.runInContext('globalThis.bindingAdapter={'+adapter.slice(start,end)+'};',c);
+const start=adapter.indexOf(' captureBindingRead(read,options={}){'),end=adapter.indexOf('\n },',start);
+assert(start>=0&&end>start,'captureBindingRead method boundary');
+vm.runInContext('globalThis.bindingAdapter={'+adapter.slice(start,end+4)+'};',c);
 vm.runInContext(`
 nativeCaptureColdBindings=new WeakMap();nativeCaptureColdRebuilding=false;nativeAutoCache={scope:'old'};nativeGeneration=10;
 let current={version:1,edge:'leave',facts:{cold_revision:1}},calls=0,discarded=0,phase=5,round=8;
