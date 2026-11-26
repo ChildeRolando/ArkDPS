@@ -13,6 +13,10 @@ function setAutoChessMode(enabled){
  return {desired_mode:nativeAutoDesiredMode,effective_mode:nativeAutoEffective?.mode??null};
 }
 function autoCollectionMode(scope_key,phase){
+ return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureCollectionMode==='function'
+  ?probeAdapter.captureCollectionMode(()=>autoCollectionModePoint(scope_key,phase)):autoCollectionModePoint(scope_key,phase);
+}
+function autoCollectionModePoint(scope_key,phase){
  // Only a proven combat scope can latch a preference. Terminal observations
  // retain the completed combat's effective mode until another combat starts.
  if([4,5,6].includes(phase)&&nativeAutoEffective?.scope_key!==scope_key){
@@ -967,7 +971,7 @@ function readAutoChessViewMode(manager){
  }catch(e){return null;}
 }
 function nativeBinding(prepared=null,captureRoundStart=false){
- return typeof probeAdapter.captureBindingRead==='function'?probeAdapter.captureBindingRead(()=>nativeBindingPoint(prepared,captureRoundStart)):nativeBindingPoint(prepared,captureRoundStart);
+ return typeof probeAdapter.captureBindingRead==='function'?probeAdapter.captureBindingRead(()=>nativeBindingPoint(prepared,captureRoundStart),{captureRoundStart}):nativeBindingPoint(prepared,captureRoundStart);
 }
 function nativeBindingPoint(prepared=null,captureRoundStart=false){
  // Read the same five ownership roots and exact Q32.32 clock as the guarded

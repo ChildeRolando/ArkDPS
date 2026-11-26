@@ -3713,12 +3713,13 @@ function __arkdpsOnClosedRecord(record){
 }
 function capturedClosedRecordProjection(record){
  if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive()||record!==__arkdpsReplayRecord()||
-    record.edge!=='leave'||record.closed_after!==true||active!==0||typeof probeAdapter.capturedPublicationBinding!=='function')return null;
+    record.edge!=='leave'||record.closed_after!==true||active!==0||!Number.isSafeInteger(record.facts?.scope_mode_epoch)||record.facts.scope_mode_epoch<0||typeof probeAdapter.capturedPublicationBinding!=='function')return null;
  try{
  const boundary=currentTerminalBoundary();
  if(boundary){
-  const terminal=readTerminalEvents(acknowledgedSequence,sequence,false);
-  if(terminal.retry!==false)return null;
+  const rawTerminal=readTerminalEvents(acknowledgedSequence,sequence,false);
+  if(rawTerminal.retry!==false)return null;
+  const terminal={...rawTerminal,native_capture_scope_mode_epoch:record.facts.scope_mode_epoch};
   const {events:_events,hp_context:_context,after:_after,through:_through,terminal_only:_terminal,...fence}=terminal;
   return __arkdpsSnapshotPublication(fence,terminal);
  }
@@ -3726,7 +3727,7 @@ function capturedClosedRecordProjection(record){
  if(coalesceEnemyHp)flushCoalescedEnemyHp();
  const current=time(true,false);if(!current)return null;
  if(binding.native_frame!==current.frame||Number(BigInt(binding.native_fixed_time))/4294967296!==current.game_time)return null;
- const value={frame:current.frame,game_time:current.game_time,sequence,epoch,active:0,active_hooks:[],error:fatal,stopped,
+ const value={frame:current.frame,game_time:current.game_time,sequence,epoch,active:0,active_hooks:[],error:fatal,stopped,native_capture_scope_mode_epoch:record.facts.scope_mode_epoch,
   ...eventQuality(current.frame),...binding,terminal_boundary:currentTerminalBoundary(),
   terminal_boundary_diagnostics:{...terminalDiagnostics},terminal_read_version:1};
  return __arkdpsSnapshotPublication(value);

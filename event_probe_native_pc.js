@@ -168,6 +168,8 @@ function prepareNativeCaptureMetadata(meta){
  if(typeof __arkdpsBuildColdCapturePlan==='function')nativeCaptureMetadata.cold_plan=__arkdpsBuildColdCapturePlan(nativeCaptureMetadata);
 
 }
+const nativeCaptureColdBindings=new WeakMap();
+let nativeCaptureColdRebuilding=false;
 let nativeCaptureScopeRevision=0;
 const nativeCaptureScopes=new Map();
 function publishNativeCaptureScope(){
@@ -206,6 +208,12 @@ function withCapturedMode(record,body){
  nativeAutoDesiredMode=nativeCaptureModeHistory.get(epoch);
  try{return body();}finally{nativeAutoDesiredMode=nativeCaptureModeHistory.get(nativeCaptureModeEpoch);}
 }
+function capturedCollectionMode(read){
+ const record=__arkdpsReplayRecord(),epoch=record.facts?.scope_mode_epoch;
+ if(!Number.isSafeInteger(epoch)||!nativeCaptureModeHistory.has(epoch))__arkdpsReplayGap('captured scope mode epoch unavailable');
+ const desired=nativeAutoDesiredMode;nativeAutoDesiredMode=nativeCaptureModeHistory.get(epoch);
+ try{return read();}finally{nativeAutoDesiredMode=desired;}
+}
 function captureNativeInvocationRead(scope,read){
  if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive())return read();
  const record=__arkdpsReplayRecord(),invocation=scope?.nativeCaptureInvocation;
@@ -236,13 +244,18 @@ const probeAdapter={
    return __arkdpsReplayWitness('cold.root_'+side,read);
   return read();
  },
- captureBindingRead(read){
+ captureBindingRead(read,options={}){
   if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive())return read();
   const record=__arkdpsReplayRecord();
-  if(record.facts?.cold_revision!==undefined)return __arkdpsReplayPoint('cold.body',read);
+  if(record.facts?.cold_revision!==undefined){
+   const captured=prepareCapturedColdBinding(record);if(!captured)return null;
+   const binding=JSON.parse(JSON.stringify(captured));
+   if(options.captureRoundStart!==true){delete binding.lifecycle_baseline;delete binding.live_character_collection_empty;delete binding.live_character_data_uids;}
+   return binding;
+  }
   return nativeCapturedPublicationBinding(true);
  },
- captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,retireCaptureGraphs,captureRecordMode:withCapturedMode,captureInvocationRead:captureNativeInvocationRead,
+ captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,retireCaptureGraphs,captureRecordMode:withCapturedMode,captureCollectionMode:capturedCollectionMode,captureInvocationRead:captureNativeInvocationRead,
  captureClassIdentity(klass,name,namespace){
   if(typeof __arkdpsColdClassIdentity!=='function')__arkdpsReplayGap('immutable class identity not frozen');
   return __arkdpsColdClassIdentity(klass,name,namespace);
@@ -514,7 +527,7 @@ function nativeCaptureScopeGraph(cache,stage,clockAddress,revision){
  add('scope.clock_close',clockAddress,12,1,'after');
  const before=fields.filter(f=>f.guard_side==='before'),after=fields.filter(f=>f.guard_side==='after');
  const ordered=[...before,...after];
- return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,available:true,fields:ordered,body_insertion_index:before.length,max_bytes:65536,max_reads:4096,
+ return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,raw_collection:'all',available:true,fields:ordered,body_insertion_index:before.length,max_bytes:65536,max_reads:4096,
   context:{autochess:enabled,stage_id:stageId,identity:{...identity},header_key:cache.headerKey,fingerprint:cache.fingerprint,roots:cache.roots,
    stage_pointer:stage.stagePointer.toString(),phase_address:cache.addresses.phase?.toString()??null,round_address:cache.addresses.round?.toString()??null}};
 }
@@ -533,7 +546,7 @@ function publicationGuardFields(guards,stringClass,revision){
   }
   chunks.push({schema_version:1,fields,max_bytes:131072,max_reads:4096});
  }
- return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,available:true,chunks};
+ return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,raw_collection:'all',available:true,chunks};
 }
 function publishNativeCapturePublication(binding){
  if(globalThis.arkdpsNativeAsyncCapture!==true||__arkdpsReplayActive())return;
@@ -571,6 +584,10 @@ function capturedGuardValue(guard,role){
  });
 }
 function nativeCapturedPublicationBinding(forCallback=false){
+ if(__arkdpsReplayActive()&&__arkdpsReplayRecord().facts?.cold_revision!==undefined){
+  const captured=prepareCapturedColdBinding(__arkdpsReplayRecord());
+  return captured?{...JSON.parse(JSON.stringify(captured)),...nativeInitialEnvelope(captured)}:null;
+ }
  if(!__arkdpsReplayActive())throw new Error('captured publication outside replay');
  const record=__arkdpsReplayRecord(),facts=record.facts;
  if((!forCallback&&(record.edge!=='leave'||record.closed_after!==true))||!facts||!Number.isSafeInteger(facts.publication_revision))return null;
@@ -596,6 +613,14 @@ function nativeCapturedPublicationBinding(forCallback=false){
  return {...binding,...nativeInitialEnvelope(binding)};
 }
 function capturedNativeScopePoint(when){
+ if(__arkdpsReplayActive()&&__arkdpsReplayRecord().facts?.cold_revision!==undefined){
+  if(nativeCaptureColdRebuilding)return null;
+  const binding=prepareCapturedColdBinding(__arkdpsReplayRecord());
+  if(!binding||binding.native_frame!==when.frame||Number(BigInt(binding.native_fixed_time))/4294967296!==when.game_time)return null;
+  if(binding.native_autochess_context===undefined)return undefined;
+  const {protocol_version,status,verified_same_frame,frame,game_time,scope_key,phase,round,collection_mode}=binding.native_autochess_context;
+  return {protocol_version,status,verified_same_frame,frame,game_time,scope_key,phase,round,collection_mode};
+ }
  if(!__arkdpsReplayActive())throw new Error('captured scope outside replay');
  const record=__arkdpsReplayRecord(),revision=record.facts?.scope_revision;
  const graph=nativeCaptureScopes.get(revision);
@@ -667,4 +692,19 @@ function capturedTokenHostEvidence(scope,when){
   if(!host_key||!/^[A-Za-z0-9_#.-]{1,128}$/.test(host_key)||!host_uid||host_uid===point.data_uid||player_side<0||player_side>4)return;
   return {host_key,host_uid,player_side};
  });
+}
+
+function prepareCapturedColdBinding(record){
+ if(!__arkdpsReplayActive()||record!==__arkdpsReplayRecord()||record.facts?.cold_revision===undefined)__arkdpsReplayGap('cold binding owner mismatch');
+ if(nativeCaptureColdBindings.has(record))return nativeCaptureColdBindings.get(record);
+ if(nativeCaptureColdRebuilding)__arkdpsReplayGap('recursive cold binding');
+ // Never validate an old body's addresses against a newly discovered scope.
+ // Its complete tree was copied in THIS native record, under fresh roots/clock.
+ discardAutoChessBody();nativeAutoCache=null;
+ nativeCaptureColdRebuilding=true;
+ try{
+  const binding=__arkdpsReplayPoint('cold.body',()=>nativeBindingPoint(null,true));
+  const owned=binding?JSON.parse(JSON.stringify(binding)):null;
+  nativeCaptureColdBindings.set(record,owned);return owned;
+ }finally{nativeCaptureColdRebuilding=false;}
 }

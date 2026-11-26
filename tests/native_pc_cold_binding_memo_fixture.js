@@ -1,0 +1,22 @@
+'use strict';
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const adapter=fs.readFileSync('event_probe_native_pc.js','utf8'),c=vm.createContext({});
+vm.runInContext(adapter.slice(adapter.indexOf('function nativeCapturePlan(')),c);
+const start=adapter.indexOf(' captureBindingRead(read,options={}){'),end=adapter.indexOf('\n captureScopePoint:',start);
+vm.runInContext('globalThis.bindingAdapter={'+adapter.slice(start,end)+'};',c);
+vm.runInContext(`
+nativeCaptureColdBindings=new WeakMap();nativeCaptureColdRebuilding=false;nativeAutoCache={scope:'old'};nativeGeneration=10;
+let current={version:1,edge:'leave',facts:{cold_revision:1}},calls=0,discarded=0,phase=5,round=8;
+__arkdpsReplayActive=()=>true;__arkdpsReplayRecord=()=>current;__arkdpsReplayGap=reason=>{throw Error(reason);};__arkdpsReplayPoint=(role,body)=>{if(role!=='cold.body')throw Error('wrong role');return body();};
+discardAutoChessBody=()=>discarded++;
+nativeBindingPoint=()=>{calls++;nativeGeneration++;if(capturedNativeScopePoint({frame:0,game_time:0})!==null)throw Error('recursive old scope reuse');return {native_frame:0,native_fixed_time:'0',native_generation:nativeGeneration,native_autochess_context:{status:'available',phase,round,scope_key:'fresh-'+round,frame:0,game_time:0},lifecycle_baseline:{actual_cold:true},live_character_collection_empty:true,live_character_data_uids:[]};};
+const first=prepareCapturedColdBinding(current),again=prepareCapturedColdBinding(current);
+globalThis.first=first;globalThis.same=first===again;globalThis.firstCalls=calls;globalThis.firstGeneration=nativeGeneration;
+globalThis.normal=bindingAdapter.captureBindingRead(()=>{throw Error('live fallback');});
+globalThis.roundStart=bindingAdapter.captureBindingRead(()=>{throw Error('live fallback');},{captureRoundStart:true});
+globalThis.scope=capturedNativeScopePoint({frame:0,game_time:0});
+globalThis.wrongClock=capturedNativeScopePoint({frame:1,game_time:0});
+current={version:1,edge:'leave',facts:{cold_revision:2}};round=9;globalThis.second=prepareCapturedColdBinding(current);globalThis.totalCalls=calls;globalThis.totalDiscard=discarded;
+`,c);
+assert.equal(c.same,true);assert.equal(c.firstCalls,1);assert.equal(c.firstGeneration,11);assert.equal(c.scope.round,8);assert.equal(c.wrongClock,null);assert.equal(c.normal.lifecycle_baseline,undefined);assert.equal(c.normal.live_character_collection_empty,undefined);assert.equal(c.roundStart.lifecycle_baseline.actual_cold,true);assert.equal(c.second.native_autochess_context.round,9);assert.equal(c.totalCalls,2);assert.equal(c.totalDiscard,2);
+console.log('PASS_RECORD_LOCAL_COLD_BINDING actual record memo/recursive stamp isolation/no double generation/presence contract');

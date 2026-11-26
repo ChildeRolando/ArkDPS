@@ -132,7 +132,7 @@ console.log(JSON.stringify({owned_terminal_read_cases:cases,live_game:false}));
 {
  const f=make();destroy(f,{afterEnter:()=>{f.write(slot(f),f.ptr(0));f.write(f.controller.add(0x10),f.ptr(0));}});
  const originalReadThrough=f.vm.runInContext('readThroughSequence',f.context);
- f.context.ownedTerminalRecord={version:1,edge:'leave',closed_after:true,facts:{mode_epoch:0}};
+ f.context.ownedTerminalRecord={version:1,edge:'leave',closed_after:true,facts:{mode_epoch:0,scope_mode_epoch:0}};
  f.vm.runInContext("nativeCaptureModeHistory.set(0,'all');globalThis.__arkdpsReplayActive=()=>true;globalThis.__arkdpsReplayRecord=()=>ownedTerminalRecord;globalThis.__arkdpsReplayOptional=(_role,read)=>({available:true,value:read()});probeAdapter.capturedPublicationBinding=()=>{throw Error('terminal borrowed normal binding');};",f.context);
  const projection=f.vm.runInContext('__arkdpsOnClosedRecord(ownedTerminalRecord)',f.context);
  assert(projection,'closed terminal publication unavailable');

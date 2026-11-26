@@ -31,7 +31,7 @@ function record(){
   if(f.kind==='utf16'){own(f,address,8);own(f,address+16n,4);own(f,address+20n,new DataView(read(address+16n,4)).getUint32(0,true)*2);}else own(f,address,f.bytes);
  }
  for(const [i,role]of ['clock_open','clock_close'].entries())segments.push({field_id:201+i,role,checkpoint:0,address:'0xb000',bytes:read(0xb000,12),status:'ok',guard_id:63});
- return {version:1,edge:'leave',closed_after:true,checkpoint:0,facts:{mode_epoch:0,scope_revision:1,publication_revision:1},segments};
+ return {version:1,edge:'leave',closed_after:true,checkpoint:0,facts:{mode_epoch:0,scope_mode_epoch:0,scope_revision:1,publication_revision:1},segments};
 }
 checkedNativeView=(p,n)=>new DataView(p.readByteArray(n));
 str=p=>p.add(0x14).readUtf16String(p.add(0x10).readS32());
@@ -57,7 +57,7 @@ nativeCaptureScopes.set(2,autoGraph);
 const autoGuards=[['text',ptr(0xc000),'account-one']],autoBinding={...binding,native_stage_id:'AUTOCHESS_LIVE',native_autochess_context:{status:'available',scope_key:roots+':scope',phase:4,round:8,frame:1,game_time:1,memberships:[{data_uid:7,player_uid:'account-one'}]}};
 nativeCapturePublications.set(2,{mode_epoch:0,binding:autoBinding,guards:autoGuards});
 autoScope=()=>roots+':scope';autoCollectionMode=()=> 'local';
-function autoRecord(){const r=record();r.facts={mode_epoch:0,scope_revision:2,publication_revision:2};
+function autoRecord(){const r=record();r.facts={mode_epoch:0,scope_mode_epoch:0,scope_revision:2,publication_revision:2};
  // Replace normal scope fields with the complete auto scope graph snapshots.
  r.segments=r.segments.filter(s=>s.role==='clock_open'||s.role==='clock_close');
  const own=(f,address,size)=>r.segments.push({field_id:f.field_id,role:f.role,checkpoint:0,address:String(address),bytes:read(address,size),status:'ok',guard_id:f.guard_id});
