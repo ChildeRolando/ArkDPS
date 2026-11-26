@@ -98,7 +98,7 @@ function verifyAutoChessPhaseEnum(field){
  autoPhaseEnums.add(key);
 }
 function autoIdentity(k,name,namespace){
- return !k.isNull()&&className(k)===name&&k.add(0x18).readPointer().readCString()===namespace;
+ return !k.isNull()&&className(k)===name&&classNamespace(k)===namespace;
 }
 function autoLayout(k,name,namespace,count,specs,check=null){
  if(!autoIdentity(k,name,namespace))throw new Error('AutoChess class '+name);
@@ -393,7 +393,7 @@ function captureAutoCharacterFormPoint(scope,when,stamp){
     stamp?.status!=='available'||![4,5,6].includes(stamp.phase)||!['all','local'].includes(stamp.collection_mode)||
     stamp.frame!==when.frame||stamp.game_time!==when.game_time)return;
  try{
-  const fixed=clock.add(4).readS64().toString();
+  const fixed=captureClockFixed().toString();
   const sameScopeAndClock=()=>{
    const current=currentNativeIdentity(),observed=nativeAutoScope;
    return cache===nativeAutoCache&&stage===nativeAutoStage&&
@@ -404,7 +404,7 @@ function captureAutoCharacterFormPoint(scope,when,stamp){
     !!current&&Object.keys(current).every(key=>current[key]===cache.identity[key])&&
     stage.stageAddress.readPointer().equals(stage.stagePointer)&&
     cache.addresses.phase.readS32()===stamp.phase&&cache.addresses.round.readS32()===stamp.round&&
-    clock.readU32()===when.frame&&clock.add(4).readS64().toString()===fixed;
+    captureClockFrame()===when.frame&&captureClockFixed().toString()===fixed;
   };
   // These optional reads must not update or invalidate the production scope cache.
   if(Number(BigInt(fixed))/4294967296!==when.game_time||!sameScopeAndClock())return;
@@ -464,8 +464,8 @@ function autoTokenHostEvidence(scope,when){
     !sourceCharacterClasses||!enemyEntryConfig||!cache||
     !sameMitigationTime(entry,when)||!sameNativeEventScope(entry,when))return;
  try{
-  const fixed=clock.add(4).readS64().toString(),{phase,round}=cache.addresses;
-  const samePoint=()=>clock.readU32()===when.frame&&clock.add(4).readS64().toString()===fixed&&
+  const fixed=captureClockFixed().toString(),{phase,round}=cache.addresses;
+  const samePoint=()=>captureClockFrame()===when.frame&&captureClockFixed().toString()===fixed&&
                       phase.readS32()===stamp.phase&&round.readS32()===stamp.round;
   if(Number(BigInt(fixed))/4294967296!==when.game_time||!samePoint())return;
   const read=autoRead(),source=read.p(scope.mod);
@@ -648,6 +648,7 @@ function finishAutoChess(result,identity,frame,fixed){
  result.scopeGuards??=scopeGuardPlan(result);
  nativeAutoCache={addresses:header.addresses,identity:{...identity},fingerprint,headerKey,roots,scopeGuards:result.scopeGuards,scopeWitness:{header:result.header,playerList:result.playerList,playerItems:result.playerItems,ownerRefs:result.ownerRefs}};
  autoCollectionOwners(result,scope_key,collection_mode,frame,Number(BigInt(fixed))/4294967296);
+ probeAdapter.publishCaptureScope?.();
  return {protocol_version:1,status:'available',verified_same_frame:true,frame,
   game_time:Number(BigInt(fixed))/4294967296,scope_key,phase:header.phase,round:header.round,
   self_player_index:header.self,players,memberships,unknown_memberships:unknown,collection_mode,
@@ -659,7 +660,7 @@ function finishAutoChess(result,identity,frame,fixed){
 function refreshAutoChessScope(cached,when){
  const before=currentNativeIdentity(),stage=nativeAutoStage;
  if(!before||Object.keys(before).some(k=>before[k]!==cached.identity[k]))return false;
- const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
+ const frame=captureClockFrame(),fixed=captureClockFixed().toString();
  if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time)return false;
  if(!stage?.enabled||!stage.stageAddress.readPointer().equals(stage.stagePointer))return false;
  validateScopeStage(stage,before.level,stage.stagePointer);
@@ -689,17 +690,22 @@ function refreshAutoChessScope(cached,when){
  validateScopeStage(stage,before.level,stage.stagePointer);
  const after=currentNativeIdentity();
  if(!after||Object.keys(before).some(k=>before[k]!==after[k])||
-    !stage.stageAddress.readPointer().equals(stage.stagePointer)||clock.readU32()!==frame||
-    clock.add(4).readS64().toString()!==fixed)return false;
+    !stage.stageAddress.readPointer().equals(stage.stagePointer)||captureClockFrame()!==frame||
+    captureClockFixed().toString()!==fixed)return false;
  const result={header,model,playerList,playerItems,playerVersion,ownerRefs,
   playerAddresses:{list:read.at(model,'m_allPlayerDatas'),items:read.at(playerList,'_items'),
    count:read.at(playerList,'_size'),version:read.at(playerList,'_version')}};
  nativeAutoCache={...cached,addresses:header.addresses,scopeGuards:scopeGuardPlan(result),scopeWitness:result};
+ probeAdapter.publishCaptureScope?.();
  // The full body was not revalidated here; no old actor map may prune events.
  nativeAutoOwners=null;
  return true;
 }
 function stampAutoChessClock(when,allowRefresh=true){
+ if(typeof probeAdapter.captureScopePoint==='function'&&typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()){
+  const scope=probeAdapter.captureScopePoint(when);if(scope===undefined)return;
+  when.native_autochess_scope=scope??{protocol_version:1,status:'unknown',verified_same_frame:false,frame:when.frame,game_time:when.game_time,reason:'captured native scope unavailable'};return;
+ }
  if(!nativeAutoStage?.enabled)return;
  const unknown=reason=>{when.native_autochess_scope={protocol_version:1,status:'unknown',
   verified_same_frame:false,frame:when.frame,game_time:when.game_time,reason};};
@@ -716,7 +722,7 @@ function stampAutoChessClock(when,allowRefresh=true){
    throw new Error('AutoChess stage cache changed');
   }
   if(!cached||Object.keys(before).some(k=>before[k]!==cached.identity[k]))throw new Error('AutoChess scope cache unavailable');
-  const openingClock=checkedNativeView(clock,12),frame=openingClock.getUint32(0,true),fixed=openingClock.getBigInt64(4,true).toString();
+  const openingClock=captureRead('scope.clock_open',()=>checkedNativeView(clock,12)),frame=openingClock.getUint32(0,true),fixed=openingClock.getBigInt64(4,true).toString();
   if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time){
    unknown('AutoChess event clock mismatch');return;
   }
@@ -731,7 +737,7 @@ function stampAutoChessClock(when,allowRefresh=true){
      !nativeAutoStage.stageAddress.readPointer().equals(stagePointer))throw new Error('AutoChess changed during read');
   const after=currentNativeIdentity();
   if(!after||Object.keys(before).some(k=>before[k]!==after[k]))throw new Error('AutoChess event scope changed');
-  const closingClock=checkedNativeView(clock,12);
+  const closingClock=captureRead('scope.clock_close',()=>checkedNativeView(clock,12));
   if(closingClock.getUint32(0,true)!==frame||closingClock.getBigInt64(4,true).toString()!==fixed){
    unknown('AutoChess event scope changed');return;
   }
@@ -742,7 +748,7 @@ function stampAutoChessClock(when,allowRefresh=true){
   if(allowRefresh&&guardFailed&&cached){
    try{if(refreshAutoChessScope(cached,when))return stampAutoChessClock(when,false);}catch(refreshError){/* Preserve the original failure. */}
   }
-  nativeAutoCache=null;nativeAutoOwners=null;unknown(String(e));
+  nativeAutoCache=null;nativeAutoOwners=null;probeAdapter.publishCaptureScope?.();unknown(String(e));
  }
 }
 const AUTO_PRESENCE_SLOT_LIMIT=4096,AUTO_PRESENCE_CHARACTER_LIMIT=128;
@@ -786,7 +792,7 @@ function captureAutoChessPresence(mark){
      scope_key!==cache.roots+':autochess:'+nativeAutoEpoch||
      cache.addresses.phase.readS32()!==phase||cache.addresses.round.readS32()!==round||
      ptr(roots.controller).add(probeAdapter.autoChessStateOffset).readS32()!==2||
-     clock.readU32()!==frame||clock.add(4).readS64().toString()!==point.native_fixed_time)
+     captureClockFrame()!==frame||captureClockFixed().toString()!==point.native_fixed_time)
    throw new Error('AutoChess presence binding changed');
   validateScopeStage(stage,roots.level,stage.stagePointer);
   validateScopeGuards(cache.scopeGuards);
@@ -795,7 +801,7 @@ function captureAutoChessPresence(mark){
      cache.addresses.phase.readS32()!==phase||cache.addresses.round.readS32()!==round||
      !stage.stageAddress.readPointer().equals(stage.stagePointer)||
      ptr(roots.controller).add(probeAdapter.autoChessStateOffset).readS32()!==2||
-     clock.readU32()!==frame||clock.add(4).readS64().toString()!==point.native_fixed_time)
+     captureClockFrame()!==frame||captureClockFixed().toString()!==point.native_fixed_time)
    throw new Error('AutoChess presence scope or clock changed');
  }
  try{
@@ -973,7 +979,7 @@ function nativeBinding(prepared=null,captureRoundStart=false){
   const level=ptr(before.level),levelClass=probeAdapter.autoChessReflected?level.readPointer():null;
   const stageAddress=level.add(probeAdapter.autoChessStageOffset??0x18),stagePointer=stageAddress.readPointer(),stage=str(stagePointer);
   if(typeof stage!=='string'||!stage.length)return unavailable('LevelData stage identifier unavailable');
-  const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
+  const frame=captureClockFrame(),fixed=captureClockFixed().toString();
   const enabled=/AUTOCHESS/i.test(stage);
   let stageClass=null;
   if(enabled&&probeAdapter.autoChessReflected){
@@ -998,7 +1004,7 @@ function nativeBinding(prepared=null,captureRoundStart=false){
   }
   const after=currentNativeIdentity(rejectRoot);
   if(after===null)return null;
-  const endFrame=clock.readU32(),endFixed=clock.add(4).readS64().toString();
+  const endFrame=captureClockFrame(),endFixed=captureClockFixed().toString();
   const endStagePointer=probeAdapter.autoChessReflected?stagePointer:stageAddress.readPointer();
   if(Object.keys(before).some(key=>before[key]!==after[key])
      ||stateAddress.readS32()!==state||!endStagePointer.equals(stagePointer)||
@@ -1066,6 +1072,7 @@ function nativeBinding(prepared=null,captureRoundStart=false){
     {key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,frame,fixed,body:auto,
      prepareBeforeClock}:null;
   }
+  probeAdapter.publishCapturePublication?.(result);
   return result;
  }catch(e){return unavailable(e);}
 }

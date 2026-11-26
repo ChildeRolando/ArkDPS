@@ -27,7 +27,12 @@ function __arkdpsReplayBegin(record){
  const fields=(record.fields||[]).map(field=>{
   const point=field.checkpoint??checkpoint;
   if(!Number.isSafeInteger(point)||point<0||!Number.isInteger(field.field_id)||field.field_id<0||field.field_id>65535||typeof field.role!=='string'||typeof field.status!=='string')throw new Error('invalid captured field state');
-  return {...field,checkpoint:point};
+  const attempted_address=field.attempted_address??field.attempt_address,attempted_size=field.attempted_size??field.attempt_size;
+  if(attempted_address!==undefined||attempted_size!==undefined){
+   const address=__integer(attempted_address);
+   if(address<0n||address>0xffffffffffffffffn||!Number.isSafeInteger(attempted_size)||attempted_size<0||address+BigInt(attempted_size)>0x10000000000000000n)throw new Error('invalid captured attempt range');
+  }
+  return {...field,checkpoint:point,attempted_address,attempted_size};
  });
  __arkdpsReplay={record,segments,fields,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};
 }
@@ -35,6 +40,33 @@ function __arkdpsReplayRole(role,checkpoint=0,fieldId=0){
  if(__arkdpsReplay===null||typeof role!=='string'||!Number.isSafeInteger(checkpoint)||checkpoint<0||!Number.isInteger(fieldId)||fieldId<0||fieldId>65535)
   throw new Error('invalid replay role');
  __arkdpsReplay.role=role;__arkdpsReplay.checkpoint=checkpoint;__arkdpsReplay.fieldId=fieldId;
+}
+function __arkdpsReplayActive(){return __arkdpsReplay!==null;}
+function __arkdpsReplayRecord(){if(__arkdpsReplay===null)throw new Error('no replay active');return __arkdpsReplay.record;}
+function __arkdpsCapturedAssignable(base,klass){
+ if(__arkdpsReplay===null)throw new Error('captured ancestry outside replay');
+ base=ptr(base);let current=ptr(klass);
+ for(let depth=0;depth<10&&!current.isNull();depth++){
+  if(current.equals(base))return true;
+  current=current.add(0x58).readPointer();
+ }
+ if(current.isNull())return false;
+ __arkdpsReplayGap('captured class ancestry limit');
+}
+function __arkdpsReplayPoint(role,body){
+ if(__arkdpsReplay===null)return body();
+ if(typeof role!=='string'||typeof body!=='function')__arkdpsReplayGap('invalid replay point');
+ const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId];
+ replay.role=role;replay.fieldId=null;
+ try{return body();}finally{replay.role=previous[0];replay.fieldId=previous[1];}
+}
+function __arkdpsReplayWitness(role,body){
+ if(__arkdpsReplay===null)return body();
+ const replay=__arkdpsReplay,previous=[replay.role,replay.fieldId];
+ const ids=new Set([...replay.segments,...replay.fields].filter(f=>f.role===role&&f.checkpoint===replay.checkpoint).map(f=>f.field_id));
+ if(ids.size!==1)__arkdpsReplayGap('missing or ambiguous witness '+role);
+ replay.role=role;replay.fieldId=[...ids][0];
+ try{return body();}finally{replay.role=previous[0];replay.fieldId=previous[1];}
 }
 function __arkdpsReplayEnd(){
  if(__arkdpsReplay===null)throw new Error('no replay active');
@@ -52,16 +84,32 @@ function __arkdpsOwnedRead(address,size){
  }
  const replay=__arkdpsReplay;
  if(replay===null)return __read(address,size);
- const matches=replay.segments.filter(s=>s.role===replay.role&&s.checkpoint===replay.checkpoint&&s.field_id===replay.fieldId&&
+ const matches=replay.segments.filter(s=>s.role===replay.role&&s.checkpoint===replay.checkpoint&&(replay.fieldId===null||s.field_id===replay.fieldId)&&
   address>=s.address&&address+BigInt(size)<=s.address+BigInt(s.bytes.byteLength));
- if(matches.length===0){
-  const failed=replay.fields.filter(f=>f.role===replay.role&&f.checkpoint===replay.checkpoint&&f.field_id===replay.fieldId&&f.status!=='ok');
-  if(failed.length===1){replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
+ const failedMatching=replay.fields.filter(f=>f.role===replay.role&&f.checkpoint===replay.checkpoint&&f.status!=='ok'&&
+  matches.some(s=>s.field_id===f.field_id));
+ if(failedMatching.length){
+  if(failedMatching.some(f=>['missing_plan_field','invalid_plan','missing_field'].includes(f.status)))__arkdpsReplayGap('invalid captured plan field '+replay.role);
+  replay.unreadable++;throw new Error('captured field failed '+replay.role);
  }
- if(matches.length!==1)__arkdpsReplayGap('missing or ambiguous captured read '+replay.role);
- if(matches[0].status!=='ok'){replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
- const segment=matches[0],start=Number(address-segment.address);
- return segment.bytes.slice(start,start+size);
+ if(matches.length===0){
+  const failed=replay.fields.filter(f=>f.role===replay.role&&f.checkpoint===replay.checkpoint&&(replay.fieldId===null||f.field_id===replay.fieldId)&&f.status!=='ok'&&
+   (replay.fieldId!==null||f.attempted_address!==undefined&&Number.isSafeInteger(f.attempted_size)&&f.attempted_size>=0&&
+    address>=__integer(f.attempted_address)&&address+BigInt(size)<=__integer(f.attempted_address)+BigInt(f.attempted_size)));
+  if(failed.length===1){if(['missing_plan_field','invalid_plan','missing_field'].includes(failed[0].status))__arkdpsReplayGap('invalid captured plan field '+replay.role);replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
+ }
+ if(matches.length===0)__arkdpsReplayGap('missing captured read '+replay.role);
+ if(matches.some(s=>s.status!=='ok')){replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
+ const segment=matches[0],start=Number(address-segment.address),result=segment.bytes.slice(start,start+size);
+ if(matches.length>1){
+  if(replay.fieldId!==null||matches.some(s=>(s.guard_id??0)!==0))__arkdpsReplayGap('ambiguous captured witness '+replay.role);
+  const expected=new Uint8Array(result);
+  for(const candidate of matches.slice(1)){
+   const other=new Uint8Array(candidate.bytes,Number(address-candidate.address),size);
+   if(other.some((v,i)=>v!==expected[i]))__arkdpsReplayGap('conflicting captured point '+replay.role);
+  }
+ }
+ return result;
 }
 function __arkdpsOwnedString(address,length,utf16){
  if(__arkdpsReplay===null)return utf16?__utf16(address,length):__cstring(address);

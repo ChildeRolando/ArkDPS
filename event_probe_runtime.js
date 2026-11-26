@@ -4,12 +4,28 @@ const traceHpContext=globalThis.arkdpsTraceHpContext===true;
 const traceNestedParent=globalThis.arkdpsTraceNestedParent===true;
 const coalesceEnemyHp=globalThis.arkdpsCoalesceEnemyHp!==false;
 const observeSourceCharacterUid=globalThis.arkdpsSourceCharacterUid!==false;
-function api(n,r,a){return new NativeFunction(il.getExportByName(n),r,a);}
+function api(n,r,a){
+ const native=new NativeFunction(il.getExportByName(n),r,a);
+ if(n==='il2cpp_class_is_assignable_from'&&typeof __arkdpsCapturedAssignable==='function')
+  return function(base,klass){return __arkdpsReplayActive()?__arkdpsCapturedAssignable(base,klass):native(base,klass);};
+ return native;
+}
+function captureRead(role,read){return typeof probeAdapter.captureRead==='function'?probeAdapter.captureRead(role,read):read();}
+function captureClockFrame(){return captureRead('clock_close',()=>clock.readU32());}
+function captureClockFixed(){return captureRead('clock_close',()=>clock.add(4).readS64());}
 function registerProbeHook(address,callbacks){
  if(typeof probeAdapter.prepareCaptureHook==='function')probeAdapter.prepareCaptureHook(address,callbacks);
  return Interceptor.attach(address,callbacks);
 }
-function className(k){return k.add(0x10).readPointer().readCString();}
+const immutableClassNames=new Map(),immutableClassNamespaces=new Map();
+function className(k){
+ const key=k.toString();if(immutableClassNames.has(key))return immutableClassNames.get(key);
+ const name=k.add(0x10).readPointer().readCString();immutableClassNames.set(key,name);return name;
+}
+function classNamespace(k){
+ const key=k.toString();if(immutableClassNamespaces.has(key))return immutableClassNamespaces.get(key);
+ const value=k.add(0x18).readPointer().readCString();immutableClassNamespaces.set(key,value);return value;
+}
 function fieldOffsets(k,names){
  const seen=classFieldOffsets(k);
  const out={};for(const name of names){if(!(name in seen))throw new Error('missing field '+className(k)+'.'+name);out[name]=seen[name];}
@@ -239,7 +255,7 @@ try{
   // null is neither a readiness signal nor permission to ignore bad metadata.
   const k=classAt(im,i);if(probeAdapter.allowNullClassRows&&k.isNull())continue;
   const name=className(k);if(!wanted.has(name)&&!optionalClasses.has(name))continue;
-  const ns=k.add(0x18).readPointer().readCString();
+  const ns=classNamespace(k);
   const expectedNs=(['BuffContainer','BlockDamage'].includes(name)?'':
     (name==='SkillData'||name==='LevelData'?'Torappu':'Torappu.Battle'));
   if(ns!==expectedNs)continue;
@@ -557,7 +573,7 @@ function verifiedSettlementIssueSource(scope,when){
   const closing=stampEventScope({...when});
   if(!sameNativeEventScope(a.entry,closing))return null;
   const stamp=closing.native_autochess_scope;
-  if(clock.readU32()!==when.frame||fp(clock.add(4))!==when.game_time)return null;
+  if(captureClockFrame()!==when.frame||captureClockFixed().toNumber()/4294967296!==when.game_time)return null;
   return {source:a.cid,source_character_uid:a.uid,frame:when.frame,game_time:when.game_time,
    native_autochess_scope:{...stamp}};
  }catch(e){return null;}
@@ -701,11 +717,11 @@ function time(allowRetry = false, withEventScope = true) {
  // One owned copy for the opening clock, followed by the same independent
  // frame guard as before. Native PC pays one bridge call instead of two;
  // no frame/time value survives this callback invocation.
- const bytes=clock.readByteArray(12);
+ const bytes=captureRead('clock_open',()=>clock.readByteArray(12));
  if(bytes===null||bytes.byteLength!==12)throw new Error('callback clock unavailable');
  const view=new DataView(bytes),frame=view.getUint32(0,true);
  const game_time=Number(view.getBigInt64(4,true))/4294967296;
- if (clock.readU32() !== frame) {
+ if (captureClockFrame() !== frame) {
   if (allowRetry) return null;
   throw new Error('unstable callback clock');
  }
@@ -1452,7 +1468,15 @@ function damageSettledAfterNestedKill(scope,when,amount){
  return {real_delta:0,hp_before:0,hp_after:0,killed:true,cancel_reason:0,shield_absorbed:0,
          settled_after_nested_kill:true};
 }
-function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad blackboard');const a=p.add(0x10).readPointer().add(0x20);for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();throw new Error('missing shield value');}
+function dynamic(p){
+ const n=captureRead('blackboard.count',()=>p.add(0x18).readS32());
+ if(n<0||n>128)throw new Error('bad blackboard');
+ return captureRead('blackboard.entries',()=>{
+  const a=p.add(0x10).readPointer().add(0x20);
+  for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();
+  throw new Error('missing shield value');
+ });
+}
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
 function record(source,kind,amount,when,proof,evidence,sourceUid){
@@ -1691,7 +1715,8 @@ function recordHpContext(context,flush=true){
  if(flush&&coalesceEnemyHp)flushCoalescedEnemyHp();
  // Diagnostics do not advance the authoritative sequence. Attach late
  // diagnostics to the next event so repeating a read returns the same slice.
- hpContext.push({eventSequence:Math.max(sequence,readThroughSequence+1),context});
+ const published=typeof __arkdpsPublicationJournal==='object'&&Number.isSafeInteger(__arkdpsPublicationJournal.publishedThrough)?__arkdpsPublicationJournal.publishedThrough:0;
+ hpContext.push({eventSequence:Math.max(sequence,readThroughSequence+1,published+1),context});
 }
 function readEvents(after,through){
  const valid=Number.isSafeInteger(after)&&Number.isSafeInteger(through)&&
@@ -1736,7 +1761,7 @@ function ackEvents(through){
  }
  return {acknowledged:acknowledgedSequence,error:fatal};
 }
-function readTerminalEvents(after,through){
+function readTerminalEvents(after,through,advanceReadWatermark=true){
  // The ordinary read requires a live native binding. Only this explicit API
  // may drain the retained queue after a real OnDestroy has removed it.
  const fence={sequence,epoch,active,active_hooks:[...activeHooks.keys()]};
@@ -1769,7 +1794,7 @@ function readTerminalEvents(after,through){
   .map(item=>item.context),retry:false,frame:boundary.frame,game_time:boundary.game_time,
   terminal_boundary:boundary});
  for(const key of Object.keys(boundary))if(key.startsWith('native_'))result[key]=boundary[key];
- readThroughSequence=Math.max(readThroughSequence,through);
+ if(advanceReadWatermark)readThroughSequence=Math.max(readThroughSequence,through);
  return result;
 }
 function refreshEnemyEntryFrame(frame) {
@@ -2506,7 +2531,7 @@ function installEnemyEntryHooks() {
        enemyBirthProofs.delete(uid);
        try{this.birth={version:1,source_method:'BObject.Born',target:entityId(enemy),target_uid:String(uid),
         target_instance:enemy.toString(),klass:enemy.readPointer().toString(),frame:when.frame,
-        game_time:when.game_time,fixed:clock.add(4).readS64().toString(),sequence_before_born:sequence,
+        game_time:when.game_time,fixed:captureClockFixed().toString(),sequence_before_born:sequence,
         ...(when.native_autochess_scope!==undefined?{native_autochess_scope:{...when.native_autochess_scope}}:{})};
        }catch(e){/* Keep the ordinary guarded enemy entry without this option. */}
       }
@@ -2528,7 +2553,7 @@ function installEnemyEntryHooks() {
       if(!enemy.add(0x25).readU8())return;
       if(isBorn&&this.birth)try{
        if(uid>0&&this.birth.target===entityId(enemy)&&this.birth.klass===enemy.readPointer().toString()
-          &&this.birth.fixed===clock.add(4).readS64().toString()&&sameNativeEventScope(this.birth,when))
+          &&this.birth.fixed===captureClockFixed().toString()&&sameNativeEventScope(this.birth,when))
         enemyBirthProofs.set(uid,{...this.birth,sequence_after_born:sequence,epoch_after_born:epoch});
       }catch(e){enemyBirthProofs.delete(uid);}
       if(isBorn&&enemyPhaseReady){
@@ -2836,8 +2861,8 @@ function beginCharacterLifecycle(actor){
  if(!characterLifecycleMethods||!actor||actor.isNull()||!actor.readPointer().equals(characterLifecycleMethods.character))return null;
  const source=entityId(actor),uid=sourceCharacterUid(actor,source),instance=actor.add(0x18).readU32();
  if(!source?.startsWith('char_')||!uid||!instance)return null;
- const when=time(),fixed=clock.add(4).readS64().toString();
- if(clock.readU32()!==when.frame)return null;
+ const when=time(),fixed=captureClockFixed().toString();
+ if(captureClockFrame()!==when.frame)return null;
  return {actor,source,uid,instance,when,fixed};
  }catch(e){return null;}
 }
@@ -2858,7 +2883,7 @@ function installCharacterBornHook(){
    if(!args[0].readPointer().equals(characterLifecycleMethods.character))return;
    if(args[0].add(0x25).readU8()!==0)return;
    this.started=true;beginEnemyHook(label);this.actor=args[0];this.when=time();
-   this.fixed=clock.add(4).readS64().toString();this.source=entityId(this.actor);
+   this.fixed=captureClockFixed().toString();this.source=entityId(this.actor);
    this.uid=sourceCharacterUid(this.actor,this.source);
   },
   onLeave(){if(!this.started)return;try{
@@ -2918,8 +2943,8 @@ function installSkillCastStateHook(){
     this.started=true;beginEnemyHook(label);
     try{this.skill=args[0];this.identity=nativeSkillCastIdentity(this.skill,this);
      if(!this.identity)return;
-     this.fixed=clock.add(4).readS64().toString();this.when=time();
-     if(clock.readU32()!==this.when.frame||clock.add(4).readS64().toString()!==this.fixed)throw new Error('unstable native skill entry clock');
+     this.fixed=captureClockFixed().toString();this.when=time();
+     if(captureClockFrame()!==this.when.frame||captureClockFixed().toString()!==this.fixed)throw new Error('unstable native skill entry clock');
      this.reason=args[2].toInt32();this.invocation=++nativeSkillCastInvocation;this.tid=this.threadId;
      if(!Number.isSafeInteger(this.invocation))throw new Error('native skill invocation exhausted');
      let stack=nativeSkillCastCalls.get(this.tid);if(!stack){stack=[];nativeSkillCastCalls.set(this.tid,stack);}stack.push(this);
@@ -2934,7 +2959,7 @@ function installSkillCastStateHook(){
      if(!sameMitigationTime(this.when,end)||!sameNativeSkillCastIdentity(this.identity,current))throw new Error('native skill state identity/clock changed');
      const wait=this.skill.add(skillCastStateMethods.wait).readU8();
      if(wait!==0&&wait!==1)throw new Error('invalid native skill wait Boolean');
-     if(clock.readU32()!==end.frame||clock.add(4).readS64().toString()!==this.fixed)throw new Error('native skill fixed clock changed');
+     if(captureClockFrame()!==end.frame||captureClockFixed().toString()!==this.fixed)throw new Error('native skill fixed clock changed');
      record(current.source,'skill_end',1,end,{method:label},
       {...current.info,skill_reason:this.reason,skill_wait_for_end:wait===1,source_instance_uid:current.ownerUid,skill_cast_invocation:this.invocation},current.sourceUid);
     }catch(e){if(this.confirmedLocal)skillUnknown=true;}
@@ -3580,11 +3605,11 @@ function installAutoChessRoundResetHook(){
     const entry=this.roundReset;
     if(!entry||stopped||fatal||otherCallbacks()||sequence!==entry.sequence||epoch!==entry.epoch)return;
     try{
-     if(clock.readU32()!==0||clock.add(4).readS64().toString()!=='0')return;
+     if(captureClockFrame()!==0||captureClockFixed().toString()!=='0')return;
      const binding=nativeBinding(null,true),context=binding?.native_autochess_context;
      const closing=autoChessResetOwner(entry.controller);
      if(!sameAutoChessResetOwner(entry,closing)||otherCallbacks()||sequence!==entry.sequence||
-        epoch!==entry.epoch||clock.readU32()!==0||clock.add(4).readS64().toString()!=='0')return;
+        epoch!==entry.epoch||captureClockFrame()!==0||captureClockFixed().toString()!=='0')return;
      autoChessUnclaimedZero={...closing,sequence,epoch};
      if(!binding||context?.status!=='available'||context.verified_same_frame!==true||
         ![4,5,6].includes(context.phase)||binding.native_frame!==0||binding.native_fixed_time!=='0'||
@@ -3634,6 +3659,48 @@ function markEvents(withPresence=false){
  }
  return mark;
 }
+// Called by the single worker only while this exact closed native record is
+// the sealed replay owner. New producer activity cannot invalidate an already
+// proved historical prefix; every binding input below comes from owned roles.
+function __arkdpsPublicationServed(through){
+ if(!Number.isSafeInteger(through)||through<acknowledgedSequence||through>sequence)throw new Error('served publication range unavailable');
+ readThroughSequence=Math.max(readThroughSequence,through);
+}
+function __arkdpsSnapshotPublication(fence){
+ if(!fence||fence.sequence!==sequence||fence.epoch!==epoch||active!==0||activeHooks.size!==0)throw new Error('publication reducer fence changed');
+ const records=queue.slice();
+ if(records.length!==sequence-acknowledgedSequence||records.some((event,index)=>event.sequence!==acknowledgedSequence+index+1))throw new Error('publication prefix incomplete');
+ const baseline={};
+ if(typeof probeAdapter.baselineEnvelope==='function')Object.assign(baseline,probeAdapter.baselineEnvelope(fence,queue,acknowledgedSequence,sequence));
+ Object.assign(baseline,autoChessRoundStartEnvelope(fence,queue,acknowledgedSequence,sequence));
+ const mark={...fence,...baseline};
+ const read_fields={...eventQuality(),...fence,...baseline,hp_context_dropped:hpContextDropped};
+ let terminal_read=null;
+ if(currentTerminalBoundary()){
+  const terminal=readTerminalEvents(acknowledgedSequence,sequence,false);
+  if(terminal.retry===false)terminal_read=terminal;
+ }
+ const projection={mark,acknowledged:acknowledgedSequence,events:records,
+  hp_context:hpContext.map(item=>({eventSequence:item.eventSequence,context:item.context})),read_fields,terminal_read};
+ const owned=JSON.parse(JSON.stringify(projection));
+ const freeze=value=>{if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value);}return value;};
+ return freeze(owned);
+}
+function __arkdpsOnClosedRecord(record){
+ if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive()||record!==__arkdpsReplayRecord()||
+    record.edge!=='leave'||record.closed_after!==true||active!==0||typeof probeAdapter.capturedPublicationBinding!=='function')return null;
+ try{
+ const binding=probeAdapter.capturedPublicationBinding();if(!binding)return null;
+ if(coalesceEnemyHp)flushCoalescedEnemyHp();
+ const current=time(true,false);if(!current)return null;
+ if(binding.native_frame!==current.frame||Number(BigInt(binding.native_fixed_time))/4294967296!==current.game_time)return null;
+ const value={frame:current.frame,game_time:current.game_time,sequence,epoch,active:0,active_hooks:[],error:fatal,stopped,
+  ...eventQuality(current.frame),...binding,terminal_boundary:currentTerminalBoundary(),
+  terminal_boundary_diagnostics:{...terminalDiagnostics},terminal_read_version:1};
+ return __arkdpsSnapshotPublication(value);
+ }catch(error){return null;}
+}
+
 function receiveEventRequest(){
  // Frida recv is one-shot. Rearm before dispatch; a late reply can be safely
  // ignored by the host because reads are replayable and ACKs idempotent.
