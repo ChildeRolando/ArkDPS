@@ -4,7 +4,7 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const c=vm.createContext({});
 vm.runInContext(`
-let live=0,leased=true,status=0,fault=0,readCalls=0,scalarCalls=0,pointCalls=0;
+let live=0,leased=true,status=0,fault=0,readCalls=0,scalarCalls=0,pointCalls=0,recordConcurrent=false;
 const calls=[],b=new ArrayBuffer(64),v=new DataView(b);
 v.setUint8(0,251);v.setUint16(2,65000,true);v.setUint32(4,0xfedcba98,true);v.setInt32(8,-123456,true);
 v.setBigUint64(16,0xfedcba9876543210n,true);v.setBigInt64(24,-9223372036854775807n,true);v.setFloat32(32,-13.25,true);
@@ -17,12 +17,12 @@ function resolve(role,cp,id,address,size){
  if(role==='unreadable'){status=5;return false;}if(role==='guard'){status=8;return false;}
  if(role==='multi'){status=10;return false;}
  if(cp!==0||!['body','before','after'].includes(role)||![7,-1].includes(id)||address<4096n||address+BigInt(size)>4160n){status=9;return false;}
- status=0;return true;
+ if(recordConcurrent){status=8;return false;}status=0;return true;
 }
 function __nativeOwnedRead(role,cp,id,address,size){if(arguments.length!==5)throw Error('native read argc');readCalls++;if(!resolve(role,cp,id,address,size))return;return b.slice(Number(address-4096n),Number(address-4096n)+size);}
 function __nativeOwnedScalar(role,cp,id,address,kind){if(arguments.length!==5)throw Error('native scalar argc');scalarCalls++;const sizes=[1,2,4,4,8,8,4];if(!resolve(role,cp,id,address,sizes[kind]))return;const at=Number(address-4096n);return [()=>v.getUint8(at),()=>v.getUint16(at,true),()=>v.getUint32(at,true),()=>v.getInt32(at,true),()=>v.getBigUint64(at,true),()=>v.getBigInt64(at,true),()=>v.getFloat32(at,true)][kind]();}
 function __nativeOwnedStatus(){if(arguments.length!==0)throw Error('native status argc');return status;}
-function __nativeOwnedPoint(role,cp){if(arguments.length!==2)throw Error('native point argc');pointCalls++;if(!leased)return (1<<24)|(2<<16)|7;if(fault)return (1<<24)|(fault<<16)|7;if(cp!==0)return (9<<16);if(role==='multi')return (2<<24)|(5<<16);if(role==='missing')return 0;return (1<<24)|(['unreadable','guard'].includes(role)?(role==='guard'?8:5)<<16:0)|7;}
+function __nativeOwnedPoint(role,cp){if(arguments.length!==2)throw Error('native point argc');pointCalls++;if(!leased)return (1<<24)|(2<<16)|7;if(fault)return (1<<24)|(fault<<16)|7;if(cp!==0)return (9<<16);if(role==='multi')return (2<<24)|(5<<16);if(role==='missing')return 0;return (1<<24)|(['unreadable','guard'].includes(role)?(role==='guard'?8:5)<<16:recordConcurrent?8<<16:0)|7;}
 function nativeRecord(){const r={version:1,native_view:true,ticket:'17',edge:'entry',checkpoint:0};Object.defineProperties(r,{segments:{get(){throw Error('enumerated native segments');}},fields:{get(){throw Error('enumerated native fields');}}});return r;}
 function rejects(fn){try{fn();return false;}catch(error){return true;}}
 `,c);
@@ -108,6 +108,17 @@ __arkdpsReplayBegin(nativeRecord());globalThis.numericFlagRebuilt=numericProvide
 globalThis.numericCalls=numericAddresses;
 globalThis.__nativeOwnedRead=legacyRead;globalThis.__nativeOwnedScalar=legacyScalar;delete globalThis.__nativeOwnedNumericAddress;status=0;
 __arkdpsReplayBegin(nativeRecord());globalThis.unsafeAddress=rejects(()=>__arkdpsReplayPoint('body',()=>__arkdpsOwnedRead(9007199254740992,1)));globalThis.unsafeAddressEnd=__arkdpsReplayEnd();
+recordConcurrent=true;status=0;__arkdpsReplayBegin(nativeRecord());
+globalThis.concurrentBytes=rejects(()=>__arkdpsReplayPoint('body',()=>ptr(4096).readByteArray(4)));
+globalThis.concurrentScalar=rejects(()=>__arkdpsReplayPoint('body',()=>ptr(4096).readU8()));
+globalThis.concurrentWitness=rejects(()=>__arkdpsReplayWitness('body',()=>ptr(4096).readU8()));
+globalThis.concurrentOptional=__arkdpsReplayOptional('body',()=>{throw Error('concurrent optional attempted read');});
+globalThis.concurrentArguments=__arkdpsArguments(new ArrayBuffer(8),1)[0].value.toString();
+globalThis.concurrentFrozen=__arkdpsCapturedAssignable(ptr(1),ptr(2));globalThis.concurrentEnd=__arkdpsReplayEnd();
+__arkdpsReplayBegin(nativeRecord());globalThis.concurrentBadAddress=rejects(()=>__arkdpsReplayPoint('body',()=>ptr(8192).readU8()));globalThis.concurrentBadAddressEnd=__arkdpsReplayEnd();
+__arkdpsReplayBegin(nativeRecord());__arkdpsReplayRole('body',0,99);globalThis.concurrentBadField=rejects(()=>ptr(4096).readU8());globalThis.concurrentBadFieldEnd=__arkdpsReplayEnd();
+__arkdpsReplayBegin(nativeRecord());globalThis.concurrentBadPoint=rejects(()=>__arkdpsReplayCheckpoint('body',1,()=>ptr(4096).readU8()));globalThis.concurrentBadPointEnd=__arkdpsReplayEnd();
+recordConcurrent=false;status=0;__arkdpsReplayBegin(nativeRecord());globalThis.afterConcurrent=__arkdpsReplayPoint('body',()=>ptr(4096).readU8());globalThis.afterConcurrentEnd=__arkdpsReplayEnd();
 globalThis.liveCount=live;
 `,c);
 assert.deepEqual(Array.from(c.values),[251,65000,0xfedcba98,-123456,'18364758544493064720','-9223372036854775807',-13.25,'0xfedcba9876543210']);
@@ -133,3 +144,5 @@ assert(c.unknownOperation);assert.equal(c.unknownOperationEnd.complete,false);
 assert.equal(c.factsWithoutRecordMethods.mode,3);assert.equal(c.factsWithoutRecordMethods.scope,4);assert.equal(c.factsWithoutRecordMethods.parents[0].invocation_id,'9007199254741001');assert(c.sharedParentArray);assert.equal(c.retainedFactsProof.mode,3);assert.equal(c.retainedFactsProof.scope,21);assert.equal(c.retainedFactsProof.parents[0].invocation_id,'9007199254741001');assert(c.retainedFactsProof.frozen);
 
 assert.equal(c.numericPinned.complete,true);assert(c.numericFlagRebuilt);assert.deepEqual(Array.from(c.numericCalls,x=>[x.type,x.value]),[['number','0'],['number','0'],['number','9007199254740991'],['number','9007199254740991'],['bigint','9007199254740992'],['bigint','9007199254740992'],['bigint','18446744073709551615'],['bigint','18446744073709551615'],['number','4096'],['bigint','4096']]);assert(c.unsafeAddress);assert.equal(c.unsafeAddressEnd.complete,false);
+
+assert(c.concurrentBytes);assert(c.concurrentScalar);assert(c.concurrentWitness);assert.equal(c.concurrentOptional.available,false);assert.equal(c.concurrentArguments,'0');assert(c.concurrentFrozen);assert.equal(c.concurrentEnd.complete,true);assert.equal(c.concurrentEnd.unreadable_reads,4);for(const key of ['concurrentBadAddress','concurrentBadField','concurrentBadPoint']){assert(c[key]);assert.equal(c[key+'End'].complete,false);}assert.equal(c.afterConcurrent,251);assert.equal(c.afterConcurrentEnd.complete,true);
