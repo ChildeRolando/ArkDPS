@@ -1,0 +1,19 @@
+{
+  "source_commit": "6e934a4",
+  "source_mode": "old pointer path; HP ownbatch provider absent",
+  "sampling": "independent per-function calls modulo128==0; inclusive",
+  "source_sha256": {
+    "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc",
+    "event_probe_native_pc.js": "3a09df6061a72b3147dd25aeae1e52d7556f546642a3f5b40662cf91a27380c3",
+    "event_probe_runtime.js": "14e9df70fce1c3ccb8c6d90127caf59d541e0bcb188d43480bc392b8540924c5",
+    "native_pc\\native_event_runtime\\bridge.js": "dfc856b78ecb07fabe8cf5ae6cea0090cccba873833cac56259e4b6b81198216",
+    "native_pc\\native_event_runtime\\cold_plan.js": "4b9e7615b5dfc5e9dbc6030323cb56ba6b789aa682116114bc77ffd3634dce33",
+    "native_pc\\native_event_runtime\\publication.js": "5a83506f7f1ba64afbcd8592522d8f9b84f71a60ab7596ce1f718932ba545577"
+  },
+  "measured_binary_sha256": "10cf03ebe8ec192c19c78d161a3ef682211ea11dd01dd2c8b402e4aab8c305ab",
+  "build_receipt": "receipt.json",
+  "quickjs": "quickjs-provenance.json",
+  "global_flag": 0,
+  "ifeo_production_hp_exe": "key absent",
+  "clock_pair_empty_call_us": 0.10958972871303559
+}

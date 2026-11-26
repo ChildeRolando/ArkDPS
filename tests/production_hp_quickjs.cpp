@@ -90,11 +90,38 @@ struct Profile {
                 read_bytes = 0;
   double capture_ms = 0, view_ms = 0;
 };
+struct FunctionTiming {
+  std::uint64_t calls = 0, samples = 0;
+  double sampled_us = 0, max_us = 0;
+};
+static FunctionTiming hook_timing, graph_timing;
+static bool sample_functions = false;
+struct SampleTimer {
+  FunctionTiming &t;
+  bool sampled;
+  std::chrono::steady_clock::time_point start;
+  SampleTimer(FunctionTiming &value)
+      : t(value), sampled(sample_functions && ((t.calls++ & 127) == 0)) {
+    if (sampled)
+      start = std::chrono::steady_clock::now();
+  }
+  ~SampleTimer() {
+    if (sampled) {
+      const auto us = std::chrono::duration<double, std::micro>(
+                          std::chrono::steady_clock::now() - start)
+                          .count();
+      ++t.samples;
+      t.sampled_us += us;
+      t.max_us = std::max(t.max_us, us);
+    }
+  }
+};
 static Profile profile;
 static std::uint64_t hook_point_calls = 0, missing_hook_calls = 0;
 #ifdef ARKDPS_CAPTURE_HOOK_POINT
 static JSValue owned_hook_point(JSContext *c, JSValueConst self, int n,
                                 JSValueConst *args) {
+  SampleTimer timer(hook_timing);
   ++hook_point_calls;
   return arkdps::owned_js::hook_point(c, self, n, args);
 }
@@ -138,6 +165,7 @@ static JSValue owned_graph(JSContext *c, JSValueConst self, int n,
 #ifdef ARKDPS_CAPTURE_GRAPH_CHECK
 static JSValue owned_graph_check(JSContext *c, JSValueConst self, int n,
                                  JSValueConst *args) {
+  SampleTimer timer(graph_timing);
   ++graph_check_calls;
   return arkdps::owned_js::graph_check(c, self, n, args);
 }
@@ -231,6 +259,8 @@ static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
 static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
   if (n && JS_ToBool(c, args[0])) {
     profile = {};
+    hook_timing = {};
+    graph_timing = {};
     hook_point_calls = missing_hook_calls = 0;
     batch_calls = graph_calls = graph_check_calls = batch_output_bytes =
         graph_output_bytes = selected_slots = 0;
@@ -245,6 +275,15 @@ static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
          {"capture_ms", profile.capture_ms},
          {"view_initialize_ms", profile.view_ms}};
   j["batch_calls"] = batch_calls;
+  for (const auto &pair : {std::pair<const char *, FunctionTiming *>{
+                               "hook_point_timing", &hook_timing},
+                           {"graph_check_timing", &graph_timing}}) {
+    const auto &t = *pair.second;
+    j[pair.first] = {{"calls", t.calls},
+                     {"samples", t.samples},
+                     {"sampled_us", t.sampled_us},
+                     {"max_us", t.max_us}};
+  }
   j["hook_point_calls"] = hook_point_calls;
   j["missing_hook_calls"] = missing_hook_calls;
   j["graph_calls"] = graph_calls;
@@ -385,6 +424,8 @@ int main(int argc, char **argv) {
                                     "__nativeOwnedMissingHookSlot", 1));
 #endif
   for (int i = 2; i < argc; i++) {
+    if (std::string(argv[i]) == "--sample-functions")
+      sample_functions = true;
     if (std::string(argv[i]) == "--disable-ascii")
       JS_SetPropertyStr(c, g, "__nativeOwnedUtf16Ascii", JS_UNDEFINED);
     if (std::string(argv[i]) == "--disable-graph")

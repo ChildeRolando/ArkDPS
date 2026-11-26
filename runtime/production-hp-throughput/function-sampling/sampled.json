@@ -1,0 +1,506 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "sampled_functions": {},
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 0,
+        "registered_plans": 0,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 8.99090000987053,
+      "setters_per_second": 556117.8518847749,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "sampled_functions": {
+        "HP.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 1697.6999640464783,
+          "max_us": 167.79997944831848
+        },
+        "withCapturedMode.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 1566.5998756885529,
+          "max_us": 161.5999937057495
+        },
+        "time": {
+          "calls": 10002,
+          "samples": 79,
+          "sampled_us": 553.6000430583954,
+          "max_us": 16.90000295639038
+        },
+        "entityId": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 490.9999668598175,
+          "max_us": 22.399991750717163
+        },
+        "HP.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 712.2998833656311,
+          "max_us": 44.90000009536743
+        },
+        "withCapturedMode.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 605.800062417984,
+          "max_us": 42.40000247955322
+        },
+        "capturedNativeScopePoint": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 644.0999805927277,
+          "max_us": 644.0999805927277
+        }
+      },
+      "js_profile": {
+        "scope_ms": 0.6425999999046326,
+        "scope_inside_pub_ms": 0.6425999999046326,
+        "prefix_ms": 6.0067999958992,
+        "journal_ms": 0.635699987411499
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 25002,
+        "capture_ms": 5.275100000000382,
+        "capture_read_bytes": 1281886,
+        "capture_read_count": 77238,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 2,
+        "graph_check_timing": {
+          "calls": 2,
+          "max_us": 154.3,
+          "sampled_us": 154.3,
+          "samples": 1
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 20007,
+        "registered_plans": 0,
+        "scalar_calls": 30005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 2.260499999999854
+      },
+      "branch": "unchanged",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 431.077899992466,
+      "setters_per_second": 11598.831673085968,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "sampled_functions": {
+        "HP.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 1602.5000512599945,
+          "max_us": 70.39999961853027
+        },
+        "withCapturedMode.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 1487.70010471344,
+          "max_us": 65.40000438690186
+        },
+        "time": {
+          "calls": 10002,
+          "samples": 79,
+          "sampled_us": 579.6999633312225,
+          "max_us": 11.200010776519775
+        },
+        "entityId": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 492.80011653900146,
+          "max_us": 21.999984979629517
+        },
+        "HP.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 4322.500169277191,
+          "max_us": 158.80000591278076
+        },
+        "withCapturedMode.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 4212.70015835762,
+          "max_us": 152.00001001358032
+        },
+        "enemyMaxHp": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 401.99992060661316,
+          "max_us": 17.300009727478027
+        },
+        "scope.adapter": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 2681.1999678611755,
+          "max_us": 91.89999103546143
+        },
+        "recordEnemyHp": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 263.4999454021454,
+          "max_us": 10.399997234344482
+        },
+        "capturedNativeScopePoint": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 88.20000290870667,
+          "max_us": 88.20000290870667
+        }
+      },
+      "js_profile": {
+        "scope_ms": 338.94340017437935,
+        "scope_inside_pub_ms": 0.08709999918937683,
+        "prefix_ms": 119.5915000140667,
+        "journal_ms": 96.81569999456406
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 30002,
+        "capture_ms": 16.21810000000145,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 5002,
+        "graph_check_timing": {
+          "calls": 5002,
+          "max_us": 21,
+          "sampled_us": 124.10000000000004,
+          "samples": 40
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 25007,
+        "registered_plans": 0,
+        "scalar_calls": 50005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 14.33189999999973
+      },
+      "branch": "changed_damage",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 1146.1689999997616,
+      "setters_per_second": 4362.35843056394,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 5000,
+      "event_kinds": {
+        "enemy_hp": 5000
+      }
+    },
+    {
+      "sampled_functions": {
+        "HP.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 1878.3000111579895,
+          "max_us": 126.19999051094055
+        },
+        "withCapturedMode.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 1748.2999861240387,
+          "max_us": 120.0999915599823
+        },
+        "time": {
+          "calls": 10002,
+          "samples": 79,
+          "sampled_us": 688.899964094162,
+          "max_us": 20.899981260299683
+        },
+        "entityId": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 553.799957036972,
+          "max_us": 28.30001711845398
+        },
+        "HP.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 4734.600156545639,
+          "max_us": 220.5999791622162
+        },
+        "withCapturedMode.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 4613.600254058838,
+          "max_us": 214.1999900341034
+        },
+        "enemyMaxHp": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 444.0000653266907,
+          "max_us": 24.30000901222229
+        },
+        "scope.adapter": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 3013.09996843338,
+          "max_us": 149.49998259544373
+        },
+        "recordEnemyHp": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 161.40002012252808,
+          "max_us": 11.900007724761963
+        },
+        "capturedNativeScopePoint": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 73.00001382827759,
+          "max_us": 73.00001382827759
+        }
+      },
+      "js_profile": {
+        "scope_ms": 366.6326001882553,
+        "scope_inside_pub_ms": 0.0723000168800354,
+        "prefix_ms": 4.96220001578331,
+        "journal_ms": 0.670199990272522
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 30002,
+        "capture_ms": 19.439099999999147,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 5002,
+        "graph_check_timing": {
+          "calls": 5002,
+          "max_us": 35.6,
+          "sampled_us": 161.2,
+          "samples": 40
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 25007,
+        "registered_plans": 0,
+        "scalar_calls": 50005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 16.848799999999418
+      },
+      "branch": "heal_coalesced",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 996.1695000231266,
+      "setters_per_second": 5019.226145634776,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "sampled_functions": {
+        "HP.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 1751.6999542713165,
+          "max_us": 79.4999897480011
+        },
+        "withCapturedMode.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 1623.800128698349,
+          "max_us": 71.60001993179321
+        },
+        "time": {
+          "calls": 10002,
+          "samples": 79,
+          "sampled_us": 612.799882888794,
+          "max_us": 19.999980926513672
+        },
+        "entityId": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 550.699919462204,
+          "max_us": 39.800018072128296
+        },
+        "HP.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 4750.400066375732,
+          "max_us": 274.2000222206116
+        },
+        "withCapturedMode.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 4630.800127983093,
+          "max_us": 269.5000171661377
+        },
+        "enemyMaxHp": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 445.1999366283417,
+          "max_us": 27.300000190734863
+        },
+        "scope.adapter": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 3058.8000118732452,
+          "max_us": 186.7000162601471
+        },
+        "recordEnemyHp": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 169.40006613731384,
+          "max_us": 13.500005006790161
+        },
+        "capturedNativeScopePoint": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 82.0000171661377,
+          "max_us": 82.0000171661377
+        }
+      },
+      "js_profile": {
+        "scope_ms": 378.076502174139,
+        "scope_inside_pub_ms": 0.08100000023841858,
+        "prefix_ms": 7.211199998855591,
+        "journal_ms": 2.4005999863147736
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 30002,
+        "capture_ms": 18.112199999999977,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "edges": 10000,
+        "graph_calls": 0,
+        "graph_check_calls": 5002,
+        "graph_check_timing": {
+          "calls": 5002,
+          "max_us": 6.8,
+          "sampled_us": 121.4,
+          "samples": 40
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 25007,
+        "registered_plans": 0,
+        "scalar_calls": 50005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 15.802699999999655
+      },
+      "branch": "maxhp_dirty",
+      "setters": 5000,
+      "dirty": 50,
+      "elapsed_ms": 987.3582000136375,
+      "setters_per_second": 5064.018306558794,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 101,
+      "event_kinds": {
+        "enemy_hp": 101
+      }
+    }
+  ]
+}
