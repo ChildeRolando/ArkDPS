@@ -3,6 +3,54 @@
 'use strict';
 const __arkdpsColdMetadata=new Map();
 const __arkdpsColdClassIdentities=new Map();
+let __arkdpsColdLineages=null;
+let __arkdpsColdAncestors=null;
+function __arkdpsColdHierarchyFailure(message){
+ if(typeof __arkdpsReplayGap==='function'&&__arkdpsReplayActive())__arkdpsReplayGap(message);
+ throw new Error(message);
+}
+function __arkdpsValidateClassHierarchy(parents){
+ const result=new Map();let relations=0;
+ if(Object.prototype.toString.call(parents)!=='[object Map]'||parents.size>65536)throw new Error('cold class hierarchy budget');
+ for(const [child,parent]of parents)if(typeof child!=='string'||!/^0x[0-9a-f]+$/i.test(child)||ptr(child).isNull()||typeof parent!=='string'||!/^0x[0-9a-f]+$/i.test(parent)||ptr(child).toString()!==child||ptr(parent).toString()!==parent)throw new Error('cold class hierarchy address');
+ for(const start of parents.keys()){
+  if(result.has(start))continue;
+  const path=[],seen=new Set();let current=start;
+  while(current!=='0x0'&&!result.has(current)){
+   if(seen.has(current))throw new Error('cold class hierarchy cycle');
+   if(!parents.has(current))throw new Error('cold class hierarchy incomplete');
+   seen.add(current);path.push(current);current=parents.get(current);
+  }
+  let tail=current==='0x0'?Object.freeze([]):result.get(current);
+  for(let i=path.length-1;i>=0;i--){
+   relations+=tail.length+1;
+   if(relations>4194304)throw new Error('cold class hierarchy relation budget');
+   tail=Object.freeze([Object.freeze(ptr(path[i])),...tail]);result.set(path[i],tail);
+  }
+ }
+ return result;
+}
+function __arkdpsSealClassHierarchy(parents){
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive())throw new Error('class hierarchy seal during replay');
+ const closed=__arkdpsValidateClassHierarchy(parents);
+ const ancestors=new Map([...closed].map(([key,chain])=>[key,new Set(chain.map(k=>k.toString()))]));
+ __arkdpsColdAncestors=ancestors;__arkdpsColdLineages=closed;
+}
+function __arkdpsColdClassLineage(klass){
+ const chain=__arkdpsColdLineages&&__arkdpsColdLineages.get(ptr(klass).toString());
+ if(!chain)return __arkdpsColdHierarchyFailure('unverified cold class hierarchy '+ptr(klass).toString());
+ return chain;
+}
+function __arkdpsColdAssignable(base,klass){
+ const key=ptr(base).toString();__arkdpsColdClassLineage(base);
+ if(ptr(klass).isNull())return false;
+ __arkdpsColdClassLineage(klass);return __arkdpsColdAncestors.get(ptr(klass).toString()).has(key);
+}
+function __arkdpsColdAssignableClasses(base){
+ __arkdpsColdClassLineage(base);const key=ptr(base).toString(),classes=[];
+ for(const [candidate,ancestors]of __arkdpsColdAncestors)if(ancestors.has(key))classes.push(candidate);
+ return Object.freeze(classes);
+}
 function __arkdpsColdClassIdentity(klass,name,namespace){
  const classes=__arkdpsColdClassIdentities.get(namespace+':'+name);
  if(!classes){
@@ -29,19 +77,27 @@ function __arkdpsColdMetadataRead(address,size){
  return bytes.slice(0);
 }
 function __arkdpsPrepareColdMetadata(meta){
- const byName=new Map(),parents=new Set();
+ const byName=new Map(),parents=new Map();
+ __arkdpsColdLineages=null;__arkdpsColdAncestors=null;
  const size=Memory.alloc(8),assemblies=api('il2cpp_domain_get_assemblies','pointer',['pointer','pointer'])(domain,size);
  const imageOf=api('il2cpp_assembly_get_image','pointer',['pointer']),imageName=api('il2cpp_image_get_name','pointer',['pointer']);
  const countOf=api('il2cpp_image_get_class_count','size_t',['pointer']),classAt=api('il2cpp_image_get_class','pointer',['pointer','size_t']);
  const fromType=api('il2cpp_class_from_type','pointer',['pointer']);
  const warmName=k=>{
-  if(!k||k.isNull())return;
-  const name=className(k),namespace=classNamespace(k),key=namespace+':'+name;
-  if(!__arkdpsColdClassIdentities.has(key))__arkdpsColdClassIdentities.set(key,new Set());
-  __arkdpsColdClassIdentities.get(key).add(k.toString());
-  if(!parents.has(k.toString())){
-   parents.add(k.toString());__arkdpsColdMetadataSeal(k.add(0x58),8);
-   warmName(k.add(0x58).readPointer());
+  const path=new Set();
+  while(k&&!k.isNull()){
+   const address=k.toString();
+   if(path.has(address))throw new Error('cold class hierarchy cycle');
+   if(parents.has(address))break;
+   if(parents.size>=65536)throw new Error('cold class hierarchy budget');
+   path.add(address);
+   const name=className(k),namespace=classNamespace(k),key=namespace+':'+name;
+   if(!__arkdpsColdClassIdentities.has(key))__arkdpsColdClassIdentities.set(key,new Set());
+   __arkdpsColdClassIdentities.get(key).add(address);
+   __arkdpsColdMetadataSeal(k.add(0x58),8);
+   const bytes=__arkdpsColdMetadataRead(k.add(0x58),8);
+   const parent=ptr(new DataView(bytes).getBigUint64(0,true));
+   parents.set(address,parent.toString());k=parent;
   }
  };
  for(let a=0,n=size.readU64().toNumber();a<n;a++){
@@ -118,6 +174,7 @@ function __arkdpsPrepareColdMetadata(meta){
  list(concrete(group.value));
  const unordered=concrete(layouts.UnitManager['<characters>k__BackingField']);
  const u=layout(unordered,'UnorderedArray`1','Torappu',3,[[0,'m_items',0x10,[29]],[2,'<count>k__BackingField',0x20,[8]]]);concrete(u.m_items);
+ __arkdpsSealClassHierarchy(parents);
  return {classes:Object.fromEntries(Object.entries(classes).filter(([,k])=>k&&!k.isNull()).map(([name,k])=>[name,k.toString()])),
   cold_metadata_ready:true};
 }
@@ -151,7 +208,7 @@ function __arkdpsBuildColdCapturePlan(metadata){
  const manager=typed('AutoChessGameManager',[16],8,[status,center],{max_visits:32,allow_null:true});
  const dict=object([0x10],48,[object([0x18],32),array([],0x20,0x18,24,32,1,[manager],{skip_negative_i32_offset:0})]);
  const host=typed('SingletonHost',[0x2e8],8,[dict]);
- const character=object([0],40,[data([0x538],128)],{gate:'ancestor',expected_class:klass('Character'),ancestry_depth:10,max_visits:128,local_fail_boundary:true});
+ const character=object([0],40,[data([0x538],128)],{gate:'class_set',expected_classes:__arkdpsColdAssignableClasses(klass('Character')),max_visits:128,local_fail_boundary:true});
  const container=object([0x18],36,[arrayHeader(1),array([],0x20,0x10,8,128,1,[character])]);
  const units=typed('UnitManager',[0x2c0],8,[container],{local_fail_boundary:true});
  const root=typed('BattleController',[0x58,0xb8,0],0x18,[object([0x10],48),object([0xe0],56,[object([0x30],8)]),

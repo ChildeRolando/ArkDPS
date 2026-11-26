@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict'),path=require('node:path');
-const context=vm.createContext({});
+const context=vm.createContext({ptr:x=>({toString:()=>x,isNull:()=>x==='0x0'})});
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../native_pc/native_event_runtime/cold_plan.js'),'utf8'),context);
 const result=vm.runInContext(`
 const names=['BattleController','SingletonHost','AutoChessGameManager','AutoChessGameStatus','AutoChessGameStateModel',
@@ -8,6 +8,7 @@ const names=['BattleController','SingletonHost','AutoChessGameManager','AutoChes
  'AutoChessBattleDataModel','ChessInst','BattleCharacterData','UnitManager','Character'];
 const classes=Object.fromEntries(names.map((name,i)=>[name,'0x'+(0x10000+i*0x1000).toString(16)]));
 const metadata={cold_metadata_ready:true,classes,string_class:'0x30000'};
+__arkdpsSealClassHierarchy(new Map(Object.values(classes).map(k=>[k,'0x0'])));
 const plan=__arkdpsBuildColdCapturePlan(metadata);
 ({metadata,plan});
 `,context);
@@ -32,7 +33,7 @@ const arrays=plan.projections.filter(node=>node.kind==='array');
 check(arrays.some(node=>node.max_count===32&&node.element_bytes===24&&node.skip_negative_i32_offset===0));
 check(arrays.some(node=>node.max_count===64&&node.element_bytes===8));
 check(arrays.some(node=>node.max_count===128&&node.count_offset===0x20));
-check(plan.projections.some(node=>node.gate==='ancestor'&&node.expected_class===metadata.classes.Character&&node.ancestry_depth===10));
+check(plan.projections.some(node=>node.gate==='class_set'&&node.expected_classes.length===1&&node.expected_classes[0]===metadata.classes.Character&&!('ancestry_depth'in node)));
 check(plan.projections.filter(node=>node.local_fail_boundary===true).length===3);
 check(plan.projections.filter(node=>node.parent_byte_offset===0x90&&node.parent_byte_value===1).length===2);
 check(plan.max_bytes===1048576&&plan.max_reads===65536);

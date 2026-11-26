@@ -41,6 +41,7 @@ objectLink(original.readPointer.call(f.dict),'_entries',original.readPointer.cal
 for(const list of [f.playerList,groups])objectLink(original.readPointer.call(original.readPointer.call(list).add(0x58)),'_items',original.readPointer.call(list.add(0x10)));
 objectLink(original.readPointer.call(refs),'_items',original.readPointer.call(refs.add(0x10)));
 const otherClass=f.klass('UnrelatedManager','Torappu.Battle',0),other=f.alloc(),otherKey=f.alloc(),entries=original.readPointer.call(f.dict.add(0x18));f.write(other,otherClass);all.set(otherClass.toString(),otherClass);f.write(entries.add(0x18),2);f.write(entries.add(0x38),2);f.write(entries.add(0x40),otherKey);f.write(entries.add(0x48),other);f.write(f.dict.add(0x20),2);
+let deepClass=f.character;for(let i=0;i<16;i++){deepClass=f.klass('DeepCharacter'+i,'Owned.Test',0,[],deepClass);all.set(deepClass.toString(),deepClass);}
 const byType=new Map(),tables=new Map();
 for(const k of all.values()){
  let count=original.readU16.call(k.add(0x124));if(!Number.isFinite(count))count=0;
@@ -97,6 +98,7 @@ function capture(){
    let p=parent;for(const offset of n.pointer_offsets)p=pointer(active,p.add(offset));p=p.add(n.offset);
    if(p.isNull()&&n.allow_null)return;
    if(n.gate){let k=pointer(active,p),matched=k.toString()===n.expected_class;
+    if(n.gate==='class_set')matched=n.expected_classes.includes(k.toString());
     if(n.gate==='ancestor')for(let i=0;!matched&&!k.isNull()&&i<n.ancestry_depth;i++){k=pointer(active,k.add(0x58));matched=k.toString()===n.expected_class;}
     if(!matched)return;
    }
@@ -141,5 +143,16 @@ assert.equal(c.summary.complete,true,JSON.stringify(c.summary));
 assert(binding,vm.runInContext('JSON.stringify(nativeAutoBindingDiagnostic)',c));
 assert.equal(binding.native_autochess_context.status,'available');assert.equal(binding.native_autochess_context.memberships.length,5);
 
+// Actual source HP callback checks Enemy assignability on a >10 ancestor
+// foreign Character. Known-unrelated must be proved without replay parent reads.
+const ignored=f.unit('char_long_chain',700);f.write(ignored,deepClass);f.write(ignored.add(0x148),f.text('char_long_chain'));
+const hpHook=f.callback('SetHpInternal',f.entity),call={threadId:1};
+const parentBytes=new ArrayBuffer(8);new DataView(parentBytes).setBigUint64(0,deepClass.value,true);
+const hpRecord={version:1,edge:'entry',checkpoint:0,fields:[{field_id:300,role:'body',checkpoint:0,status:'ok'}],segments:[{field_id:300,role:'body',checkpoint:0,address:ignored.toString(),bytes:raw(ignored,28),status:'ok'}],facts:{mode_epoch:0,scope_mode_epoch:0}};
+const ignoredId=original.readPointer.call(ignored.add(0x148));
+for(const [address,bytes]of [[ignored.add(0x148),8],[ignoredId,8],[ignoredId.add(16),4],[ignoredId.add(20),'char_long_chain'.length*2]])hpRecord.segments.push({field_id:300,role:'body',checkpoint:0,address:address.toString(),bytes:raw(address,bytes),status:'ok'});
+c.hpRecord=hpRecord;c.hpInvoke=()=>hpHook.onEnter.call(call,[ignored]);replaying=true;
+try{vm.runInContext('__arkdpsReplayBegin(hpRecord);try{__arkdpsReplayPoint("body",hpInvoke);}finally{globalThis.hpSummary=__arkdpsReplayEnd();}',c);}finally{replaying=false;}
+assert.equal(c.hpSummary.complete,true,JSON.stringify(c.hpSummary));assert.equal(call.write,undefined);
 assert.equal(late,0);
 console.log('PASS_FIRST_COLD_REAL_PREPARE empty/nonempty Character+Token/mixed singleton/nonplaying0+1/null+empty stage/unready manager/normal-to-Auto; zero live replay reads');

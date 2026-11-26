@@ -8,9 +8,11 @@ function ownedFields(f,metadata){
  c.ArrayBuffer=ArrayBuffer;c.NativePointer=P;c.NativeInteger=class{};c.__read=()=>{late++;throw Error('live read');};
  const bridge=fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8');vm.runInContext(bridge.slice(bridge.indexOf('function __integer('),bridge.indexOf('class NativeInteger')),c);
  c.fixtureMetadata=metadata;vm.runInContext("nativeCaptureMetadata=fixtureMetadata;nativeCaptureModeHistory.set(0,'all');",c);
- const parents=new Map();for(const value of Object.values(metadata.classes)){
-  let k=f.ptr(value);for(let i=0;!k.isNull()&&i<12;i++){let p;try{p=old.readPointer.call(k.add(0x58));}catch{p=f.ptr(0);}const b=new ArrayBuffer(8);new DataView(b).setBigUint64(0,p.value,true);parents.set(k.add(0x58).toString()+':8',b);k=p;}
+ vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/cold_plan.js','utf8'),c);
+ const parents=new Map(),graph=new Map();for(const value of Object.values(metadata.classes)){
+  let k=f.ptr(value);const seen=new Set();while(!k.isNull()&&!graph.has(k.toString())){if(seen.has(k.toString()))throw Error('fixture parent cycle');seen.add(k.toString());let p;try{p=old.readPointer.call(k.add(0x58));}catch{p=f.ptr(0);}const b=new ArrayBuffer(8);new DataView(b).setBigUint64(0,p.value,true);parents.set(k.add(0x58).toString()+':8',b);graph.set(k.toString(),p.toString());k=p;}
  }
+ c.fixtureParentGraph=graph;vm.runInContext('__arkdpsSealClassHierarchy(fixtureParentGraph)',c);
  c.frozenRead=(p,n)=>{const b=parents.get(p.toString()+':'+n);if(!b)c.__arkdpsReplayGap('unfrozen metadata');return b.slice(0);};vm.runInContext('__arkdpsColdMetadataRead=frozenRead;',c);
  function raw(p,n){if(n===1)return Uint8Array.of(old.readU8.call(p)).buffer;if(n===2){const b=new ArrayBuffer(2);new DataView(b).setUint16(0,old.readU8.call(p)|(old.readU8.call(p.add(1))<<8),true);return b;}return old.readByteArray.call(p,n);}
  function captureFields(fields,args,entryRefs,parentRefs,checkpoint=0){const segments=[],states=[],counts=new Map();

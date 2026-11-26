@@ -157,18 +157,17 @@ function __arkdpsReplayActive(){return __arkdpsReplay!==null;}
 function __arkdpsReplayRecord(){if(__arkdpsReplay===null)throw new Error('no replay active');return __arkdpsReplay.record;}
 function __arkdpsCapturedAssignable(base,klass){
  if(__arkdpsReplay===null)throw new Error('captured ancestry outside replay');
- base=ptr(base);let current=ptr(klass);
- for(let depth=0;depth<10&&!current.isNull();depth++){
-  if(current.equals(base))return true;
-  if(typeof __arkdpsColdMetadataRead==='function'){
-   const owned=__arkdpsColdMetadataRead(current.add(0x58),8);
-   if(!(owned instanceof ArrayBuffer)||owned.byteLength!==8)__arkdpsReplayGap('invalid frozen class parent');
-   current=ptr(new DataView(owned).getBigUint64(0,true));
-  }else if(__arkdpsReplay.native)__arkdpsReplayGap('native replay class metadata not frozen');
-  else current=current.add(0x58).readPointer();
+ if(typeof __arkdpsColdAssignable==='function')return __arkdpsColdAssignable(base,klass);
+ if(__arkdpsReplay.native)__arkdpsReplayGap('native replay class metadata not frozen');
+ base=ptr(base);let current=ptr(klass);const seen=new Set();let matched=false;
+ while(!current.isNull()){
+  const key=current.toString();
+  if(seen.has(key))__arkdpsReplayGap('captured class ancestry cycle');
+  if(seen.size>=65536)__arkdpsReplayGap('captured class ancestry budget');
+  seen.add(key);if(current.equals(base))matched=true;
+  current=current.add(0x58).readPointer();
  }
- if(current.isNull())return false;
- __arkdpsReplayGap('captured class ancestry limit');
+ return matched;
 }
 function __arkdpsReplayPoint(role,body){
  if(__arkdpsReplay===null)return body();

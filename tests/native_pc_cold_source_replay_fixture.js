@@ -27,6 +27,11 @@ const classes=Object.fromEntries([...f.ownedClasses.values()].map(x=>[x.name,x.k
 classes.BattleController=f.controllerClass.toString();classes.Character=f.character.toString();classes.BObject=f.bObject.toString();
 vm.runInContext("nativeCaptureModeHistory.set(0,'all');",c);
 c.metadata={cold_metadata_ready:true,classes,string_class:classes.String};
+// This oracle owns explicit fixture metadata; validate its full parent graph.
+const fixtureParents=new Map();for(const klass of [...f.ownedClasses.values()].map(value=>value.klass).concat([f.character,f.unitClass,f.entity,f.bObject,f.enemyClass])){
+ let k=klass;while(!k.isNull()&&!fixtureParents.has(k.toString())){let parent;try{parent=original.readPointer.call(k.add(0x58));}catch{parent=f.ptr(0);}fixtureParents.set(k.toString(),parent.toString());k=parent;}
+}
+c.fixtureParents=fixtureParents;vm.runInContext('__arkdpsSealClassHierarchy(fixtureParents)',c);
 const plan=JSON.parse(vm.runInContext('JSON.stringify(__arkdpsBuildColdCapturePlan(metadata))',c));
 // The fixture's AutoChess classes are installed after initial reflection; expose
 // their setup-owned exact identities, never infer a name from a replay pointer.
@@ -53,6 +58,7 @@ function capture(){
    let p=parent;for(const offset of n.pointer_offsets)p=pointer(active,p.add(offset));p=p.add(n.offset);
    if(p.isNull()&&n.allow_null)return;
    if(n.gate){let k=pointer(active,p),matched=k.toString()===n.expected_class;
+    if(n.gate==='class_set')matched=n.expected_classes.includes(k.toString());
     if(n.gate==='ancestor')for(let i=0;!matched&&!k.isNull()&&i<n.ancestry_depth;i++){k=pointer(active,k.add(0x58));matched=k.toString()===n.expected_class;}
     if(!matched)return;
    }
