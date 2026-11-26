@@ -268,17 +268,20 @@ def child(binary):
                 raise ValueError('owned HP buffer accepts no external address or options')
             print(json.dumps(owned_hp_layout()), flush=True)
         elif operation == 'call-owned-hp':
-            if set(command) - {'operation', 'count'}:
+            if set(command) - {'operation', 'count', 'nested'}:
                 raise ValueError('owned HP call accepts no external address')
             count = command.get('count', 1)
             if type(count) is not int or not 1 <= count <= 4:
                 raise ValueError('owned HP call count exceeds its bound')
-            function = libraries[0].ArkDpsTestInteger
-            function.argtypes, function.restype = [ctypes.c_uint64] * 12, ctypes.c_uint64
-            arguments = (hp_addresses['actor'], *range(2, 13))
+            nested = command.get('nested', False)
+            if type(nested) is not bool:
+                raise ValueError('owned HP nested selector must be a literal bool')
+            function = libraries[0].ArkDpsTestNested if nested else libraries[0].ArkDpsTestInteger
+            function.argtypes, function.restype = [ctypes.c_uint64] * (1 if nested else 12), ctypes.c_uint64
+            arguments = (hp_addresses['actor'],) if nested else (hp_addresses['actor'], *range(2, 13))
             results = [function(*arguments) for _ in range(count)]
-            print(json.dumps(dict(count=count, results=results,
-                                  expected=hp_addresses['actor'] + 649)), flush=True)
+            print(json.dumps(dict(count=count, nested=nested, results=results,
+                                  expected=hp_addresses['actor'] * (2 if nested else 1) + 649)), flush=True)
         elif operation == 'owned-sret-buffer':
             result_buffer[:] = (0, 0, 0, 0)
             print(json.dumps(dict(address=hex(ctypes.addressof(result_buffer)))), flush=True)
