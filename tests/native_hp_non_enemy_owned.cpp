@@ -40,6 +40,23 @@ int main(){
  entry();assert(lane->calls[0].hp_ignored && lane->snapshot.field_count==2 && has(lane->snapshot,5)&&has(lane->snapshot,8));
  assert(!has(lane->snapshot,6)&&!has(lane->snapshot,7)&&!has(lane->snapshot,1));const auto nontrap_reads=f.reads;
  capture_scope_point(*plan,Phase::leave,ctx,nullptr,Fixture::read,&f,lane->snapshot,header,lane.get());assert(lane->snapshot.field_count==0 && f.reads==nontrap_reads);
+ const auto guard=[&](unsigned id,const char* role,const char* side){return J{{"field_id",id},{"phase","checkpoint"},{"role",role},{"root","absolute"},{"absolute_address",std::to_string(reinterpret_cast<std::uintptr_t>(f.clock.data()))},{"root_index",0},{"pointer_offsets",J::array()},{"offset",0},{"bytes",12},{"kind","bytes"},{"guard_id",1},{"guard_side",side},{"required",true}};};
+ config->publish({{"version",1},{"revision",1},{"mode_epoch",0},{"raw_collection","all"},{"available",true},{"body_insertion_index",1},
+  {"fields",J::array({guard(1,"scope.open","before"),guard(2,"scope.close","after")})}},false);
+ config->publish({{"version",1},{"revision",1},{"mode_epoch",0},{"raw_collection","all"},{"available",true},
+  {"chunks",J::array({{{"fields",J::array({guard(1,"publication.open.0","before"),guard(2,"publication.close.0","after")})}}})}},true);
+ assert(publication_claimable(41,0,1)&&!publication_claimable(41,0,2)&&!publication_claimable(41,2,1)&&!publication_claimable(0,0,1));
+ header={};header.publication_request=41;f.reads=0;
+ capture_scope_point(*plan,Phase::leave,ctx,config->pin(0),Fixture::read,&f,lane->snapshot,header,lane.get());
+ assert(header.projection_candidate&&header.publication_captured&&header.scope_revision==1&&header.publication_revision==1);
+ assert(lane->snapshot.error==Error::ok&&lane->snapshot.field_count==6&&!has(lane->snapshot,9)&&!has(lane->snapshot,10));
+ auto cold_json=json;auto cold_body=guard(2,"cold.body","none");cold_body["guard_id"]=0;
+ cold_json["cold_plan"]={{"version",1},{"max_bytes",65536},{"max_reads",4096},
+  {"fields",J::array({guard(1,"cold.root_open","before"),cold_body,guard(3,"cold.root_close","after")})}};
+ auto cold_plan=std::make_unique<CompiledPlan>(compile_plan(cold_json,1));config->intern(*cold_plan);header={};header.publication_request=41;
+ capture_scope_point(*cold_plan,Phase::leave,ctx,config->pin(0),Fixture::read,&f,lane->snapshot,header,lane.get(),true);
+ assert(header.projection_candidate&&header.cold_revision==1&&!header.publication_captured&&lane->snapshot.field_count==5);
+ assert(!has(lane->snapshot,9)&&!has(lane->snapshot,10));
  auto default_json=json;default_json["hp_filter"].erase("hp_non_enemy_classes");
  auto default_plan=std::make_unique<CompiledPlan>(compile_plan(default_json,1));config->intern(*default_plan);header={};
  capture_scope_point(*default_plan,Phase::entry,ctx,nullptr,Fixture::read,&f,lane->snapshot,header,lane.get());
@@ -62,6 +79,12 @@ int main(){
  capture_scope_point(*dirty,Phase::entry,ctx,nullptr,Fixture::read,&f,lane->snapshot,header,lane.get());
  assert(!lane->calls[0].hp_ignored);
  capture_scope_point(*dirty,Phase::leave,ctx,nullptr,Fixture::read,&f,lane->snapshot,header,lane.get());assert(has(lane->snapshot,10));
+ ctx.args[1]=1;header={};
+ capture_scope_point(*dirty,Phase::entry,ctx,nullptr,Fixture::read,&f,lane->snapshot,header,lane.get());assert(lane->calls[0].hp_ignored&&lane->snapshot.field_count==0);
+ header={};header.publication_request=42;
+ capture_scope_point(*dirty,Phase::leave,ctx,config->pin(0),Fixture::read,&f,lane->snapshot,header,lane.get());
+ assert(header.projection_candidate&&header.publication_captured&&lane->snapshot.field_count==6&&!has(lane->snapshot,9)&&!has(lane->snapshot,10));
+ header={};capture_scope_point(*dirty,Phase::leave,ctx,config->pin(0),Fixture::read,&f,lane->snapshot,header,lane.get());assert(lane->snapshot.field_count==0);
  unsigned rejects=0;auto reject=[&](J bad){bool failed=false;try{(void)compile_plan(bad,1);}catch(...){failed=true;}assert(failed);++rejects;};
  for(const auto& classes:{J::array({"0"}),J::array({"0x1000"}),J::array({"0x2000","8192"}),J("wrong"),J(false)}){auto bad=json;bad["hp_filter"]["hp_non_enemy_classes"]=classes;reject(bad);}
  auto bad=json;bad["hp_filter"]["hp_non_enemy_classes"]=J::array();for(unsigned i=0;i<17;++i)bad["hp_filter"]["hp_non_enemy_classes"].push_back(std::to_string(0x4000+i));reject(bad);

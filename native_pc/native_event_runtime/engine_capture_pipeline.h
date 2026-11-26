@@ -3,6 +3,10 @@
 #include "engine_capture_lane.h"
 
 namespace arkdps::capture {
+inline bool publication_claimable(std::uint64_t request,unsigned attempts,unsigned active) noexcept {
+    return request && attempts<2 && active==1;
+}
+
 // All pieces share one budget and guard session. In particular the original
 // callback clock closes only after the scope graph has closed; independently
 // finalized snapshots cannot certify a combined historical observation.
@@ -30,6 +34,8 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
         }
         return nullptr;
     };
+    const bool publication_only=base.hp_profile&&invocation&&invocation->hp_ignored
+        &&phase==Phase::leave&&header.publication_request;
     bool hp_id_captured=false;
     if (base.hp_profile && invocation) {
         if (phase==Phase::entry) {
@@ -39,7 +45,7 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
         if (phase==Phase::entry)
             invocation->hp_ignored=base.hp_dirty && (context.args_valid&2u)
                 && static_cast<std::uint32_t>(context.args[1])!=0;
-        if (invocation->hp_ignored) { capture_finalize(snapshot); return; }
+        if (invocation->hp_ignored&&!publication_only) { capture_finalize(snapshot); return; }
         if (phase==Phase::entry) {
             for (std::uint16_t i=0;i<base.plan->field_count;++i)
                 if (base.hp_field_kind[i]==1)
@@ -84,6 +90,7 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
     }
     bool nochange=false;
     const auto base_stage=[&](unsigned stage) noexcept {
+        if(publication_only&&stage==0)return;
         for (std::uint16_t i=0;i<base.plan->field_count;++i)
             if (base.field_stage[i]==stage && !(nochange && base.hp_field_kind[i]==5)
                 && !(phase==Phase::leave && base.hp_profile && invocation && base.hp_field_kind[i]==4) && !(phase==Phase::entry && base.hp_profile && invocation
@@ -91,7 +98,7 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
                 capture_append(*base.plan,phase,context,reader,user,snapshot,i,i+1);
     };
     base_stage(1);
-    if (phase==Phase::leave && base.hp_profile && invocation) {
+    if (phase==Phase::leave && base.hp_profile && invocation && !publication_only) {
         for (std::uint16_t i=0;i<base.plan->field_count;++i)
             if (base.hp_field_kind[i]==4)
                 capture_append(*base.plan,phase,context,reader,user,snapshot,i,i+1);

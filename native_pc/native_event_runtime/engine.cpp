@@ -976,8 +976,8 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     header.scope_mode_epoch=runtime.capture_mode_epoch.load(std::memory_order_acquire);
     const auto requested=lanes.pending_publication.load(std::memory_order_acquire);
     std::uint64_t unclaimed=0;
-    if (requested && !call.hp_ignored && lanes.publication_attempts.load(std::memory_order_acquire)<2
-        && runtime.active.load(std::memory_order_acquire)==1
+    if (publication_claimable(requested,lanes.publication_attempts.load(std::memory_order_acquire),
+            runtime.active.load(std::memory_order_acquire))
         && lanes.publication_claim.compare_exchange_strong(unclaimed,requested,std::memory_order_acq_rel)) {
         lanes.publication_attempts.fetch_add(1,std::memory_order_relaxed);
         header.publication_request=requested;
