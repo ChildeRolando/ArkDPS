@@ -387,7 +387,7 @@ class __ArkDpsHpObservation {
  born(receiver){this.#object(receiver);return this.#packet[this.#fact('hp.born')];}
  id(receiver){this.#object(receiver);return this.#packet[this.#fact('hp.id')];}
  hp(receiver){this.#object(receiver);return this.#packet[this.#fact('hp.before')];}
- clock(){this.#active();const open=this.#fact('clock_open'),close=this.#fact('clock_close');return [this.#packet[open],this.#packet[open+1],this.#packet[close]];}
+ clock(){this.#active();const open=this.#fact('clock_open'),close=this.#fact('clock_close'),values=[this.#packet[open],this.#packet[open+1],this.#packet[close]];if(this.#geometry.names.clock_close.kinds.length>1)values.push(this.#packet[close+1]);return values;}
  closing(receiver){this.#object(receiver);const at=this.#fact('hp.closing');return [this.#packet[at],this.#packet[at+1]];}
  trapClass(receiver){this.#object(receiver);return __arkdpsReplayCheckpoint('body',this.#replay.record.checkpoint??0,()=>ptr(receiver).readPointer().value);}
  attributes(receiver){this.#object(receiver);return this.#attributes??(this.#attributes=Object.freeze({}));}

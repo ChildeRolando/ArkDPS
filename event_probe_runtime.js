@@ -741,11 +741,16 @@ function checkedNativeView(address,size){
  if(bytes===null||bytes.byteLength!==size)throw new Error('native block read unavailable');
  return new DataView(bytes);
 }
-function validatedClockValues(frame,fixed,closingFrame,allowRetry,withEventScope){
+function validatedClockValues(frame,fixed,closingFrame,allowRetry,withEventScope,closedFixed){
  const game_time=Number(fixed)/4294967296;
- if(closingFrame!==frame){if(allowRetry)return null;throw new Error('unstable callback clock');}
+ if(closingFrame!==frame||(closedFixed!==undefined&&(typeof closedFixed!=='bigint'||closedFixed!==fixed))){if(allowRetry)return null;throw new Error('unstable callback clock');}
  if(!Number.isFinite(game_time)||game_time<0)throw new Error('invalid clock');
- return damageSettlementStamp(frame,game_time,withEventScope);
+ const sample=damageSettlementStamp(frame,game_time,withEventScope);
+ // Only the native provider supplies the independently owned closing fixed word.
+ // Register after stamping: an in-progress nondeferred stamp must still read it.
+ if(closedFixed!==undefined&&typeof probeAdapter.captureValidatedClockSample==='function')
+  probeAdapter.captureValidatedClockSample(sample,closedFixed);
+ return sample;
 }
 function validatedClockStamp(view,closingFrame,allowRetry,withEventScope){
  return validatedClockValues(view.getUint32(0,true),view.getBigInt64(4,true),closingFrame,allowRetry,withEventScope);
@@ -2815,7 +2820,7 @@ function applyHpEntry(receiver,args,io,label,attributeChange,enemyOverride=null)
   // detects a new round and brackets the write with the closing clock.
   const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
   const clockValues=io.clock();
-  const when=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope);
+  const when=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope,clockValues[3]);
   refreshEnemyEntryFrame(when.frame);
   if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
   if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
@@ -2845,7 +2850,7 @@ function applyHpLeave(receiver,io,label){
   if(stopped||fatal||superseded)return;
   if(io===null)io=hpObservationIo('leave',enemy);
   const clockValues=io.clock();
-  const end=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope);
+  const end=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope,clockValues[3]);
   const closing=io.closing(enemy);
   if(end.frame!==when.frame||end.game_time!==when.game_time||closing[0]!==uid)
    throw new Error('enemy HP callback changed identity or crossed a frame');

@@ -325,7 +325,7 @@ const probeAdapter={
   }
   return nativeCapturedPublicationBinding(true);
  },
- captureHpObservation:captureNativeHpObservation,captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,retireCaptureGraphs,captureRecordMode:withCapturedMode,captureCollectionMode:capturedCollectionMode,captureInvocationRead:captureNativeInvocationRead,
+ captureValidatedClockSample,captureHpObservation:captureNativeHpObservation,captureScopePoint:capturedNativeScopePoint,captureModeState,installCaptureMode,retireCaptureGraphs,captureRecordMode:withCapturedMode,captureCollectionMode:capturedCollectionMode,captureInvocationRead:captureNativeInvocationRead,
  captureClassIdentity(klass,name,namespace){
   if(typeof __arkdpsColdClassIdentity!=='function')__arkdpsReplayGap('immutable class identity not frozen');
   return __arkdpsColdClassIdentity(klass,name,namespace);
@@ -476,7 +476,7 @@ function nativeCapturePlan(name,address,metadata){
   // exact opening/closing HP agrees and this is not a max-HP dirty callback.
   // Mechanical raw projection descriptions belong to the very same capture
   // fields. They do not decode Q32, XOR, eligibility, identity or scope.
-  const observationValues={clock_open:[['u32',0],['i64',4]],clock_close:[['u32',0]],
+  const observationValues={clock_open:[['u32',0],['i64',4]],clock_close:[['u32',0],['i64',4]],
    'hp.identity':[['u64',0],['u32',0x18]],'hp.born':[['u8',0]],'hp.before':[['i64',0]],
    'hp.id':[['utf16',0]],'hp.closing':[['u32',0],['i64',0x28]],
    'attributes.count':[['u32',0]],'attributes.slot0':[['u64',0],['u64',8],['u8',0x10]]};
@@ -894,6 +894,20 @@ function decodeCapturedScopeField(field,when,raw,primitive=null,primitiveOffset=
  if(field.classCheck===1&&className(current)!=='BattleLogger'||field.classCheck===2&&className(current)!=='BattleStats')throw new Error('captured scope class changed');
  return current;
 }
+const nativeCaptureValidatedClockSamples=new WeakMap();
+function captureValidatedClockSample(sample,fixed){
+ if(typeof __arkdpsReplayModeRecord!=='function'||!__arkdpsReplayActive())return;
+ // The bridge owns this immutable, item-unique identity; it binds the native
+ // lease/ticket/checkpoint without forcing a lazy public record on HP entry.
+ const token=__arkdpsReplayModeRecord();
+ nativeCaptureValidatedClockSamples.set(sample,{token,frame:sample.frame,game_time:sample.game_time,fixed:fixed.toString()});
+}
+function capturedSampleFixed(sample){
+ const saved=nativeCaptureValidatedClockSamples.get(sample);
+ if(saved&&typeof __arkdpsReplayModeRecord==='function'&&__arkdpsReplayActive()&&
+    saved.token===__arkdpsReplayModeRecord()&&saved.frame===sample.frame&&saved.game_time===sample.game_time)return saved.fixed;
+ return captureClockFixed().toString();
+}
 function capturedNativeScopePoint(when){
  if(__arkdpsReplayActive()&&__arkdpsReplayRecord().facts?.cold_revision!==undefined){
   if(nativeCaptureColdRebuilding)return null;
@@ -921,7 +935,7 @@ function capturedNativeScopePoint(when){
  if(!graph.context.autochess){if(state!==2&&state!==3)return null;return undefined;}
  if(![0,1,2,3,4,5,6,7,8,9,100,101,102,103,104].includes(phase)||!Number.isInteger(round)||round<0)return null;
  if(state!==2&&state!==3)return null;
- const context=graph.context,fixed=captureClockFixed().toString();
+ const context=graph.context,fixed=capturedSampleFixed(when);
  const scope_key=autoScope(context.roots,phase,round,when.frame,fixed,context.fingerprint,context.header_key);
  return {protocol_version:1,status:'available',verified_same_frame:true,frame:when.frame,game_time:when.game_time,
   scope_key,phase,round,collection_mode:autoCollectionMode(scope_key,phase)};

@@ -5,6 +5,7 @@ const context=vm.createContext({__pid:()=>1,__nativeActive:()=>0,__read:()=>{liv
 vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8'),context);
 const adapter=fs.readFileSync('event_probe_native_pc.js','utf8');vm.runInContext(adapter.slice(adapter.indexOf('const nativeContractSnapshots='),adapter.indexOf('function prepareNativeCaptureHook('))+adapter.slice(adapter.indexOf('function nativeCapturePlan(')),context);
 const shared=fs.readFileSync('event_probe_runtime.js','utf8');vm.runInContext(shared.slice(shared.indexOf('function capturedUtf16('),shared.indexOf('function buff(')),context);
+vm.runInContext(shared.slice(shared.indexOf('function validatedClockValues('),shared.indexOf('function validatedClockStamp(')),context);
 const autoSource=fs.readFileSync('event_probe_autochess.js','utf8');vm.runInContext(autoSource.slice(autoSource.indexOf('function scopeBlock('),autoSource.indexOf('function scopeGuardGroup(')),context);
 vm.runInContext(shared.slice(shared.indexOf('function __arkdpsPublicationServed('),shared.indexOf('function receiveEventRequest(')),context);
 context.primitiveFlatSource=process.env.ARKDPS_SOURCE_GRAPH_PRIMITIVES_LEGACY!=='1';
@@ -147,6 +148,37 @@ function autoRecord(){const r=record();r.facts={mode_epoch:0,scope_mode_epoch:0,
 }
 function autoAttempt(change){const r=checkRecordView(autoRecord());if(change)change(r);__arkdpsReplayBegin(r);try{return __arkdpsOnClosedRecord(r);}finally{globalThis.lastAutoSummary=__arkdpsReplayEnd();}}
 globalThis.autoGood=autoAttempt();
+// The sample owns only a same-item, already validated clock value. Every scope
+// field remains freshly read; neither a new record nor a changed clock can use it.
+probeAdapter.captureValidatedClockSample=captureValidatedClockSample;
+damageSettlementStamp=(frame,game_time)=>({frame,game_time});
+let fixedReads=0;const originalFixedRead=captureClockFixed;
+captureClockFixed=()=>{fixedReads++;return originalFixedRead();};
+function sampleScope(legacy=false){
+ const r=checkRecordView(autoRecord());__arkdpsReplayBegin(r);
+ try{
+  const before=fixedReads,sample=validatedClockValues(10,5n*4294967296n,10,false,false,legacy?undefined:5n*4294967296n);
+  const value=capturedNativeScopePoint(sample);return {sample,value,reads:fixedReads-before};
+ }finally{__arkdpsReplayEnd();}
+}
+const reused=sampleScope();globalThis.sameItemClockReuse=reused.value?.phase===4&&reused.reads===0;
+const legacy=sampleScope(true);globalThis.legacyClockRead=legacy.value?.phase===4&&legacy.reads===1;
+const cross=checkRecordView(autoRecord());__arkdpsReplayBegin(cross);
+try{const before=fixedReads;globalThis.crossRecordClockRead=capturedNativeScopePoint(reused.sample)?.phase===4&&fixedReads-before===1;}finally{__arkdpsReplayEnd();}
+const changed=checkRecordView(autoRecord());
+for(const segment of changed.segments)if(segment.role==='scope.clock_close')new DataView(segment.bytes).setBigInt64(4,6n*4294967296n,true);
+__arkdpsReplayBegin(changed);
+try{
+ const sample=validatedClockValues(10,5n*4294967296n,10,false,false,5n*4294967296n);
+ try{capturedNativeScopePoint(sample);globalThis.reusedClockFreshGuardRejected=false;}catch(error){globalThis.reusedClockFreshGuardRejected=true;}
+}finally{__arkdpsReplayEnd();}
+const noMode=__arkdpsReplayModeRecord;__arkdpsReplayModeRecord=undefined;
+try{const result=sampleScope();globalThis.oldModeHelperRead=result.value?.phase===4&&result.reads===1;}finally{__arkdpsReplayModeRecord=noMode;}
+const noPublic=checkRecordView(autoRecord());__arkdpsReplayBegin(noPublic);
+const publicRecord=__arkdpsReplayRecord;__arkdpsReplayRecord=()=>{throw Error('must not materialize public HP record');};
+try{validatedClockValues(10,5n*4294967296n,10,false,false,5n*4294967296n);globalThis.clockRememberNoPublicRecord=true;}finally{__arkdpsReplayRecord=publicRecord;__arkdpsReplayEnd();}
+captureClockFixed=originalFixedRead;
+
 const fixedSemanticGraph=sealNativeScopeGraph({...autoGraph,fields:autoGraph.fields.map(field=>({...field,...(field.role==='scope.open.3'?{expected:4}:field.role==='scope.open.4'?{expected:8}:field.role==='scope.controller.state.open'?{expected:2}:{})}))});
 nativeCaptureScopes.set(2,fixedSemanticGraph);
 globalThis.fixedSemanticGood=autoAttempt();
@@ -178,7 +210,10 @@ globalThis.publicationMetadataFrozen=Object.isFrozen(saved.guards)&&Object.isFro
 globalThis.publicationOriginalOwnerMutable=!Object.isFrozen(originalGuards)&&!Object.isFrozen(originalAddress)&&!Object.isFrozen(originalExpected)&&!Object.isFrozen(originalRows)&&!Object.isFrozen(originalRows[0]);
 
 `,context);
+for(const key of ['sameItemClockReuse','legacyClockRead','crossRecordClockRead','reusedClockFreshGuardRejected','oldModeHelperRead','clockRememberNoPublicRecord'])assert(context[key],key);
 if(context.graphPrimitiveSource){assert(context.codecOwnership);assert(context.unsupportedBlockKeepsFallback);assert(context.primitiveCalls>0);assert(context.classRoleReads>0);if(context.primitiveFlatSource){assert(context.primitiveFlatCalls>0);assert.equal(context.primitiveValuesCalls,0);}else assert(context.primitiveValuesCalls>0);}else assert(context.oldGraphWithoutCodecs);
 if(context.graphCheckSource){assert(context.forgedProofRejected);assert.equal(context.forgedSummary.complete,false);}assert(context.predicateDefinitionsSealed);assert(context.surrogatePredicateJSONSafe);assert(context.good);assert(context.changedBlock12);assert(context.publicationMetadataOwned);assert(context.publicationMetadataFrozen);assert(context.publicationOriginalOwnerMutable);assert(context.noDuplicateScopeWitness);assert(context.scopeGeometryFrozen);assert(context.compiledScopeReused);assert(context.cacheArrayNotFrozen);assert(context.manualOwnerNotFrozen);assert(context.scopeReadsRepeat);assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
 for(const key of ['notClosed','wrongRevision','wrongGeneration','coldRejected','wrongRoots','wrongStateProjected','wrongGraphClockProjected','wrongPhaseProjected','wrongRoundProjected','wrongAutoStateProjected','wrongAutoClassProjected'])assert.equal(context[key],null,key);
 assert(context.fixedSemanticGood);assert.equal(context.fixedSemanticBad,null);assert(context.autoCrossChunkRejected);assert(context.autoGood);assert.equal(context.autoGood.mark.native_autochess_context.frame,10);assert.equal(context.autoGood.mark.native_autochess_context.memberships[0].player_uid,'account-one');assert.equal(context.autoMissingMembershipRejected,true);assert.equal(context.autoChangedMembershipRejected,true);assert.equal(context.missingSummary.complete,false);assert.equal(context.changedMemberInjected,true);assert.equal(context.readThroughSequence,0);assert.equal(context.good.events[0].future,undefined);assert.equal(context.delta.events_after,2);assert.equal(context.delta.events_through,3);assert.equal(context.delta.events.length,1);assert.equal(context.delta.events[0].sequence,3);assert.equal(context.emptyDelta.events.length,0);assert.equal(live,0);console.log('PASS_CAPTURED_PUBLICATION normal closed-prefix + five negative fences; no live read/call');
+
+

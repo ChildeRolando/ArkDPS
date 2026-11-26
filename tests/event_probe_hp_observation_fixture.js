@@ -26,6 +26,13 @@ function run(mode,adapter=false){
  hook.onLeave.call(call);
  return {trace,acquisitions,queue:JSON.parse(vm.runInContext('JSON.stringify(queue)',f.context)),active:vm.runInContext('active',f.context)};
 }
+{
+ const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),enemyHpState:true});
+ assert.throws(()=>vm.runInContext('validatedClockValues(30,4294967296n,30,false,false,4294967297n)',f.context),/unstable callback clock/);
+ assert.equal(vm.runInContext('validatedClockValues(30,4294967296n,30,true,false,4294967297n)',f.context),null);
+ assert.equal(vm.runInContext('validatedClockValues(30,4294967296n,30,false,false).game_time',f.context),1);
+ assert.equal(vm.runInContext('validatedClockValues(30,4294967296n,30,false,false,4294967296n).game_time',f.context),1);
+}
 assert.deepEqual(run('normal').trace,['identity','born','clock','id','hp','clock','closing','attributes','attributeCount','attributeWords']);
 assert.deepEqual(run('unborn').trace,['identity','born']);
 assert.deepEqual(run('nonenemy').trace,['identity','id']);

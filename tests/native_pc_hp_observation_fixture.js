@@ -14,15 +14,16 @@ const field=(phase,name,bytes,values,kind='bytes')=>({phase,name,role:name.start
 const codec=(kind,offset=0)=>({kind,offset});
 const contract=Object.freeze({mode_epoch:0,address:'0x9000',fields:[
 field('entry','hp.identity',28,[codec('u64'),codec('u32',24)]),field('entry','hp.born',1,[codec('u8')]),field('entry','hp.before',8,[codec('i64')]),field('entry','hp.id',0,[codec('utf16')],'utf16'),
-...['entry','leave'].flatMap(phase=>[field(phase,'clock_open',12,[codec('u32'),codec('i64',4)]),field(phase,'clock_close',12,[codec('u32')])]),
+...['entry','leave'].flatMap(phase=>[field(phase,'clock_open',12,[codec('u32'),codec('i64',4)]),field(phase,'clock_close',12,[codec('u32'),codec('i64',4)])]),
 field('leave','hp.closing',48,[codec('u32'),codec('i64',40)]),field('leave','attributes.count',4,[codec('u32')]),field('leave','attributes.slot0',20,[codec('u64'),codec('u64',8),codec('u8',16)])]});
 __arkdpsReplayBegin(record());globalThis.oldProvider=__arkdpsOwnedHpObservation(contract,ptr(4096n));__arkdpsReplayEnd();
+let fixtureContract=contract;
 function nativeObservation(hook,root){
  observed++;poisoned=false;status=0;if(arguments.length!==2||hook!==36864n||root!==4096n){status=1;poisoned=true;return;}
- const r=__arkdpsReplayRecord(),fields=contract.fields.filter(f=>f.phase===r.edge),packet=[1,fields.length,r.edge==='entry'?0:1,3,boundMode];saved=[];
+ const r=__arkdpsReplayRecord(),fields=fixtureContract.fields.filter(f=>f.phase===r.edge),packet=[1,fields.length,r.edge==='entry'?0:1,3,boundMode];saved=[];
  for(const field of fields){
   const failed=field.name==='hp.id'?(mode==='missing'?65535:mode==='planned'?5:mode==='structural'?9:0):field.name==='attributes.slot0'&&mode==='unused-words'?9:0;saved.push(failed);packet.push(failed);
-  const values=field.name==='hp.identity'?[0xfedcba9876543210n,73]:field.name==='hp.born'?[1]:field.name==='hp.before'?[-9223372036854775808n]:field.name==='hp.id'?['A\0\u4e2d\ud800B\udfffC\ud83d\ude00']:field.name==='clock_open'?[30,-4294967296n]:field.name==='clock_close'?[30]:field.name==='hp.closing'?[73,-9223372036854775808n]:field.name==='attributes.count'?[0]:[18446744073709551615n,7n,1];
+  const values=field.name==='hp.identity'?[0xfedcba9876543210n,73]:field.name==='hp.born'?[1]:field.name==='hp.before'?[-9223372036854775808n]:field.name==='hp.id'?['A\0\u4e2d\ud800B\udfffC\ud83d\ude00']:field.name==='clock_open'?[30,-4294967296n]:field.name==='clock_close'?(field.observation.values.length===1?[30]:[30,-4294967296n]):field.name==='hp.closing'?[73,-9223372036854775808n]:field.name==='attributes.count'?[0]:[18446744073709551615n,7n,1];
   packet.push(...values.map(value=>failed?undefined:value));
  }
  if(mode==='version')packet[0]=2;if(mode==='count')packet[1]++;if(mode==='cp')packet[3]=4;if(mode==='mode')packet[4]=6;if(mode==='phase')packet[2]^=1;
@@ -33,6 +34,8 @@ function nativeFailure(index){consumed++;if(!Number.isInteger(index)||index<0||i
 globalThis.__nativeOwnedHpObservation=nativeObservation;globalThis.__nativeOwnedConsumeHpFailure=nativeFailure;
 const enemy=ptr(4096n);__arkdpsReplayBegin(record());const io=__arkdpsOwnedHpObservation(contract,enemy),beforeCalls=observed;
 globalThis.good=[io.identity(enemy),io.born(enemy),io.hp(enemy),io.id(enemy),io.clock(),io.trapClass(enemy)];globalThis.successCalls=observed===beforeCalls&&consumed===0&&scalarCalls===1;globalThis.goodEnd=__arkdpsReplayEnd();
+const legacyContract={...contract,fields:contract.fields.map(f=>f.name==='clock_close'?{...f,observation:{...f.observation,values:[codec('u32')]}}:f)};
+fixtureContract=legacyContract;__arkdpsReplayBegin(record());globalThis.legacyClock=__arkdpsOwnedHpObservation(legacyContract,enemy).clock();globalThis.legacyClockEnd=__arkdpsReplayEnd();fixtureContract=contract;
 globalThis.failures=[];
 for(const failure of ['planned','structural','missing']){
  mode=failure;__arkdpsReplayBegin(record());const reader=__arkdpsOwnedHpObservation(contract,enemy);globalThis['before-'+failure]=!poisoned;
@@ -88,7 +91,8 @@ globalThis.batchFault=rejects(()=>__arkdpsReplayBatch(faultAdvance,batchControll
 __arkdpsArguments=originalArguments;__arkdpsOwnedHpObservation=originalFactory;
 globalThis.liveCount=live;
 `,c);
-assert.equal(c.oldProvider,null);assert(c.successCalls&&c.goodEnd.complete);assert.equal(c.good[0][0],0xfedcba9876543210n);assert.equal(c.good[0][1],73);assert.equal(c.good[1],1);assert.equal(c.good[2],-9223372036854775808n);assert.equal(c.good[3],'A\0中\ud800B\udfffC\ud83d\ude00');assert.deepEqual(Array.from(c.good[4]),[30,-4294967296n,30]);
+assert.equal(c.oldProvider,null);assert(c.successCalls&&c.goodEnd.complete);assert.equal(c.good[0][0],0xfedcba9876543210n);assert.equal(c.good[0][1],73);assert.equal(c.good[1],1);assert.equal(c.good[2],-9223372036854775808n);assert.equal(c.good[3],'A\0中\ud800B\udfffC\ud83d\ude00');assert.deepEqual(Array.from(c.good[4]),[30,-4294967296n,30,-4294967296n]);
+assert.deepEqual(Array.from(c.legacyClock),[30,-4294967296n,30]);assert(c.legacyClockEnd.complete);
 assert(c['before-planned']&&c['before-structural']&&c['before-missing']);assert(c.failures[0].caught&&!c.failures[0].nativeFault&&c.failures[0].summary.complete);assert.equal(c.failures[0].summary.unreadable_reads,1);
 for(const i of [1,2])assert(c.failures[i].caught&&c.failures[i].nativeFault&&!c.failures[i].summary.complete);
 assert(c.unusedFault&&c.unusedEnd.complete);assert(c.receiverMutation&&!c.receiverEnd.complete);assert(c.expired&&!c.expiredEnd.complete);assert(c.pinned&&c.pinnedEnd.complete);assert(c.replaced&&!c.replacedEnd.complete);assert(c.oldEpoch&&c.oldEpochEnd.complete);
