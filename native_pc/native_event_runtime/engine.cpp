@@ -727,7 +727,11 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     auto complete=JS_GetPropertyStr(c,ended,"complete");
     const bool valid=JS_ToBool(c,complete)==1;
     JS_FreeValue(c,complete); JS_FreeValue(c,ended);
-    if (!valid || runtime.lanes->failure.load(std::memory_order_acquire)) {
+    if (const auto failure=runtime.lanes->failure.load(std::memory_order_acquire)) {
+        JS_FreeValue(c,record); JS_FreeValue(c,projection);
+        throw std::runtime_error("native capture failed: code="+std::to_string(failure));
+    }
+    if (!valid) {
         JS_FreeValue(c,record); JS_FreeValue(c,projection);
         throw std::runtime_error("native callback replay has structural gaps");
     }
