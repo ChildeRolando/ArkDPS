@@ -623,8 +623,8 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     RecordHeader header;
     if (length<sizeof header) throw std::runtime_error("short native capture header");
     std::memcpy(&header,bytes,sizeof header);
-    const auto required=sizeof header+header.segment_count*sizeof(Segment)+header.field_count*sizeof(FieldState)+header.byte_count;
-    if (header.lane>=lane_count || !header.depth || header.depth>invocation_depth
+    const auto required=sizeof header+header.parent_checkpoint_count*sizeof(ParentCheckpoint)+header.segment_count*sizeof(Segment)+header.field_count*sizeof(FieldState)+header.byte_count;
+    if (header.parent_checkpoint_count>invocation_depth || header.lane>=lane_count || !header.depth || header.depth>invocation_depth
         || header.hook_id>=runtime.hooks.size() || header.segment_count>max_segments
         || header.field_count>max_fields || header.byte_count>max_bytes || length!=required
         || header.ticket!=runtime.processed_ticket+1 || (header.phase!=Phase::entry && header.phase!=Phase::leave))
@@ -669,8 +669,20 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     if (header.scope_revision) js_property(c,facts,"scope_revision",JS_NewInt64(c,header.scope_revision));
     if (header.publication_captured) js_property(c,facts,"publication_revision",JS_NewInt64(c,header.publication_revision));
     if (header.cold_revision) js_property(c,facts,"cold_revision",JS_NewInt64(c,header.cold_revision));
+    auto parents=JS_NewArray(c);
+    for (unsigned i=0;i<header.parent_checkpoint_count;++i) {
+        ParentCheckpoint parent;
+        std::memcpy(&parent,bytes+sizeof header+i*sizeof parent,sizeof parent);
+        if (!parent.invocation || parent.invocation==header.invocation || parent.checkpoint!=i+1 || parent.reserved)
+            throw std::runtime_error("invalid exact native parent checkpoint");
+        auto point=JS_NewObject(c);
+        js_property(c,point,"invocation_id",JS_NewString(c,std::to_string(parent.invocation).c_str()));
+        js_property(c,point,"checkpoint",JS_NewUint32(c,parent.checkpoint));
+        JS_SetPropertyUint32(c,parents,i,point);
+    }
+    js_property(c,facts,"parent_checkpoints",parents);
     js_property(c,record,"facts",facts);
-    const auto segment_start=sizeof header;
+    const auto segment_start=sizeof header+header.parent_checkpoint_count*sizeof(ParentCheckpoint);
     const auto field_start=segment_start+header.segment_count*sizeof(Segment);
     const auto payload=bytes+field_start+header.field_count*sizeof(FieldState);
     for (unsigned i=0;i<runtime.field_status_count;++i) runtime.field_status_keys[runtime.field_status_used[i]]=0;
@@ -900,6 +912,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     if (lane->depth>=invocation_depth) { lanes.poison(LaneFault::depth_full); return hook->original; }
     auto& call=lane->calls[lane->depth];
     call.hook=hook; call.mode_epoch=pinned_mode;
+    call.apply_modifier=hook->capture_plan.apply_modifier; call.buff_damage=hook->capture_plan.buff_damage;
     call.configuration=runtime.configurations.pin(pinned_mode);
     if (!capture_read(nullptr,frame->stack,&call.return_address,sizeof call.return_address)) { lanes.poison(LaneFault::invalid_stack); return hook->original; }
     call.id=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
@@ -917,7 +930,12 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
         context.args_valid|=1u<<index;
     }
     context.entry_refs=context.args; context.entry_valid=context.args_valid;
-    if (lane->depth) { context.parent_refs=lane->calls[lane->depth-1].context.entry_refs; context.parent_valid=lane->calls[lane->depth-1].context.entry_valid; }
+    for (unsigned i=lane->depth;i>0;--i) {
+        const auto& parent=lane->calls[i-1];
+        if (parent.buff_damage && (parent.context.args_valid&1u)) {
+            context.parent_refs[0]=parent.context.args[0]; context.parent_valid|=1u; break;
+        }
+    }
     ++lane->depth; frame->return_target=1;
     RecordHeader header{};
     header.ticket=call.id; header.invocation=call.id; header.parent=call.parent; header.mode_epoch=call.mode_epoch;
@@ -929,7 +947,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     for (unsigned i=0;i<lane_count;++i) if (lanes.lanes[i].get()==lane) header.lane=i;
     header.depth=lane->depth; header.phase=Phase::entry; header.arg_mask=context.args_valid;
     capture_scope_point(hook->capture_plan,Phase::entry,context,call.configuration,
-                        capture_read,nullptr,lane->snapshot,header);
+                        capture_read,nullptr,lane->snapshot,header,lane);
     save_entry_roots(hook->capture_plan,lane->snapshot,context);
     lanes.publish(*lane,header);
     return hook->original;
@@ -974,7 +992,7 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     header.active=runtime.active.load(std::memory_order_acquire);
     call.context.return_value=frame->rax; call.context.return_valid=true;
     capture_scope_point(hook->capture_plan,Phase::leave,call.context,call.configuration,
-                        capture_read,nullptr,lane->snapshot,header);
+                        capture_read,nullptr,lane->snapshot,header,lane);
     header.activity=runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel)+1;
     header.active_after=runtime.active.fetch_sub(1,std::memory_order_acq_rel)-1;
     header.closed_after=header.active_after==0 && header.activity==header.activity_begin+1;

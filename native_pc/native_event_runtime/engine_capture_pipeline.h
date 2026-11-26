@@ -10,7 +10,7 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
                                 const Context& context,
                                 const CaptureConfiguration* config,
                                 ReadMemory reader, void* user,
-                                Snapshot& snapshot, RecordHeader& header) noexcept {
+                                Snapshot& snapshot, RecordHeader& header, Lane* lane=nullptr) noexcept {
     capture_begin(snapshot,phase,context,max_bytes,max_reads);
     const auto base_stage=[&](unsigned stage) noexcept {
         for (std::uint16_t i=0;i<base.plan->field_count;++i)
@@ -40,6 +40,18 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
                        snapshot,0,scope->body_insertion);
     }
     base_stage(0);
+    if (lane && base.parent_checkpoint_fields) {
+        for (unsigned i=0;i<lane->depth;++i) {
+            const auto& parent=lane->calls[i];
+            if (!parent.apply_modifier || parent.id==header.invocation) continue;
+            Context parent_context=context;
+            parent_context.checkpoint=header.parent_checkpoint_count+1;
+            parent_context.parent_refs[1]=parent.context.args[1];
+            parent_context.parent_valid=(parent_context.parent_valid&~2u)|(parent.context.args_valid&2u);
+            lane->parent_checkpoints[header.parent_checkpoint_count++]={parent.id,parent_context.checkpoint,0};
+            capture_append(*base.plan,Phase::checkpoint,parent_context,reader,user,snapshot);
+        }
+    }
     const CaptureGraph* publication=!cold && header.projection_candidate && config
         && config->publication && config->publication->available ? config->publication.get() : nullptr;
     if (publication) {

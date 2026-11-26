@@ -24,6 +24,7 @@ struct CompiledPlan {
     std::array<std::uint8_t,max_fields> field_stage{};
     std::array<SavedEntryRoot, max_roots> entry_roots{};
     std::uint8_t entry_root_count=0;
+    bool apply_modifier=false, buff_damage=false, parent_checkpoint_fields=false;
     std::unique_ptr<CompiledPlan> cold;
     bool force_cold_leave=false, force_full_entry=false, force_cold_conditional=false;
     std::uint8_t force_cold_arg=0;
@@ -181,6 +182,15 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
             if (value.at("stop_utf16_literal")!="dynamic")
                 throw std::runtime_error("unsupported capture UTF16 stop literal");
             field.stop_at_dynamic=true;
+        }
+    }
+    result.apply_modifier=source.value("name",std::string())=="Entity.ApplyModifier";
+    result.buff_damage=source.value("name",std::string())=="Buff.OnTakeDamage";
+    for (unsigned i=0;i<result.plan->field_count;++i) {
+        const auto& f=result.plan->fields[i];
+        if (f.phase==Phase::checkpoint && source.value("profile",std::string())=="modifier") {
+            result.parent_checkpoint_fields=true;
+            if (f.guard_id) throw std::runtime_error("parent checkpoint guards need an independent namespace");
         }
     }
     // No named projection is implemented by this generic read-recipe compiler.

@@ -29,11 +29,13 @@ enum class LaneFault : unsigned { none, thread_identity, threads_full, depth_ful
     invalid_stack, replay_structure, invalid_record, live_replay_access, publication_failure };
 struct InvocationState {
     void* hook = nullptr;
+    bool apply_modifier=false, buff_damage=false;
     std::uint64_t id = 0, parent = 0, mode_epoch = 0;
     std::uintptr_t return_address = 0;
     const CaptureConfiguration* configuration=nullptr;
     Context context;
 };
+struct ParentCheckpoint { std::uint64_t invocation=0; std::uint32_t checkpoint=0, reserved=0; };
 struct RecordHeader {
     std::uint64_t ticket = 0, invocation = 0, parent = 0, activity = 0, activity_begin = 0;
     std::uint64_t return_value = 0, thread_birth = 0, captured_qpc = 0;
@@ -45,11 +47,11 @@ struct RecordHeader {
     std::uint32_t hook_id = 0, thread_id = 0, lane = 0, depth = 0;
     std::uint32_t checkpoint = 0, byte_count = 0, active = 0, active_after = 0;
     bool closed_after = false;
-    std::uint16_t arg_mask = 0, segment_count = 0, field_count = 0;
+    std::uint16_t arg_mask = 0, segment_count = 0, field_count = 0, parent_checkpoint_count=0;
     Phase phase = Phase::entry;
     Error error = Error::ok;
 };
-constexpr std::size_t record_capacity = sizeof(RecordHeader) + max_segments*sizeof(Segment)
+constexpr std::size_t record_capacity = invocation_depth*sizeof(ParentCheckpoint) + sizeof(RecordHeader) + max_segments*sizeof(Segment)
     + max_fields*sizeof(FieldState) + max_bytes;
 struct Lane {
     std::atomic<DWORD> owner{0};
@@ -58,6 +60,7 @@ struct Lane {
     std::array<InvocationState, invocation_depth> calls{};
     CaptureQueue queue{{8192, 8*1024*1024}};
     Snapshot snapshot{};
+    std::array<ParentCheckpoint,invocation_depth> parent_checkpoints{};
     std::array<std::byte, record_capacity> scratch{};
     // One producer writes this cache line; only worker reads diagnostic mirrors.
     struct alignas(64) ProducerCounts {
@@ -153,6 +156,7 @@ public:
             std::memcpy(lane.scratch.data()+offset, source, size); offset+=size;
         };
         append(&header, sizeof header);
+        append(lane.parent_checkpoints.data(),header.parent_checkpoint_count*sizeof(ParentCheckpoint));
         append(snapshot.segments.data(), snapshot.segment_count*sizeof(Segment));
         append(snapshot.fields.data(), snapshot.field_count*sizeof(FieldState));
         append(snapshot.bytes.data(), snapshot.byte_count);

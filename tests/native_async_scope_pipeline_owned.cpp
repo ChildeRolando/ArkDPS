@@ -53,5 +53,20 @@ int main(){
  reads.count=0;reads.mutate=true;header={};
  capture_scope_point(*boundary,Phase::entry,context,nullptr,reader,&reads,*snapshot,header);
  assert(snapshot->error==Error::changed_guard);
+ reads.mutate=false;reads.count=0;
+ plan.erase("cold_plan");plan.erase("force_full_binding");plan["profile"]="modifier";
+ plan["fields"].push_back(field(4,"parent.body","checkpoint","none",0));
+ auto modifier=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*modifier);
+ auto lane=std::make_unique<Lane>();lane->depth=3;
+ lane->calls[0].id=UINT64_MAX-10;lane->calls[0].apply_modifier=true;
+ lane->calls[1].id=UINT64_MAX-5;lane->calls[1].apply_modifier=true;
+ lane->calls[2].id=123;lane->calls[2].apply_modifier=true;
+ header={};header.invocation=123;
+ capture_scope_point(*modifier,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(snapshot->error==Error::ok && snapshot->field_count==5);
+ assert(header.parent_checkpoint_count==2);
+ assert(lane->parent_checkpoints[0].invocation==UINT64_MAX-10 && lane->parent_checkpoints[0].checkpoint==1);
+ assert(lane->parent_checkpoints[1].invocation==UINT64_MAX-5 && lane->parent_checkpoints[1].checkpoint==2);
+ assert(snapshot->fields[2].checkpoint==1 && snapshot->fields[3].checkpoint==2);
  std::cout<<"scope bracket, clock spanning graph, pinned immutable revision passed\n";
 }
