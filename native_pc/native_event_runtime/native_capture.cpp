@@ -22,7 +22,7 @@ struct Writer {
     Snapshot& out;
     ReadMemory reader;
     void* user;
-    std::uint32_t byte_budget, read_budget;
+    std::uint32_t byte_budget, read_budget, checkpoint;
     std::uintptr_t attempted_address = 0;
     std::uint32_t attempted_size = 0;
     Error raw(std::uintptr_t address, void* target, std::size_t size) noexcept {
@@ -40,7 +40,7 @@ struct Writer {
         const auto result = raw(address, out.bytes.data() + out.byte_count, size);
         if (result != Error::ok) return result;
         out.segments[out.segment_count++] = {address, field.id, field.role, out.byte_count,
-                                            static_cast<std::uint32_t>(size), field.guard_id};
+                                            static_cast<std::uint32_t>(size), field.guard_id, checkpoint};
         out.byte_count += static_cast<std::uint32_t>(size);
         return Error::ok;
     }
@@ -61,7 +61,7 @@ Error captured_count(const HookCapturePlan& plan, std::size_t index, Writer& wri
         const FieldState* count_state = nullptr;
         for (std::size_t previous = 0; previous < writer.out.field_count; ++previous) {
             const auto& state = writer.out.fields[previous];
-            if (state.id == count_field->id && state.role == count_field->role) count_state = &state;
+            if (state.id == count_field->id && state.role == count_field->role && state.checkpoint == writer.checkpoint) count_state = &state;
         }
         if (!count_state || count_state->error != Error::ok
             || count_state->final_segment >= writer.out.segment_count) return Error::invalid_length;
@@ -116,7 +116,7 @@ Error projection(const HookCapturePlan& plan, const Field& field, std::uint16_t 
                  std::uintptr_t base, Writer& writer,
                  std::array<std::uint16_t, max_projection_nodes>& visits,
                  std::size_t level) noexcept {
-    if (index >= plan.projection_count || index >= max_projection_nodes || level >= max_depth)
+    if (index >= plan.projection_count || index >= max_projection_nodes || level >= max_projection_depth)
         return Error::invalid_plan;
     const auto& node = plan.projections[index];
     if (++visits[index] > node.max_visits) return Error::bounds;
@@ -207,7 +207,7 @@ struct ProjectionBudget { std::size_t bytes = 0, reads = 0, segments = 0; };
 Error projection_budget(const HookCapturePlan& plan, std::uint16_t index, std::size_t visits,
                         std::size_t level, std::array<bool, max_projection_nodes>& seen,
                         ProjectionBudget& budget) noexcept {
-    if (index >= plan.projection_count || index >= max_projection_nodes || level >= max_depth || seen[index])
+    if (index >= plan.projection_count || index >= max_projection_nodes || level >= max_projection_depth || seen[index])
         return Error::invalid_plan;
     seen[index] = true;
     const auto& node = plan.projections[index];
@@ -388,79 +388,135 @@ Error validate_plan(const HookCapturePlan& plan) noexcept {
     return Error::ok;
 }
 
-Error capture(const HookCapturePlan& plan, Phase phase, const Context& context,
-              ReadMemory reader, void* user, Snapshot& out) noexcept {
-    out.segment_count = out.field_count = 0; out.byte_count = 0; out.read_count = out.read_bytes = 0; out.error = Error::ok;
-    out.guard_valid.fill(true);
+Error capture_begin(Snapshot& out, Phase phase, const Context& context,
+                    std::uint32_t byte_budget, std::uint32_t read_budget) noexcept {
+    // Reset only groups actually touched by the previous session. The large
+    // owned byte/segment/field arenas are preallocated and never cleared here.
+    if (out.guard_count > max_guards) return Error::invalid_plan;
+    for (std::size_t i = 0; i < out.guard_count; ++i) out.guard_seen[out.guard_ids[i]] = false;
+    out.guard_count = 0; out.guard_valid[0] = true;
+    out.segment_count = out.field_count = 0; out.byte_count = 0; out.read_count = out.read_bytes = 0;
+    out.error = Error::ok; out.session_open = true; out.finalized = false;
     out.phase = phase; out.checkpoint = context.checkpoint;
     out.invocation_id = context.invocation_id; out.parent_invocation_id = context.parent_invocation_id;
+    out.byte_budget = byte_budget; out.read_budget = read_budget;
     if (!phase_ok(phase)) return out.error = Error::invalid_phase;
-    if (plan.field_count > max_fields || plan.schema_version != 1 || !reader)
+    if (!byte_budget || byte_budget > max_bytes || !read_budget || read_budget > max_reads)
         return out.error = Error::invalid_plan;
+    return Error::ok;
+}
+Error capture_append(const HookCapturePlan& plan, Phase phase, const Context& context,
+                     ReadMemory reader, void* user, Snapshot& out,
+                     std::uint16_t field_begin, std::uint16_t field_end) noexcept {
+    if (!out.session_open || out.finalized) return Error::invalid_plan;
+    if (!phase_ok(phase)) return out.error = Error::invalid_phase;
+    if (field_end == 0xffff) field_end = plan.field_count;
+    if (plan.field_count > max_fields || plan.schema_version != 1 || !reader
+        || field_begin > field_end || field_end > plan.field_count)
+        return out.error = Error::invalid_plan;
+    // Plan budgets constrain each append too, but never reset the raw record's
+    // cumulative work counters. Whole-session budgets are the hard boundary.
     if (!plan.max_bytes || plan.max_bytes > max_bytes || !plan.max_reads || plan.max_reads > max_reads)
         return out.error = Error::invalid_plan;
-    Writer writer{out, reader, user, plan.max_bytes, plan.max_reads};
-    std::array<std::uint16_t, max_fields> begin{}, end{};
-    std::array<int, max_guards> before{}, after{};
-    before.fill(-1); after.fill(-1);
-    for (std::size_t i = 0; i < plan.field_count; ++i) {
+    const auto first_reads = out.read_count, first_bytes = out.read_bytes;
+    const auto byte_limit = first_bytes + plan.max_bytes < out.byte_budget ? first_bytes + plan.max_bytes : out.byte_budget;
+    const auto read_limit = first_reads + plan.max_reads < out.read_budget ? first_reads + plan.max_reads : out.read_budget;
+    Writer writer{out, reader, user, byte_limit, read_limit, context.checkpoint};
+    for (std::size_t i = field_begin; i < field_end; ++i) {
         const auto& field = plan.fields[i];
         if (field.phase != phase) continue;
-        if (field.guard_id >= max_guards) return out.error = Error::invalid_plan;
-        begin[i] = out.segment_count;
+        if (out.field_count >= max_fields || field.guard_id >= max_guards) return out.error = Error::bounds;
+        for (std::size_t prior = 0; prior < out.field_count; ++prior)
+            if (out.fields[prior].id == field.id && out.fields[prior].checkpoint == context.checkpoint)
+                return out.error = Error::invalid_plan;
+        if (field.guard_id && !out.guard_seen[field.guard_id]) {
+            out.guard_seen[field.guard_id] = true; out.guard_valid[field.guard_id] = true;
+            out.guards[field.guard_id] = GuardState{};
+            out.guard_ids[out.guard_count++] = field.guard_id;
+        }
+        const auto begin = out.segment_count;
         writer.attempted_address = 0; writer.attempted_size = 0;
-        const auto error = field_capture(plan, i, context, writer);
-        end[i] = out.segment_count;
-        out.fields[out.field_count++] = {field.id, field.role, error,
-            static_cast<std::uint16_t>(error == Error::ok && end[i] > begin[i] ? end[i] - 1 : 0xffff),
-            error == Error::ok ? 0 : writer.attempted_address, error == Error::ok ? 0 : writer.attempted_size};
+        auto error = field_capture(plan, i, context, writer);
+        if (out.read_count - first_reads > plan.max_reads || out.read_bytes - first_bytes > plan.max_bytes)
+            error = Error::bounds;
+        const auto state_index = out.field_count++;
+        auto& state = out.fields[state_index];
+        state = {field.id, field.role, error,
+            static_cast<std::uint16_t>(error == Error::ok && out.segment_count > begin ? out.segment_count - 1 : 0xffff),
+            error == Error::ok ? 0 : writer.attempted_address, error == Error::ok ? 0 : writer.attempted_size,
+            context.checkpoint, begin, out.segment_count, field.guard_id, field.guard, field.required};
         if (field.required && error != Error::ok && out.error == Error::ok) out.error = error;
         if (field.guard_id) {
             if (error != Error::ok) out.guard_valid[field.guard_id] = false;
-            if (field.guard == Guard::before) before[field.guard_id] = static_cast<int>(i);
-            if (field.guard == Guard::after) after[field.guard_id] = static_cast<int>(i);
-        }
-    }
-    for (std::size_t group = 1; group < max_guards; ++group) {
-        const auto a = before[group], b = after[group];
-        if (a < 0 && b < 0) continue;
-        bool equal = a >= 0 && b >= 0 && out.guard_valid[group];
-        if (equal) {
-            equal = end[a] - begin[a] == end[b] - begin[b];
-            for (std::size_t n = 0; equal && n < static_cast<std::size_t>(end[a] - begin[a]); ++n) {
-                const auto& x = out.segments[begin[a] + n];
-                const auto& y = out.segments[begin[b] + n];
-                equal = x.address == y.address && x.size == y.size
-                    && std::memcmp(out.bytes.data() + x.offset, out.bytes.data() + y.offset, x.size) == 0;
-            }
-        }
-        out.guard_valid[group] = equal;
-        if (!equal) {
-            for (std::size_t i = 0; i < plan.field_count; ++i) {
-                const auto& field = plan.fields[i];
-                if (field.phase != phase || field.guard_id != group) continue;
-                for (std::size_t f = 0; f < out.field_count; ++f)
-                    if (out.fields[f].id == field.id && out.fields[f].error == Error::ok) out.fields[f].error = Error::changed_guard;
-                if (field.required && out.error == Error::ok) out.error = Error::changed_guard;
+            auto& group = out.guards[field.guard_id];
+            if (field.guard == Guard::before) {
+                if (group.before != 0xffff) return out.error = Error::invalid_plan;
+                group.before = state_index;
+            } else if (field.guard == Guard::after) {
+                if (group.after != 0xffff) return out.error = Error::invalid_plan;
+                group.after = state_index;
             }
         }
     }
     return out.error;
 }
+Error capture_finalize(Snapshot& out) noexcept {
+    if (!out.session_open || out.finalized) return Error::invalid_plan;
+    for (std::size_t i = 0; i < out.guard_count; ++i) {
+        const auto id = out.guard_ids[i]; const auto& group = out.guards[id];
+        bool equal = group.before != 0xffff && group.after != 0xffff
+            && group.before < group.after && out.guard_valid[id];
+        if (equal) {
+            const auto& a = out.fields[group.before]; const auto& b = out.fields[group.after];
+            equal = a.checkpoint == b.checkpoint
+                && a.segment_end - a.segment_begin == b.segment_end - b.segment_begin;
+            for (std::size_t n = 0; equal && n < static_cast<std::size_t>(a.segment_end - a.segment_begin); ++n) {
+                const auto& x = out.segments[a.segment_begin + n];
+                const auto& y = out.segments[b.segment_begin + n];
+                equal = x.address == y.address && x.size == y.size
+                    && std::memcmp(out.bytes.data() + x.offset, out.bytes.data() + y.offset, x.size) == 0;
+            }
+        }
+        out.guard_valid[id] = equal;
+    }
+    for (std::size_t i = 0; i < out.field_count; ++i) {
+        auto& field = out.fields[i];
+        if (field.guard_id && field.guard == Guard::member) {
+            const auto& group = out.guards[field.guard_id];
+            if (!(group.before < i && i < group.after)) out.guard_valid[field.guard_id] = false;
+        }
+    }
+    for (std::size_t i = 0; i < out.field_count; ++i) {
+        auto& field = out.fields[i];
+        if (field.guard_id && !out.guard_valid[field.guard_id]) {
+            if (field.error == Error::ok) field.error = Error::changed_guard;
+            if (field.required && out.error == Error::ok) out.error = Error::changed_guard;
+        }
+    }
+    out.finalized = true; out.session_open = false;
+    return out.error;
+}
+Error capture(const HookCapturePlan& plan, Phase phase, const Context& context,
+              ReadMemory reader, void* user, Snapshot& out) noexcept {
+    const auto error = capture_begin(out, phase, context, plan.max_bytes, plan.max_reads);
+    if (error != Error::ok) return error;
+    capture_append(plan, phase, context, reader, user, out);
+    return capture_finalize(out);
+}
 
 Error read_snapshot(const Snapshot& snapshot, std::uint16_t role, std::uint32_t checkpoint,
                     std::uint16_t field_id, std::uintptr_t address, void* target, std::size_t size) noexcept {
-    if (snapshot.checkpoint != checkpoint || (!target && size) || snapshot.field_count > max_fields
+    if (!snapshot.finalized || (!target && size) || snapshot.field_count > max_fields
         || snapshot.segment_count > max_segments || snapshot.byte_count > max_bytes) return Error::missing_plan_field;
     const FieldState* field = nullptr;
     for (std::size_t i = 0; i < snapshot.field_count; ++i)
-        if (snapshot.fields[i].id == field_id && snapshot.fields[i].role == role) field = &snapshot.fields[i];
+        if (snapshot.fields[i].id == field_id && snapshot.fields[i].role == role && snapshot.fields[i].checkpoint == checkpoint) field = &snapshot.fields[i];
     if (!field) return Error::missing_plan_field;
     if (field->error != Error::ok) return field->error;
     const std::byte* selected = nullptr;
     for (std::size_t i = 0; i < snapshot.segment_count; ++i) {
         const auto& segment = snapshot.segments[i];
-        if (segment.field_id != field_id || segment.role != role || address < segment.address) continue;
+        if (segment.field_id != field_id || segment.role != role || segment.checkpoint != checkpoint || address < segment.address) continue;
         const auto delta = address - segment.address;
         if (delta > segment.size || size > segment.size - delta) continue;
         if (segment.offset > snapshot.byte_count || segment.size > snapshot.byte_count - segment.offset

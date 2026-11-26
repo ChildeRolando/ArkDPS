@@ -47,9 +47,9 @@ static Context context() {
 int main() {
     static_assert(std::is_trivially_copyable_v<Snapshot>);
     Arena arena;
-    auto p = plan(); p.field_count = 1; p.fields[0] = field(1, 1, 0, 4);
+    static auto p = plan(); p.field_count = 1; p.fields[0] = field(1, 1, 0, 4);
     assert(validate_plan(p) == Error::ok);
-    auto c = context(); Snapshot owned;
+    auto c = context(); static Snapshot owned;
     arena.set<std::uint32_t>(0, 1234);
     const auto before = allocations;
     assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
@@ -66,7 +66,7 @@ int main() {
     assert(arena.reads == 1); // Worker cannot touch the poisoned source.
 
     // Independent observations at the same address retain distinct field IDs.
-    Snapshot later;
+    static Snapshot later;
     arena.set<std::uint32_t>(0, 2345); p.fields[0].id = 2;
     assert(capture(p, Phase::entry, c, Arena::read, &arena, later) == Error::ok);
     assert(read_snapshot(owned, 1, 7, 1, Arena::base, &value, 4) == Error::ok && value == 1234);
@@ -317,6 +317,47 @@ int main() {
     p.fields[0].required = false;
     assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
     assert(read_snapshot(owned, 1, 7, 1, Arena::base + 2048, &value, 4) == Error::field_unreadable);
+
+    // One raw record brackets independent parent contexts with the same
+    // field IDs but distinct checkpoints; budgets and guards span appends.
+    p = plan(); p.field_count = 3;
+    p.fields[0] = field(1, 1, 0, 4); p.fields[0].guard_id = 3000; p.fields[0].guard = Guard::before;
+    p.fields[1] = field(2, 2, 8, 4); p.fields[1].guard_id = 3000; p.fields[1].guard = Guard::member;
+    p.fields[2] = p.fields[0]; p.fields[2].id = 3; p.fields[2].guard = Guard::after;
+    assert(validate_plan(p) == Error::ok);
+    static auto parent_plan = plan(); parent_plan.field_count = 1;
+    parent_plan.fields[0] = field(7, 7, 0, 4); parent_plan.fields[0].root = Root::parent_ref;
+    arena.memory.fill(std::byte{0}); arena.set<std::uint32_t>(0, 10);
+    arena.set<std::uint32_t>(64, 123); arena.set<std::uint32_t>(128, 456);
+    assert(capture_begin(owned, Phase::entry, c, 64, 8) == Error::ok);
+    assert(capture_append(p, Phase::entry, c, Arena::read, &arena, owned, 0, 2) == Error::ok);
+    assert(read_snapshot(owned, 1, 7, 1, Arena::base, &value, 4) == Error::missing_plan_field);
+    auto parent_context = c; parent_context.parent_valid = 1; parent_context.checkpoint = 101;
+    parent_context.parent_refs[0] = Arena::base + 64;
+    assert(capture_append(parent_plan, Phase::entry, parent_context, Arena::read, &arena, owned) == Error::ok);
+    parent_context.checkpoint = 102; parent_context.parent_refs[0] = Arena::base + 128;
+    assert(capture_append(parent_plan, Phase::entry, parent_context, Arena::read, &arena, owned) == Error::ok);
+    assert(capture_append(p, Phase::entry, c, Arena::read, &arena, owned, 2, 3) == Error::ok);
+    assert(capture_finalize(owned) == Error::ok && owned.read_count == 5 && owned.read_bytes == 20);
+    assert(read_snapshot(owned, 7, 101, 7, Arena::base + 64, &value, 4) == Error::ok && value == 123);
+    assert(read_snapshot(owned, 7, 102, 7, Arena::base + 128, &value, 4) == Error::ok && value == 456);
+    assert(read_snapshot(owned, 7, 101, 7, Arena::base + 128, &value, 4) == Error::missing_plan_field);
+    assert(capture_append(parent_plan, Phase::entry, c, Arena::read, &arena, owned) == Error::invalid_plan);
+    // Total raw budget is not reset for the second parent.
+    assert(capture_begin(owned, Phase::entry, c, 4, 1) == Error::ok);
+    assert(capture_append(parent_plan, Phase::entry, parent_context, Arena::read, &arena, owned) == Error::ok);
+    parent_context.checkpoint = 103;
+    assert(capture_append(parent_plan, Phase::entry, parent_context, Arena::read, &arena, owned) == Error::bounds);
+    assert(capture_finalize(owned) == Error::bounds && owned.read_count == 1);
+    // Missing closing outer guard cannot authenticate an earlier body slice.
+    assert(capture_begin(owned, Phase::entry, c, 64, 8) == Error::ok);
+    assert(capture_append(p, Phase::entry, c, Arena::read, &arena, owned, 0, 2) == Error::ok);
+    assert(capture_finalize(owned) == Error::changed_guard);
+    assert(read_snapshot(owned, 2, 7, 2, Arena::base + 8, &value, 4) == Error::changed_guard);
+    // Reusing the scratch for a tiny HP plan visits no unused guard tail.
+    owned.guard_valid[4095] = false;
+    assert(capture(parent_plan, Phase::entry, parent_context, Arena::read, &arena, owned) == Error::ok);
+    assert(owned.guard_count == 0 && !owned.guard_seen[3000] && !owned.guard_valid[4095]);
 
     // Initialize-time budgets reject a plan, never trim its evidence silently.
     p.fields[0].required = true; p.max_bytes = 1;
