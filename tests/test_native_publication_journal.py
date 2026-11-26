@@ -16,3 +16,13 @@ def test_native_publication_journal():
     report = json.loads(result.stdout)
     assert report['checks'] >= 35
     assert report['live_reads'] == report['live_calls'] == 0
+
+
+def test_native_compact_publish_receipt_preserves_host_and_ack_contract():
+    fixture = Path(__file__).with_name('native_publication_compact_receipt_fixture.js')
+    result = subprocess.run(['node', str(fixture)], cwd=fixture.parents[1],
+                            capture_output=True, text=True, check=True, timeout=20)
+    report = json.loads(result.stdout)
+    assert report['full']['copies'] == 1 and report['compact']['copies'] == 0
+    assert report['identicalHostMarkRead'] and report['unservedAckRejected']
+    assert report['callerAndReplyMutationIsolated']

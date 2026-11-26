@@ -49,12 +49,12 @@ class ArkdpsPublicationJournal {
    throw new Error('terminal publication changed its native binding');
   return true;
  }
- publish(record,projection){
+ publish(record,projection,receiptOnly=false){
   if(this.failure)return this.failed();
-  try{return this.publishChecked(record,projection);}
+  try{return this.publishChecked(record,projection,receiptOnly);}
   catch(error){return this.fail(error.message||error);}
  }
- publishChecked(record,p){
+ publishChecked(record,p,receiptOnly=false){
   if(record?.version!==1||record.edge!=='leave'||record.closed_after!==true||record.active_after!==0)
    throw new Error('publication lacks a captured closed leave');
   const ticket=this.raw(record.ticket),begin=this.raw(record.activity_begin),end=this.raw(record.activity_end);
@@ -110,6 +110,10 @@ class ArkdpsPublicationJournal {
   this.marks.push(published);
   for(let i=0;i<retire;i++){const old=this.marks.shift();this.bytes-=old.bytes;}
   this.latest=published;this.rawClosed=ticket;this.publishedThrough=m.sequence;this.serial++;
+  // The native worker only needs this bounded certificate. It never serves
+  // this return value to a host: mark/read still use owned journal snapshots.
+  if(receiptOnly)return {retry:false,error:null,native_publication:fence,
+   native_capture_scope_mode_epoch:m.native_capture_scope_mode_epoch};
   return this.copy(published.mark);
  }
  copy(value){return JSON.parse(JSON.stringify(value));}
@@ -165,7 +169,7 @@ class ArkdpsPublicationJournal {
  }
 }
 const __arkdpsPublicationJournal=new ArkdpsPublicationJournal();
-function __arkdpsPublishClosedRecord(record,projection){return __arkdpsPublicationJournal.publish(record,projection);}
+function __arkdpsPublishClosedRecord(record,projection,receiptOnly=false){return __arkdpsPublicationJournal.publish(record,projection,receiptOnly);}
 function __arkdpsPublicationRequest(command){
  switch(command.operation){
   case 'mark':return __arkdpsPublicationJournal.mark();

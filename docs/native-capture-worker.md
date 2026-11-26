@@ -183,3 +183,16 @@ DataView 的私有 parents 缓存只保存字符串 ID 和 checkpoint，不保�
 NativePointer 的值始终是完整 uint64 BigInt。只有原生 provider 明确声明 `__nativeOwnedNumericAddress === true` 时，bridge 才把 `[0, 2^53-1]` 内的地址参数转为 Number；宽地址保留 BigInt。该能力与五个函数一起在 Begin 固定并纳入 provider 缓存身份，旧 provider 不会收到 Number。
 
 C++ 同时保留完整 uint64 BigInt 解析，并独立要求 Number 有限、为整数且处于安全整数范围；NaN、越界及小数地址仍触发结构错误和原生 poison。这里仅优化地址传参，不改变字段、指针值、现场捕获、归约或读取权限。
+
+
+### 原生发布回执与宿主快照
+
+worker完成闭合点发布时，只接收同一journal事务返回的有界内部回执
+（native_publication fence与native_capture_scope_mode_epoch）。该选项由C++调用固定传入，
+不接受宿主command选择。journal仍先完成完整输入校验与独立所有权复制，mark/read/terminal/ACK
+保留原DTO和游标规则；常规JS publish调用仍返回完整mark副本。
+
+这消除了每次发布返回完整mark的额外JSON复制，以及C++仅为读取几个fence字段而再次编码、
+解析完整body。旧captured_prefix_publication内部C++声明/实现没有源码、测试或已定义extern-C ABI
+调用者，随已不用的完整字符串缓存一并移除。此改动只减少发布成本，不证明生产HP回放已跟上
+事件入队速度，也不以扩容、跳过事实或改变fresh-mark要求来掩盖积压。

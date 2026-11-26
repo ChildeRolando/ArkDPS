@@ -64,7 +64,7 @@ struct Runtime {
     std::atomic<std::uint64_t> cold_publication_request{0};
     std::uint64_t published_mode_epoch = 0;
     int desired_mode = -1;
-    std::string captured_publication;
+    bool publication_ready=false;
     std::uint64_t published_ticket = 0;
     arkdps::capture::RecordHeader replay_header;
     JSValue replay_dispatch = JS_UNDEFINED;
@@ -626,7 +626,7 @@ void configure_mode(const nlohmann::json& command) {
     JS_SetPropertyStr(c,barrier,"version",JS_NewInt32(c,1));
     JS_SetPropertyStr(c,barrier,"mode_epoch",JS_NewInt64(c,current+1));
     std::array<JSValue,2> arguments{{JS_NewBool(c,desired!=0),barrier}};
-    auto answer=JS_Call(c,runtime.mode_install,JS_UNDEFINED,2,arguments.data());
+    auto answer=JS_Call(c,runtime.mode_install,JS_UNDEFINED,arguments.size(),arguments.data());
     for (auto argument : arguments) JS_FreeValue(c,argument);
     if (JS_IsException(answer)) throw std::runtime_error(exception(c));
     nlohmann::json state;
@@ -775,11 +775,11 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     if (header.closed_after) {
         runtime.closed_ticket=header.ticket;
         if (!JS_IsUndefined(projection) && !JS_IsNull(projection)) {
-            std::array<JSValue,2> arguments{{record,projection}};
+            std::array<JSValue,3> arguments{{record,projection,JS_TRUE}};
             // The journal is pure even though ReplayEnd already cleared the JS
             // read view. Native primitives remain forbidden throughout publish.
             runtime.replay_active=true;
-            auto published=JS_Call(c,runtime.publication_publish,JS_UNDEFINED,2,arguments.data());
+            auto published=JS_Call(c,runtime.publication_publish,JS_UNDEFINED,arguments.size(),arguments.data());
             runtime.replay_active=false;
             if (JS_IsException(published) || runtime.lanes->failure.load(std::memory_order_acquire)) {
                 JS_FreeValue(c,published); JS_FreeValue(c,record); JS_FreeValue(c,projection);
@@ -833,7 +833,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
                     runtime.terminal_fence.ticket=header.ticket;runtime.terminal_fence.activity=header.activity;
                     runtime.terminal_fence.verified=complete;
                 }
-                runtime.captured_publication=text;
+                runtime.publication_ready=true;
                 runtime.published_ticket=header.ticket;
                 if (arkdps::capture::plan_uint(parsed.at("native_capture_scope_mode_epoch"),9007199254740991ULL)!=header.scope_mode_epoch)
                     throw std::runtime_error("published configuration epoch does not bind captured scope point");
@@ -912,12 +912,12 @@ bool drain_captures() noexcept {
         }
         return false;
     } catch (const std::exception& error) {
-        runtime.captured_publication.clear(); runtime.published_ticket=0;
+        runtime.publication_ready=false; runtime.published_ticket=0;
         runtime.lanes->poison(LaneFault::replay_structure);
         runtime.lanes->enabled.store(false,std::memory_order_release);
         fail(error.what());
     } catch (...) {
-        runtime.captured_publication.clear(); runtime.published_ticket=0;
+        runtime.publication_ready=false; runtime.published_ticket=0;
         runtime.lanes->poison(LaneFault::replay_structure);
         runtime.lanes->enabled.store(false,std::memory_order_release);
         fail("native capture replay failed");
@@ -1174,7 +1174,7 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
             {"published_ticket",runtime.published_ticket},
             {"desired_mode_epoch",runtime.capture_mode_epoch.load(std::memory_order_acquire)},
             {"published_mode_epoch",runtime.published_mode_epoch},
-            {"publication_ready",!runtime.captured_publication.empty() && runtime.published_mode_epoch==runtime.capture_mode_epoch.load(std::memory_order_acquire)},
+            {"publication_ready",runtime.publication_ready && runtime.published_mode_epoch==runtime.capture_mode_epoch.load(std::memory_order_acquire)},
             {"activity_generation",runtime.activity_generation.load(std::memory_order_acquire)},
             {"active",runtime.active.load(std::memory_order_acquire)},
             {"failure_code",runtime.lanes->failure.load(std::memory_order_acquire)},
@@ -1340,9 +1340,6 @@ std::string request(const std::string& json) {
         lanes->pending_publication.store(revision,std::memory_order_release);
     }
     return state().worker.submit([json,minimum] { return request_on_worker(json,minimum); });
-}
-std::string captured_prefix_publication() {
-    return state().worker.submit([] { if (!state().fatal.empty()) throw std::runtime_error(state().fatal); return state().captured_publication; });
 }
 std::uint64_t timing_begin() noexcept {
     return timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
