@@ -28,8 +28,18 @@ globalThis.contractRestored=nativeActiveHpContract===null;globalThis.latestModeR
 const edgeMismatch={arkdpsName:'hp.Entity.SetHpInternal',onEnter(args){try{captureNativeHpObservation('leave',args[0]);}catch(error){}}};
 prepareNativeCaptureHook(ptr(0x9000),edgeMismatch);__arkdpsReplayBegin(observationRecord);edgeMismatch.onEnter.call({threadId:1},[actor]);globalThis.badSummary=__arkdpsReplayEnd();
 globalThis.badRestored=nativeActiveHpContract===null;
+// Mode-only source input is controlled by the bridge seam here. It must choose
+// actual item mode5 rather than latest6, without forcing public Record/Facts.
+const modeProbe={arkdpsName:'hp.Entity.SetHpInternal',arkdpsDirectHpEntry(){globalThis.directDesired=nativeAutoDesiredMode;},arkdpsDirectHpLeave(){}};
+prepareNativeCaptureHook(ptr(0xa000),modeProbe);const token=Object.freeze({}),oldVerifier=__arkdpsIsPreparedHpObservation,oldRecordGetter=__arkdpsReplayRecord;
+__arkdpsIsPreparedHpObservation=(io,contract)=>io===token&&contract===modeProbe.arkdpsCaptureContract;
+__arkdpsReplayModeRecord=()=>Object.freeze({edge:__arkdpsReplay.record.edge,facts:Object.freeze({mode_epoch:__arkdpsReplay.record.facts.mode_epoch})});
+__arkdpsReplayBegin(observationRecord);__arkdpsReplayRecord=()=>{throw Error('direct mode forced public record');};
+try{modeProbe.arkdpsDirectHpEntry.call({threadId:1},actor,token);}finally{__arkdpsReplayRecord=oldRecordGetter;__arkdpsIsPreparedHpObservation=oldVerifier;globalThis.directModeEnd=__arkdpsReplayEnd();}
+globalThis.directModeRestored=nativeAutoDesiredMode==='all';
+
 `,f.context);
-assert.equal(f.context.summary.complete,true);assert(f.context.contractRestored);assert(f.context.latestModeRestored);assert(f.context.badRestored);assert.equal(f.context.badSummary.complete,false);
+assert.equal(f.context.directDesired,'local');assert(f.context.directModeRestored);assert(f.context.directModeEnd.complete);assert.equal(f.context.summary.complete,true);assert(f.context.contractRestored);assert(f.context.latestModeRestored);assert(f.context.badRestored);assert.equal(f.context.badSummary.complete,false);
 const seen=JSON.parse(JSON.stringify(f.context.observed));assert.deepEqual(seen.map(x=>x.address),['0x7000','0x8000','0x7000']);assert(seen.every(x=>x.installed===0&&x.current===5));assert.equal(seen[0].desired,'local');assert.equal(seen[1].desired,'local');
 assert.equal(owned.late(),0);owned.restore();
 console.log('PASS_HP_OBSERVATION_CONTRACT actual record mode5 vs install0; nested exception/edge restores');

@@ -6,6 +6,7 @@ const assert=require('assert'),path=require('path'),vm=require('vm');
 const {fixture}=require('./native_pc_frida_probe_fixture.js'),{ownedFields}=require('./native_pc_owned_field_fixture.js');
 function run(direct,mode='damage'){
  const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),settlement:true,enemyHpState:true});
+ f.context.modeOnlySource=process.env.ARKDPS_SOURCE_MODE_RECORD==='1';
  f.write(f.enemyClass.add(0x58),f.entity);f.write(f.entity.add(0x58),f.bObject);f.write(f.bObject.add(0x58),f.ptr(0));
  f.context.rpc.exports.mark();f.clock(30,4294967296n);
  const target=f.unit('enemy_test',12),attributes=f.alloc(),cache=f.alloc(),stringClass=f.alloc();
@@ -17,9 +18,11 @@ function run(direct,mode='damage'){
  f.context.scopeCache={autochess:false,identity:baseline.native_identity,roots,scopeGuards:[],addresses:{}};
  const scope=JSON.parse(vm.runInContext('JSON.stringify(nativeCaptureScopeGraph(scopeCache,nativeAutoStage,clock,1))',f.context));f.context.scopeGraph=scope;vm.runInContext('nativeCaptureScopes.set(1,scopeGraph)',f.context);
  const hook=f.callback('SetHpInternal',f.entity);f.context.directHook=hook;f.context.observationTarget=target;
- vm.runInContext(`const issued=new WeakMap();globalThis.issueSourceIo=()=>{const io=Object.create(pointerHpIo);if(globalThis.directFault==='unused')Object.defineProperty(io,'attributeWords',{value:()=>__arkdpsReplayGap('unused HP attribute missing')});if(globalThis.directFault==='closing')Object.defineProperty(io,'closing',{value:()=>__arkdpsReplayGap('demanded HP closing missing')});Object.freeze(io);issued.set(io,{record:__arkdpsReplayRecord(),contract:directHook.arkdpsCaptureContract,root:observationTarget.toString()});return io;};
- globalThis.__arkdpsIsPreparedHpObservation=(io,contract,enemy)=>{const owner=issued.get(io);return !!owner&&owner.record===__arkdpsReplayRecord()&&owner.contract===contract&&(enemy===undefined||enemy.toString()===owner.root);};
+ vm.runInContext(`const issued=new WeakMap();globalThis.issueSourceIo=()=>{const io=Object.create(pointerHpIo);if(globalThis.directFault==='unused')Object.defineProperty(io,'attributeWords',{value:()=>__arkdpsReplayGap('unused HP attribute missing')});if(globalThis.directFault==='closing')Object.defineProperty(io,'closing',{value:()=>__arkdpsReplayGap('demanded HP closing missing')});Object.freeze(io);issued.set(io,{record:__arkdpsReplay.record,contract:directHook.arkdpsCaptureContract,root:observationTarget.toString()});return io;};
+ globalThis.__arkdpsIsPreparedHpObservation=(io,contract,enemy)=>{const owner=issued.get(io);return !!owner&&owner.record===__arkdpsReplay.record&&owner.contract===contract&&(enemy===undefined||enemy.toString()===owner.root);};
  arkdpsNativeAsyncCapture=true;prepareNativeCaptureHook(ptr(0x9000),directHook);
+ globalThis.publicModeRecordReads=0;const realPublicRecord=__arkdpsReplayRecord;globalThis.__arkdpsReplayRecord=()=>{publicModeRecordReads++;return realPublicRecord();};
+ globalThis.__arkdpsReplayModeRecord=modeOnlySource?()=>Object.freeze({edge:__arkdpsReplay.record.edge,facts:Object.freeze({mode_epoch:__arkdpsReplay.record.facts.mode_epoch})}):undefined;
  globalThis.finishCalls=0;const realFinish=finishModifierHpWriter;finishModifierHpWriter=function(...args){finishCalls++;return realFinish(...args);};`,f.context);
  f.context.directFault=mode==='unused-error'?'unused':null;
  const plan=hook.arkdpsCaptureContract,call={threadId:1};let latestIo;
@@ -31,12 +34,12 @@ function run(direct,mode='damage'){
    else edge==='entry'?hook.onEnter.call(call,[target]):hook.onLeave.call(call);
   });return f.context.fixtureSummary;
  }
- const entry=invoke('entry');if(mode==='demanded-error')f.context.directFault='closing';if(mode==='damage')f.write(target.add(0x40),10n*4294967296n);else if(mode==='heal')f.write(target.add(0x40),60n*4294967296n);
- const leave=mode==='forged'?null:invoke('leave');
- const value={entry:JSON.parse(JSON.stringify(entry)),leave:leave&&JSON.parse(JSON.stringify(leave)),queue:JSON.parse(vm.runInContext('JSON.stringify(queue)',f.context)),active:vm.runInContext('active',f.context),epoch:vm.runInContext('epoch',f.context),unknown:vm.runInContext('enemyStateUnknown',f.context),finish:f.context.finishCalls};
+ const beforeEntry=f.context.publicModeRecordReads;const entry=invoke('entry');const entryPublicReads=f.context.publicModeRecordReads-beforeEntry;if(mode==='demanded-error')f.context.directFault='closing';if(mode==='damage')f.write(target.add(0x40),10n*4294967296n);else if(mode==='heal')f.write(target.add(0x40),60n*4294967296n);
+ const beforeLeave=f.context.publicModeRecordReads;const leave=mode==='forged'?null:invoke('leave');const leavePublicReads=f.context.publicModeRecordReads-beforeLeave;
+ const value={publicReads:{entry:entryPublicReads,leave:leavePublicReads},entry:JSON.parse(JSON.stringify(entry)),leave:leave&&JSON.parse(JSON.stringify(leave)),queue:JSON.parse(vm.runInContext('JSON.stringify(queue)',f.context)),active:vm.runInContext('active',f.context),epoch:vm.runInContext('epoch',f.context),unknown:vm.runInContext('enemyStateUnknown',f.context),finish:f.context.finishCalls};
  assert.equal(harness.late(),0);harness.restore();return value;
 }
-for(const mode of ['damage','heal','unchanged']){const generic=run(false,mode),direct=run(true,mode);assert.deepEqual(direct,generic,mode);assert.equal(direct.finish,1,mode);assert.equal(direct.active,0);}
+for(const mode of ['damage','heal','unchanged']){const generic=run(false,mode),direct=run(true,mode);const g={...generic},d={...direct};delete g.publicReads;delete d.publicReads;assert.deepEqual(d,g,mode);assert.equal(direct.finish,1,mode);assert.equal(direct.active,0);if(process.env.ARKDPS_SOURCE_MODE_RECORD==='1'){assert.equal(direct.publicReads.entry,0);if(mode==='unchanged')assert.equal(direct.publicReads.leave,0);assert(generic.publicReads.entry>0);}}
 const forged=run(true,'forged');assert.equal(forged.entry.complete,false);assert.equal(forged.queue.length,0);
 const wrongRoot=run(true,'wrong-root');assert.equal(wrongRoot.entry.complete,false);assert.equal(wrongRoot.queue.length,0);
 const stale=run(true,'old-lease');assert.equal(stale.leave.complete,false);

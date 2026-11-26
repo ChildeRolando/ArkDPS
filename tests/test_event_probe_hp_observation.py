@@ -24,3 +24,13 @@ def test_direct_hp_source_keeps_one_state_owner_and_strict_issuance_gate():
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'PASS_DIRECT_HP_SOURCE' in result.stdout
+
+
+def test_direct_hp_mode_input_does_not_force_a_public_record():
+    import os
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(['node', 'tests/native_pc_direct_hp_source_fixture.js'], cwd=root,
+                            capture_output=True, text=True, timeout=30,
+                            env=dict(os.environ, ARKDPS_SOURCE_MODE_RECORD='1'))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'PASS_DIRECT_HP_SOURCE' in result.stdout

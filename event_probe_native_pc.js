@@ -281,13 +281,15 @@ function prepareNativeCaptureHook(address,callbacks){
   // The bridge has set body/current checkpoint/auto before this controlled
   // entry. Only an actual native-issued packet for this contract may enter.
   callbacks[member]=member==='arkdpsDirectHpEntry'?function(enemy,issuedIo){
-   return withCapturedMode(__arkdpsReplayRecord(),()=>{
-    if(__arkdpsReplayRecord().edge!=='entry'||__arkdpsIsPreparedHpObservation(issuedIo,directContract,enemy)!==true)__arkdpsReplayGap('unverified prepared HP observation');
+   const modeRecord=typeof __arkdpsReplayModeRecord==='function'?__arkdpsReplayModeRecord():__arkdpsReplayRecord();
+   return withCapturedMode(modeRecord,()=>{
+    if(modeRecord.edge!=='entry'||__arkdpsIsPreparedHpObservation(issuedIo,directContract,enemy)!==true)__arkdpsReplayGap('unverified prepared HP observation');
     return stateCallback.call(this,enemy,issuedIo);
    });
   }:function(issuedIo){
-   return withCapturedMode(__arkdpsReplayRecord(),()=>{
-    if(__arkdpsReplayRecord().edge!=='leave'||__arkdpsIsPreparedHpObservation(issuedIo,directContract)!==true)__arkdpsReplayGap('unverified prepared HP observation');
+   const modeRecord=typeof __arkdpsReplayModeRecord==='function'?__arkdpsReplayModeRecord():__arkdpsReplayRecord();
+   return withCapturedMode(modeRecord,()=>{
+    if(modeRecord.edge!=='leave'||__arkdpsIsPreparedHpObservation(issuedIo,directContract)!==true)__arkdpsReplayGap('unverified prepared HP observation');
     return stateCallback.call(this,issuedIo);
    });
   };
