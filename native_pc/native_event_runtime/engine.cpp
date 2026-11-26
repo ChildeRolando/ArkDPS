@@ -69,7 +69,12 @@ struct Runtime {
     bool publication_ready=false;
     std::uint64_t published_ticket = 0;
     arkdps::capture::RecordHeader replay_header;
-    JSValue replay_dispatch = JS_UNDEFINED;
+    JSValue replay_dispatch = JS_UNDEFINED, replay_batch = JS_UNDEFINED, batch_advance = JS_UNDEFINED;
+    std::size_t deferred_record_size=0;
+    std::uint64_t batch_calls=0,batch_issued=0,batch_finalized=0,batch_barriers=0,single_replayed=0;
+    unsigned maximum_batch_edges=0;
+    std::array<std::uint64_t,8> replay_fallbacks{};
+    JSValue materialization_count=JS_UNDEFINED;
     struct WorkerInvocation { JSValue receiver = JS_UNDEFINED; std::uint64_t id = 0; Hook* hook = nullptr; };
     std::array<std::array<WorkerInvocation, 256>, 16> receivers{};
     std::array<unsigned, 16> replay_depth{};
@@ -649,7 +654,12 @@ void configure_mode(const nlohmann::json& command) {
     install_mode_state(state);
 }
 
-void replay_record(const std::byte* bytes, std::size_t length) {
+struct PreparedReplay {
+    const std::byte* bytes;arkdps::capture::RecordHeader header;Hook* hook;
+    std::size_t segment_start,field_start;const std::byte* payload;
+    std::array<JSValue,9> arguments;bool direct=false;
+};
+PreparedReplay prepare_replay_record(const std::byte* bytes,std::size_t length,JSValueConst batch_header=JS_UNDEFINED) {
     using namespace arkdps::capture;
     auto& runtime=state(); auto* c=runtime.context;
     RecordHeader header;
@@ -692,7 +702,13 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     }
     const auto parent_bytes=header.parent_checkpoint_count*sizeof(ParentCheckpoint);
     std::memcpy(packed.data()+header_words,bytes+sizeof header,parent_bytes);
-    auto packed_bytes=JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(packed.data()),header_words*8+parent_bytes);
+    JSValue packed_bytes;
+    if(JS_IsUndefined(batch_header))packed_bytes=JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(packed.data()),header_words*8+parent_bytes);
+    else {
+        std::size_t capacity=0;auto* target=JS_GetArrayBuffer(c,&capacity,batch_header);
+        if(!target||capacity!=176||parent_bytes)throw std::runtime_error("invalid bounded batch header storage");
+        std::memcpy(target,packed.data(),176);packed_bytes=JS_DupValue(c,batch_header);
+    }
     if (JS_IsException(packed_bytes)) throw std::runtime_error(exception(c));
     const auto segment_start=sizeof header+header.parent_checkpoint_count*sizeof(ParentCheckpoint);
     const auto field_start=segment_start+header.segment_count*sizeof(Segment);
@@ -700,7 +716,6 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     const auto view_error=arkdps::owned_js::begin(bytes+segment_start,header.segment_count,
         bytes+field_start,header.field_count,payload,header.byte_count,
         runtime.configurations.roles,header.ticket,header.error,header.capture_concurrent);
-    arkdps::owned_js::Lease view_lease;
     arkdps::owned_js::bind_hp_observation(&hook->capture_plan,header.phase,header.args[0],header.checkpoint,header.mode_epoch);
     arkdps::owned_js::bind_graphs(runtime.configurations.find(header.configuration_id),header.scope_revision,header.publication_revision,header.mode_epoch,header.checkpoint);
     if (view_error!=Error::ok) {JS_FreeValue(c,packed_bytes);throw std::runtime_error("native owned view rejected structural capture");}
@@ -719,10 +734,22 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     std::array<JSValue,9> dispatch_args{{packed_bytes,method,call.receiver,callback_payload,
         JS_NewUint32(c,header.arg_mask),header.projection_candidate && header.closed_after ? runtime.prefix_projection : JS_UNDEFINED,
         raw_return_address,prepared,direct ? hook->direct_contract : JS_UNDEFINED}};
-    JSValue answer=JS_EXCEPTION;
-    if (!JS_IsException(method) && !JS_IsException(callback_payload) && !JS_IsException(raw_return_address) && !JS_IsException(prepared) && (!direct || JS_IsObject(prepared)))
-        answer=JS_Call(c,runtime.replay_dispatch,JS_UNDEFINED,dispatch_args.size(),dispatch_args.data());
-    JS_FreeValue(c,packed_bytes);JS_FreeValue(c,method);JS_FreeValue(c,callback_payload);JS_FreeValue(c,raw_return_address);JS_FreeValue(c,prepared);
+    if(!JS_IsUndefined(batch_header)&&!direct)throw std::runtime_error("complex record crossed bounded batch barrier");
+    return PreparedReplay{bytes,header,hook,segment_start,field_start,payload,dispatch_args,direct};
+}
+bool replay_arguments_valid(const PreparedReplay& item) {
+    const auto& args=item.arguments;
+    return !JS_IsException(args[0])&&!JS_IsException(args[1])&&!JS_IsException(args[3])&&!JS_IsException(args[6])&&!JS_IsException(args[7])
+        &&(!item.direct||JS_IsObject(args[7]));
+}
+void release_replay_arguments(PreparedReplay& item) {
+    for(const unsigned index:{0u,1u,3u,6u,7u})JS_FreeValue(state().context,item.arguments[index]);
+}
+void finish_replay_record(const PreparedReplay& item,JSValue answer) {
+    using namespace arkdps::capture;
+    auto& runtime=state();auto* c=runtime.context;const auto& header=item.header;auto* hook=item.hook;
+    auto& depth=runtime.replay_depth[header.lane];auto& call=runtime.receivers[header.lane][header.depth-1];
+    const auto* bytes=item.bytes;const auto segment_start=item.segment_start,field_start=item.field_start;const auto* payload=item.payload;
     runtime.replay_active=false;
     if (const auto failure=runtime.lanes->failure.load(std::memory_order_acquire)) {
         if (JS_IsException(answer)) {auto ignored=JS_GetException(c);JS_FreeValue(c,ignored);}
@@ -763,7 +790,8 @@ void replay_record(const std::byte* bytes, std::size_t length) {
                 +",m="+std::to_string(bounded("metadata_read_size",1048576,0))+",k=";
             bool first=true;unsigned code_count=0;
             if(d.contains("codes")&&d["codes"].is_array())for(const auto& code:d["codes"]){
-                if(!code.is_number_integer())continue;const auto n=code.get<int>();if(n<0||n>30)continue;
+                if(!code.is_number_integer())continue;
+                const auto n=code.get<int>();if(n<0||n>30)continue;
                 if(!first)diagnostic+=".";
                 diagnostic+=std::to_string(n);first=false;
                 if(++code_count==16)break;
@@ -878,20 +906,21 @@ void replay_record(const std::byte* bytes, std::size_t length) {
     }
     JS_FreeValue(c,record); JS_FreeValue(c,projection);
 }
-bool drain_captures() noexcept {
-    using namespace arkdps::capture;
-    auto& runtime=state();
-    if (!runtime.initialized || !runtime.fatal.empty()) return false;
-    try {
-        if (runtime.lanes->failure.load(std::memory_order_acquire))
-            throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
-        // Bounded poll work keeps host jobs responsive under sustained producers.
-        const auto poll_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(2);
-        for (unsigned budget=0;budget<512;++budget) {
+void replay_record(const std::byte* bytes,std::size_t length) {
+    auto& runtime=state();auto* c=runtime.context;
+    arkdps::owned_js::Lease view_lease;auto item=prepare_replay_record(bytes,length);
+    auto& args=item.arguments;JSValue answer=JS_EXCEPTION;
+    if(replay_arguments_valid(item))
+        answer=JS_Call(c,runtime.replay_dispatch,JS_UNDEFINED,args.size(),args.data());
+    release_replay_arguments(item);finish_replay_record(item,answer);
+}
+
+bool pop_replay_record(std::size_t& size) {
+    using namespace arkdps::capture;auto& runtime=state();
             const auto ready=runtime.lanes->next_ready(runtime.processed_ticket+1);
-            if (!ready) break; // A reserved but unpublished ticket is not skippable.
+            if (!ready) return false; // A reserved but unpublished ticket is not skippable.
             Lane* found=nullptr;
-            std::uint64_t ticket=0; std::size_t size=0;
+            std::uint64_t ticket=0;
             if (runtime.lanes->try_pop(*ready,ticket,runtime.consume_buffer.data(),runtime.consume_buffer.size(),size,found)!=CaptureQueue::PopResult::popped
                 || !found || runtime.lanes->failure.load(std::memory_order_acquire))
                 throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load(std::memory_order_acquire)));
@@ -906,15 +935,103 @@ bool drain_captures() noexcept {
                 found->consumed.maximum_age=(std::max)(found->consumed.maximum_age,found->consumed.last_age);
                 ++found->consumed.age_samples;
             }
+    return true;
+}
+struct BoundedReplayBatch {
+    bool active=false;unsigned issued=0,finalized=0,limit=32;
+    std::size_t first_size=0;
+    std::chrono::steady_clock::time_point deadline;
+    JSValue controller=JS_UNDEFINED,header=JS_UNDEFINED;
+    std::unique_ptr<PreparedReplay> pending;
+};
+BoundedReplayBatch& replay_batch_state(){static auto* value=new BoundedReplayBatch;return *value;}
+arkdps::capture::DirectHpReason direct_record_reason(const arkdps::capture::RecordHeader& header) {
+    using namespace arkdps::capture;auto& runtime=state();
+    if(header.hook_id>=runtime.hooks.size())return DirectHpReason::unsupported_plan;
+    auto* hook=runtime.hooks[header.hook_id].get();
+    return direct_hp_reason(hook->capture_plan,header,
+        JS_IsFunction(runtime.context,hook->direct_entry)&&JS_IsFunction(runtime.context,hook->direct_leave));
+}
+bool direct_record(const arkdps::capture::RecordHeader& header){return direct_record_reason(header)==arkdps::capture::DirectHpReason::eligible;}
+
+JSValue js_batch_advance(JSContext* c,JSValueConst,int count,JSValueConst* args) {
+    return guarded(c,[&]{
+        auto& batch=replay_batch_state();auto& runtime=state();
+        const auto reject=[&]{if(runtime.lanes)runtime.lanes->poison(arkdps::capture::LaneFault::replay_structure);throw std::runtime_error("invalid bounded replay controller");};
+        if(count!=2||!batch.active||!JS_IsObject(args[0])||JS_VALUE_GET_PTR(args[0])!=JS_VALUE_GET_PTR(batch.controller))reject();
+        if(batch.pending){
+            if(JS_IsArray(c,args[1])!=1)reject();
+            auto previous=std::move(batch.pending);release_replay_arguments(*previous);
+            try{finish_replay_record(*previous,JS_DupValue(c,args[1]));}catch(...){arkdps::owned_js::end();throw;}
+            arkdps::owned_js::end();++batch.finalized;++runtime.batch_finalized;
+        }else if(!JS_IsUndefined(args[1])||batch.issued)reject();
+        if(batch.issued>=batch.limit||(batch.issued&&std::chrono::steady_clock::now()>=batch.deadline))return JS_NULL;
+        std::size_t size=batch.first_size;batch.first_size=0;
+        if(!size&&!pop_replay_record(size))return JS_NULL;
+        arkdps::capture::RecordHeader header;
+        if(size<sizeof header)throw std::runtime_error("short bounded replay record");
+        std::memcpy(&header,runtime.consume_buffer.data(),sizeof header);
+        if(!direct_record(header)){runtime.deferred_record_size=size;++runtime.batch_barriers;return JS_NULL;}
+        batch.pending=std::make_unique<PreparedReplay>(prepare_replay_record(runtime.consume_buffer.data(),size,batch.header));
+        if(!replay_arguments_valid(*batch.pending)){
+            runtime.lanes->poison(arkdps::capture::LaneFault::replay_structure);
+            bool pending_exception=false;for(const auto value:batch.pending->arguments)pending_exception=pending_exception||JS_IsException(value);
+            return pending_exception?JS_EXCEPTION:JS_ThrowInternalError(c,"invalid prepared bounded replay item");
+        }
+        ++batch.issued;++runtime.batch_issued;runtime.maximum_batch_edges=(std::max)(runtime.maximum_batch_edges,batch.issued);
+        auto packet=JS_NewArray(c);
+        for(unsigned i=0;i<batch.pending->arguments.size();++i)
+            if(JS_DefinePropertyValueUint32(c,packet,i,JS_DupValue(c,batch.pending->arguments[i]),JS_PROP_ENUMERABLE)<0){JS_FreeValue(c,packet);return JS_EXCEPTION;}
+        return packet;
+    });
+}
+unsigned replay_bounded_batch(std::size_t first_size,std::chrono::steady_clock::time_point deadline,unsigned remaining) {
+    auto& runtime=state();auto* c=runtime.context;auto& batch=replay_batch_state();
+    if(batch.active)throw std::runtime_error("nested bounded replay batch");
+    ++runtime.batch_calls;batch.active=true;batch.issued=0;batch.finalized=0;batch.limit=(std::min)(32u,remaining);batch.first_size=first_size;batch.deadline=deadline;
+    batch.controller=JS_NewObject(c);JS_PreventExtensions(c,batch.controller);
+    std::array<std::uint8_t,176> zero{};batch.header=JS_NewArrayBufferCopy(c,zero.data(),zero.size());
+    std::array<JSValue,4> args{{runtime.batch_advance,batch.controller,batch.header,runtime.replay_dispatch}};
+    auto result=JS_IsException(batch.controller)||JS_IsException(batch.header)?JS_EXCEPTION:JS_Call(c,runtime.replay_batch,JS_UNDEFINED,args.size(),args.data());
+    batch.active=false;
+    const bool incomplete=batch.pending||batch.first_size||!batch.issued||batch.issued!=batch.finalized;
+    std::uint32_t returned=0;bool valid_count=false;
+    if(!JS_IsException(result)&&JS_IsNumber(result)){
+        double numeric=0;if(JS_ToFloat64(c,&numeric,result)==0&&std::isfinite(numeric)&&numeric>=1&&numeric<=32&&std::floor(numeric)==numeric){returned=static_cast<std::uint32_t>(numeric);valid_count=returned==batch.issued&&returned==batch.finalized;}
+    }
+    if(!JS_IsException(result)&&(incomplete||!valid_count))runtime.lanes->poison(arkdps::capture::LaneFault::replay_structure);
+    if(batch.pending){release_replay_arguments(*batch.pending);batch.pending.reset();arkdps::owned_js::end();runtime.replay_active=false;}
+    arkdps::owned_js::end();
+    JS_FreeValue(c,batch.controller);JS_FreeValue(c,batch.header);batch.controller=JS_UNDEFINED;batch.header=JS_UNDEFINED;
+    if(JS_IsException(result))throw std::runtime_error(exception(c));
+    JS_FreeValue(c,result);
+    if(incomplete||!valid_count)throw std::runtime_error("incomplete bounded replay result");
+    return batch.issued;
+}
+bool drain_captures() noexcept {
+    using namespace arkdps::capture;
+    auto& runtime=state();
+    if (!runtime.initialized || !runtime.fatal.empty()) return false;
+    try {
+        if (runtime.lanes->failure.load(std::memory_order_acquire))
+            throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
+        // Bounded poll work keeps host jobs responsive under sustained producers.
+        const auto poll_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(2);
+        for (unsigned budget=0;budget<512;++budget) {
+            std::size_t size=runtime.deferred_record_size;
+            if(size)runtime.deferred_record_size=0;
+            else if(!pop_replay_record(size))break;
             JS_UpdateStackTop(runtime.runtime);
-            replay_record(runtime.consume_buffer.data(),size);
+            arkdps::capture::RecordHeader selected;std::memcpy(&selected,runtime.consume_buffer.data(),sizeof selected);
+            if(direct_record(selected))budget+=replay_bounded_batch(size,poll_deadline,512-budget)-1;
+            else {++runtime.single_replayed;++runtime.replay_fallbacks[static_cast<unsigned>(direct_record_reason(selected))];replay_record(runtime.consume_buffer.data(),size);}
             if (runtime.lanes->failure.load(std::memory_order_acquire))
                 throw std::runtime_error("native capture failed during replay");
             if (std::chrono::steady_clock::now()>=poll_deadline) break;
         }
         for (unsigned index=0;index<lane_count;++index)
             runtime.lanes->reclaim_terminated(index,runtime.replay_depth[index]==0);
-        if (runtime.lanes->next_ready(runtime.processed_ticket+1)) return true;
+        if (runtime.deferred_record_size || runtime.lanes->next_ready(runtime.processed_ticket+1)) return true;
         std::atomic_thread_fence(std::memory_order_seq_cst);
         if (!runtime.replay_active && runtime.active.load(std::memory_order_acquire)==0
             && runtime.processed_ticket==runtime.lanes->reserved.load(std::memory_order_acquire)) {
@@ -1091,6 +1208,8 @@ void initialize_on_worker(const std::string& source) {
     function(c,global,"__publishCaptureScope",js_publish_scope,1);
     function(c,global,"__publishCapturePublication",js_publish_publication,1);
     function(c,global,"__nativeReplayHealthy",js_replay_healthy,0);
+    function(c,global,"__nativeBoundedReplayAdvance",js_batch_advance,2);
+    runtime.batch_advance=JS_GetPropertyStr(c,global,"__nativeBoundedReplayAdvance");
     function(c,global,"__send",js_send,1);function(c,global,"__nativeActive",js_active,0);function(c,global,"__pid",js_pid,0);
     try {
         arkdps::owned_js::install(c,[]() noexcept {
@@ -1101,6 +1220,9 @@ void initialize_on_worker(const std::string& source) {
         evaluate(c, arkdps_cold_plan_source, "native-cold-plan.js");
         evaluate(c, "globalThis.arkdpsNativeAsyncCapture=true;", "native-async.js");
         runtime.replay_dispatch=JS_GetPropertyStr(c,global,"__arkdpsReplayDispatch");
+        runtime.replay_batch=JS_GetPropertyStr(c,global,"__arkdpsReplayBatch");
+        runtime.materialization_count=JS_GetPropertyStr(c,global,"__arkdpsReplayMaterializationCount");
+        if(!JS_IsFunction(c,runtime.replay_batch))throw std::runtime_error("bounded replay dispatch unavailable");
         if (!JS_IsFunction(c,runtime.replay_dispatch)) throw std::runtime_error("native replay dispatch unavailable");
         runtime.dispatch = JS_GetPropertyStr(c, global, "__arkdpsRequest");
         evaluate(c, source, "event-probe.js");
@@ -1193,6 +1315,8 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
         const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
         nlohmann::json state{{"version",1},{"reserved_ticket",reserved},
             {"processed_ticket",runtime.processed_ticket},{"closed_ticket",runtime.closed_ticket},
+            {"batch_calls",runtime.batch_calls},{"batch_issued",runtime.batch_issued},{"batch_finalized",runtime.batch_finalized},
+            {"batch_barriers",runtime.batch_barriers},{"single_replayed",runtime.single_replayed},{"maximum_batch_edges",runtime.maximum_batch_edges},
             {"published_ticket",runtime.published_ticket},
             {"desired_mode_epoch",runtime.capture_mode_epoch.load(std::memory_order_acquire)},
             {"published_mode_epoch",runtime.published_mode_epoch},
@@ -1204,6 +1328,16 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
             {"publication_lag_records",runtime.processed_ticket-runtime.published_ticket},
             {"published_event_sequence",runtime.published_sequence},{"delivered_event_sequence",runtime.delivered_sequence},
             {"read_prefix_lag_events",runtime.published_sequence>=runtime.delivered_sequence ? runtime.published_sequence-runtime.delivered_sequence : 0}};
+        state["batch_fallback_reasons"]={{"unsupported_plan",runtime.replay_fallbacks[1]},{"methods_unavailable",runtime.replay_fallbacks[2]},
+            {"argument_contract",runtime.replay_fallbacks[3]},{"missing_root",runtime.replay_fallbacks[4]},{"parent_or_nested",runtime.replay_fallbacks[5]},
+            {"concurrent",runtime.replay_fallbacks[6]},{"cold_or_publication",runtime.replay_fallbacks[7]}};
+        state["batch_public_record_materializations"]=nullptr;
+        if(JS_IsFunction(runtime.context,runtime.materialization_count)){
+            auto* c=runtime.context;auto count=JS_Call(c,runtime.materialization_count,JS_UNDEFINED,0,nullptr);double value=0;
+            if(!JS_IsException(count)&&JS_IsNumber(count)&&JS_ToFloat64(c,&value,count)==0&&std::isfinite(value)&&value>=0&&value<=9007199254740991.0&&std::floor(value)==value)state["batch_public_record_materializations"]=static_cast<std::uint64_t>(value);
+            else if(JS_IsException(count)){auto ignored=JS_GetException(c);JS_FreeValue(c,ignored);}
+            JS_FreeValue(c,count);
+        }
         const bool age=timing_state.enabled.load(std::memory_order_relaxed);
         LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
         state["queue_age_available"]=age;

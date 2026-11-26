@@ -70,12 +70,27 @@ class __ArkDpsCaptureRecord {
  get facts(){return this.#facts??(this.#facts=new __ArkDpsCaptureFacts(this.#view));}
 }
 function __arkdpsPackedCaptureRecord(bytes){return new __ArkDpsCaptureRecord(bytes);}
+// A batch's private header view is reused only after End. Public record access
+// materializes its own immutable bytes before it can escape the current item.
+let __arkdpsMaterializations=0;
+function __arkdpsReplayMaterializationCount(){return __arkdpsMaterializations;}
+class __ArkDpsLazyCaptureRecord {
+ #view;#ticket;#edge;#checkpoint;#mode;#thread;#hook;#closed;#facts;#public;#modeRecord;
+ constructor(bytes,view){
+  if(!(bytes instanceof ArrayBuffer)||!(view instanceof DataView)||view.buffer!==bytes||view.byteOffset!==0||view.byteLength!==176||bytes.byteLength!==176||__arkdpsPackedNumber(view,21)!==0||__arkdpsPackedNumber(view,18)>1||__arkdpsPackedNumber(view,20)>3)throw Error('invalid batch capture header');
+  this.#view=view;this.#ticket=view.getBigUint64(0,true).toString();this.#edge=__arkdpsPackedNumber(view,18)===0?'entry':'leave';this.#checkpoint=__arkdpsPackedNumber(view,13);this.#mode=__arkdpsPackedNumber(view,7);this.#thread=__arkdpsPackedNumber(view,17);this.#hook=__arkdpsPackedNumber(view,12);this.#closed=__arkdpsPackedNumber(view,19)!==0;Object.freeze(this);
+ }
+ get version(){return 1;}get native_view(){return true;}get ticket(){return this.#ticket;}get edge(){return this.#edge;}get checkpoint(){return this.#checkpoint;}get thread_id(){return this.#thread;}get hook_id(){return this.#hook;}get closed_after(){return this.#closed;}
+ get facts(){return this.#facts??(this.#facts=Object.freeze({mode_epoch:this.#mode}));}
+ get modeRecord(){return this.#modeRecord??(this.#modeRecord=Object.freeze({edge:this.#edge,facts:this.facts}));}
+ materialize(){if(this.#public===undefined){++__arkdpsMaterializations;this.#public=__arkdpsPackedCaptureRecord(this.#view.buffer.slice(0));}return this.#public;}
+}
 // One C++ -> JS entry per edge. The native owned-view lease is established
 // by the worker before calling this function and remains live through End.
 // The result is only a transport envelope; C++ must independently inspect its
 // poison flag and complete bit before passing the projection to the journal.
-function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix,returnAddress,prepared,contract){
- const record=__arkdpsPackedCaptureRecord(header);
+function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,prefix,returnAddress,prepared,contract,batchView){
+ const record=batchView===undefined?__arkdpsPackedCaptureRecord(header):new __ArkDpsLazyCaptureRecord(header,batchView);
  __arkdpsReplayBegin(record);
  const replay=__arkdpsReplay;
  let projection,summary,healthy=false;
@@ -107,9 +122,21 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
   if(healthy&&__arkdpsReplay.structural.length===0&&record.edge==='leave'&&record.closed_after&&typeof prefix==='function')
    projection=prefix(record);
  }finally{summary=__arkdpsReplayEnd(true);}
- const result=[record,projection,healthy&&summary,receiver];
+ const result=[batchView===undefined?record:null,projection,healthy&&summary,receiver];
  if(!result[2])result.push(replay.diagnostic||__arkdpsReplayDiagnostic(replay));
  return result;
+}
+// The native advance controller is local to this invocation; business callbacks
+// receive neither it nor the advance function and cannot commit another item.
+function __arkdpsReplayBatch(advance,controller,header,dispatch){
+ if(typeof dispatch!=='function'||typeof advance!=='function'||!(header instanceof ArrayBuffer)||header.byteLength!==176)throw Error('invalid bounded replay entry');
+ const view=new DataView(header);let answer,count=0;
+ for(;;){
+  const item=advance(controller,answer);answer=undefined;
+  if(item===null)return count;
+  if(count>=32||!Array.isArray(item)||item.length!==9)throw Error('invalid bounded replay item');
+  answer=dispatch(item[0],item[1],item[2],item[3],item[4],item[5],item[6],item[7],item[8],view);++count;
+ }
 }
 function __arkdpsStructuralCaptureStatus(status){return ['missing_plan_field','invalid_plan','missing_field','bounds','ambiguous_read','invalid_phase'].includes(status);}
 const __arkdpsProviderDescriptor=Object.getOwnPropertyDescriptor,__arkdpsProviderKeys=Reflect.ownKeys,__arkdpsProviderExtensible=Object.isExtensible,__arkdpsProviderPrototype=Object.getPrototypeOf,__arkdpsProviderHasOwn=Object.hasOwn;
@@ -193,7 +220,8 @@ function __arkdpsReplayRole(role,checkpoint=0,fieldId=0){
  __arkdpsReplay.role=role;__arkdpsReplay.checkpoint=checkpoint;__arkdpsReplay.fieldId=fieldId;
 }
 function __arkdpsReplayActive(){return __arkdpsReplay!==null;}
-function __arkdpsReplayRecord(){if(__arkdpsReplay===null)throw new Error('no replay active');return __arkdpsReplay.record;}
+function __arkdpsReplayRecord(){if(__arkdpsReplay===null)throw new Error('no replay active');const record=__arkdpsReplay.record;return record instanceof __ArkDpsLazyCaptureRecord?record.materialize():record;}
+function __arkdpsReplayModeRecord(){if(__arkdpsReplay===null)throw new Error('no replay active');const record=__arkdpsReplay.record;return record instanceof __ArkDpsLazyCaptureRecord?record.modeRecord:record;}
 function __arkdpsCapturedAssignable(base,klass){
  if(__arkdpsReplay===null)throw new Error('captured ancestry outside replay');
  if(typeof __arkdpsColdAssignable==='function')return __arkdpsColdAssignable(base,klass);

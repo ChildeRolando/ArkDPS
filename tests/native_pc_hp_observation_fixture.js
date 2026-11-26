@@ -66,6 +66,25 @@ __arkdpsReplayBegin(record());const unissued=new io.constructor(__arkdpsReplay,O
 globalThis.directFacts={complete:directE[2]&&directL[2],same:directE[3]===directL[3],keys:callbackKeys,closed:directL[3].closed,adoptions};
 issue('entry');globalThis.forgedDirect=rejects(()=>__arkdpsReplayDispatch(packedHp(0),()=>{},undefined,4096n,1,undefined,undefined,Object.freeze([...issued]),contract));
 globalThis.badDirectMasks=[];for(const mask of [0,3,'1',NaN]){issue('entry');const caught=rejects(()=>__arkdpsReplayDispatch(packedHp(0),()=>{},undefined,4096n,mask,undefined,undefined,issued,contract));badDirectMasks.push(caught&&!__arkdpsReplayActive());}
+// Bounded-loop simulator exercises the actual bridge dispatch. Native FIFO /
+// controller ownership is separately enforced by engine, not this fake seam.
+const batchHeader=packedHp(0),batchView=new DataView(batchHeader);let batchIndex=0,finalized=0,retainedIo,retainedRecord,retainedMode;
+function batchAdvance(controller,previous){
+ if(controller!==batchController)throw Error('controller');
+ if(previous!==undefined){if(!previous[2])throw Error('failed item cannot finalize');finalized++;}
+ if(batchIndex===2)return null;
+ const edge=batchIndex++,header=packedHp(edge);new Uint8Array(batchHeader).set(new Uint8Array(header));
+ const packet=issue(edge===0?'entry':'leave');
+ const callback=edge===0?function(actor,input){retainedIo=input;retainedRecord=__arkdpsReplayRecord();retainedMode=__arkdpsReplayModeRecord();this.write=73;}:function(input){if(this.write!==73)throw Error('receiver');if(retainedRecord.edge!=='entry'||retainedMode.edge!=='entry')throw Error('escaped record mutated');};
+ return [batchHeader,callback,edge?batchReceiver:undefined,4096n,1,undefined,undefined,packet,contract];
+}
+const batchController={};let batchReceiver;
+const trackingAdvance=(controller,previous)=>{if(previous)batchReceiver=previous[3];return batchAdvance(controller,previous);};
+globalThis.batchCount=__arkdpsReplayBatch(trackingAdvance,batchController,batchHeader,__arkdpsReplayDispatch);globalThis.batchFacts={finalized,edge:retainedRecord.edge,mode:retainedMode.facts.mode_epoch,active:__arkdpsReplayActive()};
+// Old IO is rejected at item2 even though the same private header was reused.
+batchIndex=0;finalized=0;batchReceiver=undefined;
+function faultAdvance(controller,previous){const item=trackingAdvance(controller,previous);if(item&&batchIndex===2)item[1]=function(){try{retainedIo.identity(enemy);}catch(ignored){}};return item;}
+globalThis.batchFault=rejects(()=>__arkdpsReplayBatch(faultAdvance,batchController,batchHeader,__arkdpsReplayDispatch));globalThis.batchFaultFinalized=finalized;globalThis.batchFaultActive=__arkdpsReplayActive();
 __arkdpsArguments=originalArguments;__arkdpsOwnedHpObservation=originalFactory;
 globalThis.liveCount=live;
 `,c);
@@ -74,5 +93,5 @@ assert(c['before-planned']&&c['before-structural']&&c['before-missing']);assert(
 for(const i of [1,2])assert(c.failures[i].caught&&c.failures[i].nativeFault&&!c.failures[i].summary.complete);
 assert(c.unusedFault&&c.unusedEnd.complete);assert(c.receiverMutation&&!c.receiverEnd.complete);assert(c.expired&&!c.expiredEnd.complete);assert(c.pinned&&c.pinnedEnd.complete);assert(c.replaced&&!c.replacedEnd.complete);assert(c.oldEpoch&&c.oldEpochEnd.complete);
 assert(Array.from(c.malformed).every(row=>row.caught&&!row.summary.complete));assert(c.longString&&!c.longStringEnd.complete);assert(c.shortString&&!c.shortStringEnd.complete);assert(c.countZero&&c.leaveEnd.complete);assert.deepEqual(Array.from(c.leaveClosing),[73,-9223372036854775808n]);assert(c.foreignAttrs&&!c.foreignAttrsEnd.complete);assert(c.noEarlyTrap&&c.trapConflict&&c.trapPoison&&!c.trapEnd.complete);assert.equal(c.liveCount,0);
-assert(c.directFacts.complete&&c.directFacts.same&&c.directFacts.closed===73&&c.directFacts.adoptions===2);assert.deepEqual(Array.from(c.directFacts.keys),['threadId']);assert(c.forgedDirect&&c.constructorForged);assert(Array.from(c.badDirectMasks).every(Boolean));
+assert(c.directFacts.complete&&c.directFacts.same&&c.directFacts.closed===73&&c.directFacts.adoptions===2);assert.deepEqual(Array.from(c.directFacts.keys),['threadId']);assert(c.forgedDirect&&c.constructorForged);assert.equal(c.batchCount,2);assert.equal(c.batchFacts.finalized,2);assert.equal(c.batchFacts.edge,"entry");assert.equal(c.batchFacts.mode,5);assert.equal(c.batchFacts.active,false);assert(c.batchFault&&c.batchFaultFinalized===1&&!c.batchFaultActive);assert(Array.from(c.badDirectMasks).every(Boolean));
 console.log('PASS_RAW_HP_JS provider pin/primitive types/deferred structural+planned/mode/cp/private receiver/lease/trap/count0/no live');
