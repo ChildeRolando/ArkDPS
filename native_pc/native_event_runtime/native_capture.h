@@ -8,9 +8,29 @@ static_assert(sizeof(std::uintptr_t) == 8, "capture plans require the verified 6
 constexpr std::size_t max_fields = 256, max_depth = 12, max_segments = 1024, max_bytes = 131072;
 constexpr std::size_t max_roots = 16, max_string_units = 200, max_guards = 64, max_reads = 4096;
 constexpr std::size_t max_array_elements = 128, max_element_bytes = 128;
+constexpr std::size_t max_projection_nodes = 64, max_projection_visits = 256;
 enum class Phase : std::uint8_t { entry, leave, checkpoint };
 enum class Root : std::uint8_t { arg, entry_ref, parent_ref, global_slot, return_value, checkpoint_ref, absolute };
-enum class Kind : std::uint8_t { bytes, utf16, counted_bytes, utf16_array };
+enum class Kind : std::uint8_t { bytes, utf16, counted_bytes, utf16_array, projection_tree };
+enum class ProjectionKind : std::uint8_t { object, utf16, array };
+enum class TypeGate : std::uint8_t { none, exact, ancestor };
+// Fixed metadata layout only: no callbacks, predicates, owner inference or arbitrary bytecode.
+struct ProjectionNode {
+    ProjectionKind kind = ProjectionKind::object;
+    std::uint8_t depth = 0;
+    std::array<std::uint32_t, max_depth> pointer_offsets{};
+    std::uint32_t offset = 0;
+    std::uint16_t bytes = 0, child_begin = 0, child_count = 0, max_visits = 1;
+    TypeGate gate = TypeGate::none;
+    std::uintptr_t expected_class = 0;
+    std::uint8_t ancestry_depth = 0;
+    bool allow_null = false;
+    std::uint16_t max_units = 0;
+    std::uint32_t count_offset = 0, items_offset = 0, data_offset = 0;
+    std::uint16_t element_bytes = 0, max_count = 0;
+    // Dictionary tombstones: retain/guard the slot, but never dereference its stale children.
+    std::int16_t skip_negative_i32_offset = -1;
+};
 enum class Guard : std::uint8_t { none, before, after, member };
 enum class Error : std::uint8_t {
     ok, invalid_plan, invalid_phase, bounds, missing_root, field_unreadable,
@@ -29,6 +49,7 @@ struct Field {
     std::uintptr_t expected_class = 0;
     std::uint16_t count_field_id = 0, element_bytes = 0, max_count = 0, element_pointer_offset = 0;
     bool stop_at_dynamic = false;
+    std::uint16_t projection_root = 0;
     std::uint8_t guard_id = 0;
     Guard guard = Guard::none;
     bool required = true;
@@ -39,6 +60,8 @@ struct HookCapturePlan {
     std::uint16_t arg_mask = 0;
     std::uint8_t arg_count = 0;
     std::array<Field, max_fields> fields{};
+    std::uint16_t projection_count = 0;
+    std::array<ProjectionNode, max_projection_nodes> projections{};
 };
 struct Context {
     std::array<std::uintptr_t, max_roots> args{}, entry_refs{}, parent_refs{}, globals{}, checkpoint_refs{};

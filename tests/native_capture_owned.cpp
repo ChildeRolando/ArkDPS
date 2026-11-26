@@ -212,6 +212,92 @@ int main() {
     p.max_bytes = 111623;
     assert(validate_plan(p) == Error::bounds);
 
+    // Cold projection starts from the CURRENT root and expands the CURRENT
+    // count/slots. Mixed dictionary values expose class only until typed.
+    p = plan(); p.max_bytes = 131072; p.max_reads = 4096;
+    p.field_count = 1; p.fields[0] = field(1, 1, 0, 0);
+    p.fields[0].kind = Kind::projection_tree; p.projection_count = 3;
+    auto& collection = p.projections[0]; collection.kind = ProjectionKind::array;
+    collection.count_offset = 0; collection.items_offset = 8; collection.data_offset = 0;
+    collection.element_bytes = 16; collection.max_count = 2;
+    collection.child_begin = 1; collection.child_count = 1;
+    auto& object = p.projections[1]; object.depth = 1; object.pointer_offsets[0] = 8;
+    object.gate = TypeGate::exact; object.expected_class = 0x777; object.bytes = 16;
+    object.max_visits = 2; object.child_begin = 2; object.child_count = 1;
+    auto& text_node = p.projections[2]; text_node.kind = ProjectionKind::utf16;
+    text_node.depth = 1; text_node.pointer_offsets[0] = 8; text_node.expected_class = 0x888;
+    text_node.max_units = 8; text_node.max_visits = 2;
+    assert(validate_plan(p) == Error::ok);
+    arena.memory.fill(std::byte{0}); arena.set<std::uint32_t>(0, 2);
+    arena.set<std::uintptr_t>(8, Arena::base + 64);
+    arena.set<std::uintptr_t>(72, Arena::base + 256);
+    arena.set<std::uintptr_t>(88, Arena::base + 384);
+    arena.set<std::uintptr_t>(256, 0x777); arena.set<std::uintptr_t>(264, Arena::base + 512);
+    arena.set<std::uintptr_t>(384, 0x999); // Not the projected class: +8 is deliberately poisoned.
+    arena.set<std::uintptr_t>(392, 0x90000);
+    arena.set<std::uintptr_t>(512, 0x888); arena.set<std::int32_t>(528, 2);
+    arena.set<char16_t>(532, u'A'); arena.set<char16_t>(534, u'B');
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
+    arena.memory.fill(std::byte{0xdd});
+    assert(read_snapshot(owned, 1, 7, 1, Arena::base + 532, &value, 4) == Error::ok);
+    assert(read_snapshot(owned, 1, 7, 1, Arena::base + 392, &pointer, 8) == Error::missing_plan_field);
+    // Tombstones retain and double-guard their complete slot but cannot
+    // trigger a dereference of its stale nonnull value pointer.
+    arena.memory.fill(std::byte{0}); arena.set<std::uint32_t>(0, 1);
+    arena.set<std::uintptr_t>(8, Arena::base + 64);
+    arena.set<std::int32_t>(64, -1); arena.set<std::uintptr_t>(72, 0x90000);
+    collection.skip_negative_i32_offset = 0;
+    assert(validate_plan(p) == Error::ok);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, later) == Error::ok);
+    assert(read_snapshot(later, 1, 7, 1, Arena::base + 72, &pointer, 8) == Error::ok && pointer == 0x90000);
+    collection.skip_negative_i32_offset = -1;
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, later) == Error::field_unreadable);
+    assert(later.fields[0].attempted_address == 0x90000);
+    collection.skip_negative_i32_offset = 14;
+    assert(validate_plan(p) == Error::invalid_plan);
+    collection.skip_negative_i32_offset = -1;
+    // A new root with a new graph must be captured afresh, never by re-stamping
+    // this snapshot or reading a cached oldscope body.
+    c.args[0] = Arena::base + 1024;
+    arena.set<std::uint32_t>(1024, 0); arena.set<std::uintptr_t>(1032, 0);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, later) == Error::ok);
+    assert(read_snapshot(later, 1, 7, 1, Arena::base + 532, &value, 4) == Error::missing_plan_field);
+    c.args[0] = Arena::base;
+    // Changed local count invalidates the entire cold graph, not only count.
+    arena.memory.fill(std::byte{0}); arena.set<std::uint32_t>(0, 0);
+    arena.reads = 0; arena.mutate_at = 3; arena.mutation_offset = 0;
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::changed_guard);
+    arena.mutate_at = 0;
+    assert(read_snapshot(owned, 1, 7, 1, Arena::base, &value, 4) == Error::changed_guard);
+    // A domain total-visits bound rejects the whole graph instead of
+    // silently truncating the second live slot and publishing a smaller roster.
+    object.max_visits = 1; arena.memory.fill(std::byte{0});
+    arena.set<std::uint32_t>(0, 2); arena.set<std::uintptr_t>(8, Arena::base + 64);
+    arena.set<std::uintptr_t>(72, Arena::base + 256); arena.set<std::uintptr_t>(88, Arena::base + 384);
+    arena.set<std::uintptr_t>(256, 0x999); arena.set<std::uintptr_t>(384, 0x999);
+    assert(validate_plan(p) == Error::ok);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::bounds);
+    assert(read_snapshot(owned, 1, 7, 1, Arena::base + 64, &pointer, 8) == Error::bounds);
+    arena.set<std::uint32_t>(0, 3);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::invalid_length);
+    // Bounded ancestry is a layout gate only: unrelated short Unit objects
+    // never expose Character data; derived Character objects do.
+    p.projection_count = 1; auto& unit = p.projections[0]; unit = ProjectionNode{};
+    unit.gate = TypeGate::ancestor; unit.expected_class = Arena::base + 768;
+    unit.ancestry_depth = 10; unit.bytes = 8;
+    arena.memory.fill(std::byte{0}); arena.set<std::uintptr_t>(0, Arena::base + 640);
+    arena.set<std::uintptr_t>(640 + 0x58, Arena::base + 768);
+    assert(validate_plan(p) == Error::ok);
+    assert(capture(p, Phase::entry, c, Arena::read, &arena, owned) == Error::ok);
+    assert(read_snapshot(owned, 1, 7, 1, Arena::base + 640 + 0x58, &pointer, 8) == Error::ok
+        && pointer == Arena::base + 768);
+    unit.ancestry_depth = 11;
+    assert(validate_plan(p) == Error::invalid_plan);
+    unit.ancestry_depth = 10; unit.child_begin = 0; unit.child_count = 1;
+    assert(validate_plan(p) == Error::invalid_plan); // Cycles/reusing the same node are forbidden.
+    unit.child_count = 0; unit.max_visits = 257;
+    assert(validate_plan(p) == Error::invalid_plan);
+
     // Return and checkpoint/absolute roots are explicit and phase-restricted.
     p = plan(); p.field_count = 1; p.fields[0] = field(1, 1, 0, 4);
     p.fields[0].phase = Phase::leave; p.fields[0].root = Root::return_value;
