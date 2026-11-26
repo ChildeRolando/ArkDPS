@@ -2,12 +2,12 @@ import subprocess
 from pathlib import Path
 
 
-def test_hp_readplan_tiers_preserve_shared_callback_validation():
+def test_hp_pointer_baseline_preserves_partial_branches_and_class_overlap():
     root = Path(__file__).resolve().parents[1]
     result = subprocess.run(['node', 'tests/event_probe_hp_readplan_fixture.js'], cwd=root,
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert 'PASS_HP_READPLAN_SOURCE_TIERS' in result.stdout
+    assert 'PASS_HP_POINTER_SOURCE_BASELINE' in result.stdout
 
 
 def test_graph_batch_source_uses_actual_field_order_and_keeps_guard_failures():
