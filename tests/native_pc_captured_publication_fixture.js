@@ -158,6 +158,7 @@ function sampleScope(legacy=false){
  const r=checkRecordView(autoRecord());__arkdpsReplayBegin(r);
  try{
   const before=fixedReads,sample=validatedClockValues(10,5n*4294967296n,10,false,false,legacy?undefined:5n*4294967296n);
+  if(!legacy)captureValidatedClockSample(sample,5n*4294967296n);
   const value=capturedNativeScopePoint(sample);return {sample,value,reads:fixedReads-before};
  }finally{__arkdpsReplayEnd();}
 }
@@ -169,14 +170,14 @@ const changed=checkRecordView(autoRecord());
 for(const segment of changed.segments)if(segment.role==='scope.clock_close')new DataView(segment.bytes).setBigInt64(4,6n*4294967296n,true);
 __arkdpsReplayBegin(changed);
 try{
- const sample=validatedClockValues(10,5n*4294967296n,10,false,false,5n*4294967296n);
+ const sample=validatedClockValues(10,5n*4294967296n,10,false,false,5n*4294967296n);captureValidatedClockSample(sample,5n*4294967296n);
  try{capturedNativeScopePoint(sample);globalThis.reusedClockFreshGuardRejected=false;}catch(error){globalThis.reusedClockFreshGuardRejected=true;}
 }finally{__arkdpsReplayEnd();}
 const noMode=__arkdpsReplayModeRecord;__arkdpsReplayModeRecord=undefined;
 try{const result=sampleScope();globalThis.oldModeHelperRead=result.value?.phase===4&&result.reads===1;}finally{__arkdpsReplayModeRecord=noMode;}
 const noPublic=checkRecordView(autoRecord());__arkdpsReplayBegin(noPublic);
 const publicRecord=__arkdpsReplayRecord;__arkdpsReplayRecord=()=>{throw Error('must not materialize public HP record');};
-try{validatedClockValues(10,5n*4294967296n,10,false,false,5n*4294967296n);globalThis.clockRememberNoPublicRecord=true;}finally{__arkdpsReplayRecord=publicRecord;__arkdpsReplayEnd();}
+try{const sample=validatedClockValues(10,5n*4294967296n,10,false,false,5n*4294967296n);captureValidatedClockSample(sample,5n*4294967296n);globalThis.clockRememberNoPublicRecord=true;}finally{__arkdpsReplayRecord=publicRecord;__arkdpsReplayEnd();}
 captureClockFixed=originalFixedRead;
 
 const fixedSemanticGraph=sealNativeScopeGraph({...autoGraph,fields:autoGraph.fields.map(field=>({...field,...(field.role==='scope.open.3'?{expected:4}:field.role==='scope.open.4'?{expected:8}:field.role==='scope.controller.state.open'?{expected:2}:{})}))});

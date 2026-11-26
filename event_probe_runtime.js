@@ -745,12 +745,7 @@ function validatedClockValues(frame,fixed,closingFrame,allowRetry,withEventScope
  const game_time=Number(fixed)/4294967296;
  if(closingFrame!==frame||(closedFixed!==undefined&&(typeof closedFixed!=='bigint'||closedFixed!==fixed))){if(allowRetry)return null;throw new Error('unstable callback clock');}
  if(!Number.isFinite(game_time)||game_time<0)throw new Error('invalid clock');
- const sample=damageSettlementStamp(frame,game_time,withEventScope);
- // Only the native provider supplies the independently owned closing fixed word.
- // Register after stamping: an in-progress nondeferred stamp must still read it.
- if(closedFixed!==undefined&&typeof probeAdapter.captureValidatedClockSample==='function')
-  probeAdapter.captureValidatedClockSample(sample,closedFixed);
- return sample;
+ return damageSettlementStamp(frame,game_time,withEventScope);
 }
 function validatedClockStamp(view,closingFrame,allowRetry,withEventScope){
  return validatedClockValues(view.getUint32(0,true),view.getBigInt64(4,true),closingFrame,allowRetry,withEventScope);
@@ -2860,7 +2855,13 @@ function applyHpLeave(receiver,io,label){
   if(hp===hpBefore&&maxHpBefore===null)return;
   const maxHp=write.enemyTarget?enemyMaxHp(enemy,io):null;
   if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
-  if(deferScope)stampEventScope(end);
+  if(deferScope){
+   // Most setters do not change HP and never ask for a scope. Keep their
+   // entry/closing validation free of memoization and token allocation.
+   if(clockValues[3]!==undefined&&typeof probeAdapter.captureValidatedClockSample==='function')
+    probeAdapter.captureValidatedClockSample(end,clockValues[3]);
+   stampEventScope(end);
+  }
   recordEnemyHp(write,end,label,hp,maxHp);
  }catch(e){
   if(coalesceEnemyHp)flushCoalescedEnemyHp();

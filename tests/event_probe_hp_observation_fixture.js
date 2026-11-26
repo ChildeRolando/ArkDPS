@@ -2,7 +2,7 @@
 // Real installed HP callbacks use the ordinary provider and sole apply owner.
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const {fixture}=require('./native_pc_frida_probe_fixture.js');
-function run(mode,adapter=false){
+function run(mode,adapter=false,closingWord=false){
  const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),enemyHpState:true,settlement:true});
  f.context.rpc.exports.mark();f.clock(30,4294967296n);
  const actor=f.unit(mode==='trap'?'trap_owned':mode==='nonenemy'?'char_owned':'enemy_test',12),attrs=f.alloc(),cache=f.alloc();
@@ -11,10 +11,11 @@ function run(mode,adapter=false){
  f.write(actor.add(0xb0),attrs);f.write(attrs.add(0x68),cache);f.write(cache.add(0x18),mode==='empty-maxhp'?0:1);
  f.write(cache.add(0x20),0n);f.write(cache.add(0x28),1000n*4294967296n);f.write(cache.add(0x30),1);
  if(mode==='null-attributes')f.write(actor.add(0xb0),f.ptr(0));
- const trace=[],acquisitions=[];f.context.hpIoTrace=(name)=>trace.push(name);f.context.hpAcquire=(edge)=>acquisitions.push(edge);f.context.adapterMode=adapter;
+ const trace=[],acquisitions=[];f.context.hpIoTrace=(name)=>trace.push(name);f.context.hpAcquire=(edge)=>acquisitions.push(edge);f.context.adapterMode=adapter;f.context.closingWord=closingWord;
  vm.runInContext(`const baseApplyEntry=applyHpEntry,baseApplyLeave=applyHpLeave;
- class ObservedHpIo{#base=pointerHpIo;read(name,args){hpIoTrace(name);return this.#base[name](...args);}}
+ class ObservedHpIo{#base=pointerHpIo;read(name,args){hpIoTrace(name);const value=this.#base[name](...args);return name==='clock'&&closingWord?[...value,value[1]]:value;}}
  for(const name of Object.keys(pointerHpIo))ObservedHpIo.prototype[name]=function(...args){return this.read(name,args);};
+ let clockSamples=0;probeAdapter.captureValidatedClockSample=()=>{clockSamples++;};
  const observedIo=new ObservedHpIo();
  if(adapterMode)probeAdapter.captureHpObservation=(edge,enemy)=>{hpAcquire(edge);return observedIo;};
  else{applyHpEntry=(receiver,args,io,label,attribute)=>baseApplyEntry(receiver,args,observedIo,label,attribute);
@@ -24,7 +25,7 @@ function run(mode,adapter=false){
  hook.onEnter.call(call,[actor,f.ptr(1)]);
  if(mode!=='unchanged')f.write(actor.add(0x40),101n*4294967296n);
  hook.onLeave.call(call);
- return {trace,acquisitions,queue:JSON.parse(vm.runInContext('JSON.stringify(queue)',f.context)),active:vm.runInContext('active',f.context)};
+ return {clockSamples:vm.runInContext('clockSamples',f.context),trace,acquisitions,queue:JSON.parse(vm.runInContext('JSON.stringify(queue)',f.context)),active:vm.runInContext('active',f.context)};
 }
 {
  const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),enemyHpState:true});
@@ -33,6 +34,10 @@ function run(mode,adapter=false){
  assert.equal(vm.runInContext('validatedClockValues(30,4294967296n,30,false,false).game_time',f.context),1);
  assert.equal(vm.runInContext('validatedClockValues(30,4294967296n,30,false,false,4294967296n).game_time',f.context),1);
 }
+assert.equal(run('normal',true,true).clockSamples,1);
+assert.equal(run('unchanged',true,true).clockSamples,0);
+assert.equal(run('trap',true,true).clockSamples,0);
+assert.equal(run('normal',true,false).clockSamples,0);
 assert.deepEqual(run('normal').trace,['identity','born','clock','id','hp','clock','closing','attributes','attributeCount','attributeWords']);
 assert.deepEqual(run('unborn').trace,['identity','born']);
 assert.deepEqual(run('nonenemy').trace,['identity','id']);
