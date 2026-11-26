@@ -60,19 +60,26 @@ from threading import Thread
 from queue import Queue
 
 def fresh_mark(pipe,fixture,**options):
- result=Queue()
- def request():
-  try: result.put(pipe.request('mark',**options))
-  except BaseException as error: result.put(error)
- pending=Thread(target=request)
- pending.start()
- time.sleep(.01)
- fixture.command('full-arguments')
- pending.join(timeout=3)
- assert not pending.is_alive(),'fresh mark did not finish'
- answer=result.get_nowait()
- if isinstance(answer,BaseException): raise answer
- return answer
+ # A request arriving during the deliberately slow reducer cannot force an
+ # already-produced edge to carry a newer publication claim. Supply actual
+ # later edges, just as a continuing game would, and count every extra call.
+ deadline=time.monotonic()+3
+ fresh_mark.last_nudges=0
+ while time.monotonic()<deadline:
+  result=Queue()
+  def request():
+   try: result.put(pipe.request('mark',**options))
+   except BaseException as error: result.put(error)
+  pending=Thread(target=request)
+  pending.start()
+  time.sleep(.01)
+  fixture.command('full-arguments');fresh_mark.last_nudges+=1
+  pending.join(timeout=3)
+  assert not pending.is_alive(),'fresh mark did not finish'
+  answer=result.get_nowait()
+  if isinstance(answer,BaseException): raise answer
+  if not answer.get('retry'):return answer
+ raise AssertionError('later owned edges did not establish a fresh publication')
 receipt={}
 with tempfile.TemporaryDirectory(prefix='arkdps-async-owned-') as temp:
  f=Fixture(Path(temp)/'valid',binary); pipe=None
@@ -94,7 +101,7 @@ with tempfile.TemporaryDirectory(prefix='arkdps-async-owned-') as temp:
   assert any(lane['peak_resident_records']>=2 and lane['peak_resident_bytes']>0 for lane in mark['native_async_capture']['lane_metrics']),mark
   assert int(mark['owned_closed_record']['ticket'])==mark['native_async_capture']['published_ticket'],mark
   assert mark['retained_arguments']['values']==list(map(str,FULL_ARGUMENT_VALUES)),mark['retained_arguments']
-  assert len(mark['records'])==14,mark['records']
+  assert len(mark['records'])==12+2*fresh_mark.last_nudges,mark['records']
   token=mark['native_publication']['token']
   read=pipe.request('read',publication_token=token,after=0,through=mark['sequence'])
   assert len(read['events'])==mark['sequence'],read

@@ -32,14 +32,14 @@ for(const [phase,base]of [['entry',0],['leave',3]]){
  fields.push({field_id:base+3,phase,role:mode==='guard'?'guard':'after',root:'absolute',root_index:0,absolute_address:owned.toString(),pointer_offsets:[],offset:0,bytes:64,kind:'bytes',guard_id:1,guard_side:'after',required:true});
 }
 const plan={schema_version:1,complete:true,raw_collection:'all',name:'owned-native-view',address:address.toString(),abi:'win64-gp',profile:'owned',arg_count:1,arg_mask:1,globals:[],fields,max_bytes:65536,max_reads:4096,required_projections:[]};
-let entries=0,leaves=0,savedTicket=null,checks=0,served=0;
-function equal(actual,expected){if(actual!==expected)throw Error('owned scalar mismatch '+String(actual)+' vs '+String(expected));checks++;}
+let entries=0,leaves=0,savedTicket=null,checks=0,served=0;const assertionErrors=[];let scalarDebug=null;
+function equal(actual,expected){if(actual!==expected)assertionErrors.push('owned scalar mismatch '+String(actual)+' vs '+String(expected));checks++;}
 function checkScalars(){
  __arkdpsReplayPoint('body',()=>{
   equal(owned.readU8(),251);equal(owned.add(8).readU16(),65000);equal(owned.add(16).readU32(),0xfedcba98);
   equal(owned.add(24).readS32(),-123456);equal(owned.add(32).readU64().toString(),'18364758544493064720');
   equal(owned.add(40).readS64().toString(),'-9223372036854775807');equal(owned.add(48).readFloat(),-13.25);
-  equal(owned.add(32).readPointer().toString(),'0xfedcba9876543210');
+  const raw=owned.add(32).readU64().value,pointer=owned.add(32).readPointer();scalarDebug={raw_decimal:raw.toString(),raw_hex:raw.toString(16),pointer_decimal:pointer.value.toString(),pointer_hex:pointer.value.toString(16),as_uint_decimal:BigInt.asUintN(64,raw).toString(),as_uint_hex:BigInt.asUintN(64,raw).toString(16)};equal(pointer.toString(),'0xfedcba9876543210');
   const copy=owned.readByteArray(64);equal(copy.byteLength,64);new Uint8Array(copy)[0]=0;equal(owned.readU8(),251);
  });
  const info=__nativeOwnedPoint('body',0);equal(info>>>24,1);equal((info>>>16)&255,0);
@@ -47,7 +47,7 @@ function checkScalars(){
 }
 const hook=Interceptor.attach(address,{arkdpsName:'owned.native-view',arkdpsCaptureContract:plan,
  onEnter(args){
-  const raw=__arkdpsReplayRecord();if(raw.native_view!==true||!__nativeOwnedLease(raw.ticket))throw Error('native provider not selected');
+  const raw=__arkdpsReplayRecord();equal(raw.native_view,true);equal(__nativeOwnedLease(raw.ticket),true);
   equal(args[0].toInt32(),1);savedTicket=raw.ticket;entries++;
   if(mode==='positive')checkScalars();
   else if(mode==='invalid'){
@@ -68,7 +68,7 @@ const hook=Interceptor.attach(address,{arkdpsName:'owned.native-view',arkdpsCapt
  }});
 globalThis.__arkdpsPublicationServed=through=>served=Math.max(served,through);
 globalThis.__arkdpsOnClosedRecord=record=>({mark:{sequence:0,epoch:entries,frame:leaves,game_time:leaves/30,
- active:0,active_hooks:[],error:null,stopped:false,entries,leaves,checks,owned_native_view:record.native_view,
+ active:0,active_hooks:[],error:null,stopped:false,entries,leaves,checks,source_assertion_errors:assertionErrors.slice(),scalar_debug:scalarDebug,owned_native_view:record.native_view,
  native_capture_scope_mode_epoch:record.facts.scope_mode_epoch??record.facts.mode_epoch},acknowledged:0,
  events_after:0,events_through:0,events:[],hp_context:[],read_fields:{sequence:0,epoch:entries},terminal_read:null});
 rpc.exports={mark(){throw Error('legacy live mark');},readEvents(){throw Error('legacy live read');},
@@ -109,6 +109,7 @@ def run(binary, case):
             if case == 'positive':
                 mark = fresh_mark(pipe, fixture)
                 assert mark.get('retry') is not True and mark.get('error') is None, mark
+                assert mark.get('source_assertion_errors') == [], mark
                 assert mark['owned_native_view'] is True, mark
                 assert mark['entries'] == mark['leaves'] >= 1 and mark['checks'] >= 29, mark
                 assert mark['native_async_capture']['failure_code'] == 0, mark
@@ -144,11 +145,19 @@ def main():
     cases = ['positive','invalid','late-lease','guard'] if options.case == 'all' else [options.case]
     receipt = {'kind':'real DLL/QuickJS self-owned semantic test; no game or throughput claim',
                'binary_sha256':sha256(binary.read_bytes()).hexdigest(),'cases':{}}
-    for case in cases:
-        receipt['cases'][case] = run(binary, case)
-    receipt['result'] = 'PASS'
-    options.receipt.parent.mkdir(parents=True, exist_ok=True)
-    options.receipt.write_text(json.dumps(receipt, indent=2), encoding='utf-8')
+    try:
+        for case in cases:
+            receipt['cases'][case] = run(binary, case)
+        receipt['result'] = 'PASS'
+    except BaseException as error:
+        receipt['result'] = 'FAIL'
+        receipt['cases'][case] = {'result':'FAIL','error_type':type(error).__name__,'error':str(error)}
+        if isinstance(error, AssertionError) and error.args and isinstance(error.args[0], dict):
+            receipt['cases'][case]['reply'] = error.args[0]
+        raise
+    finally:
+        options.receipt.parent.mkdir(parents=True, exist_ok=True)
+        options.receipt.write_text(json.dumps(receipt, indent=2), encoding='utf-8')
     print('PASS native owned-view DLL semantics:', ', '.join(cases))
 
 
