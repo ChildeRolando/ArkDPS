@@ -23,7 +23,7 @@ function run(mode,owned=false,raw=false){
   if(!owned)return(edge==='entry'?hook.onEnter:hook.onLeave).call(call,...(edge==='entry'?[args]:[]));
   const body=harness.captureFields(plans[index].fields.filter(x=>x.phase===edge),args,args,[]),guard=harness.captureFields(scope.fields.map((x,i)=>({...x,field_id:1000+i})),args,args,[]);
   const record={version:1,edge,checkpoint:0,invocation_id:call.nativeCaptureInvocation,thread_id:1,fields:[...body.fields,...guard.fields],segments:[...body.segments,...guard.segments],facts:{mode_epoch:0,scope_mode_epoch:0,scope_revision:1,parent_checkpoints:[]}};
-  if(index===1){const cp=harness.captureFields(plans[0].fields.filter(x=>x.phase==='checkpoint'),args,args,[null,mod],1);record.fields.push(...cp.fields);record.segments.push(...cp.segments);record.facts.parent_checkpoints.push({invocation_id:'1',checkpoint:1});}
+
   if((mode==='changed-guard'&&edge==='leave'||mode==='changed-entry'&&edge==='entry')&&index===1)for(const field of record.fields)if(field.role==='body')field.status='changed_guard';
   harness.replay(record,()=> (edge==='entry'?hook.onEnter:hook.onLeave).call(call,...(edge==='entry'?[args]:[])));
   assert.equal(f.context.fixtureSummary.complete,true,JSON.stringify(f.context.fixtureSummary));
@@ -40,6 +40,16 @@ function run(mode,owned=false,raw=false){
  if(mode!=='no-writer')invoke(1,'entry',writer,[target]);
  f.write(target.add(0x40),(mode==='overkill'?0n:mode.startsWith('shield')?20n:10n)*4294967296n);
  if(mode==='overkill'){f.write(mod.add(0x48),-50n*4294967296n);f.write(mod.add(0x30),80n*4294967296n);}
+ if(['nested-normal','nested-direct','nested-transient-uid'].includes(mode)){
+  if(mode==='nested-transient-uid')f.write(target.add(0x18),13);
+  const nested=f.callback(mode==='nested-direct'?'SetHpInternalDirectly':'SetHpInternal',f.entity),call={threadId:1};
+  nested.onEnter.call(call,[target]);f.write(target.add(0x40),10n*4294967296n);nested.onLeave.call(call);
+  if(mode==='nested-transient-uid')f.write(target.add(0x18),12);
+ }
+ if(mode==='cross-thread-foreign'||mode==='cross-thread-unknown'){
+  const foreign=f.unit('enemy_foreign',71),child=f.modifier(foreign,mode==='cross-thread-unknown'?f.ptr(0):target,0,0,1),call={threadId:2};
+  apply.onEnter.call(call,[target,child]);apply.onLeave.call(call);
+ }
  if(mode==='max-hp-dirty'){const dirty=f.callback('OnAttributeDirty',f.entity),call={threadId:1};dirty.onEnter.call(call,[target,f.ptr(0),f.ptr(100n*4294967296n)]);dirty.onLeave.call(call);}
  if(mode==='healing-write'){f.write(target.add(0x40),60n*4294967296n);f.write(mod.add(0x48),10n*4294967296n);}
  if(mode==='uid-change')f.write(target.add(0x18),13);
@@ -58,7 +68,7 @@ function run(mode,owned=false,raw=false){
  const events=JSON.parse(vm.runInContext('JSON.stringify(queue)',f.context));if(harness){assert.equal(harness.late(),0);harness.restore();}if(raw){const mark=f.context.rpc.exports.mark();return {mark,batch:f.context.rpc.exports.readEvents(0,mark.sequence)};}return events.filter(e=>e.kind==='damage_settlement');
 }
 for(const mode of ['positive','overkill']){const events=run(mode);assert.equal(events.length,1);assert.equal(events[0].settlement_complete,true,JSON.stringify(events));assert.equal(events[0].amount,mode==='overkill'?50:40);}
-for(const mode of ['no-writer','multiple-writer','source-uid','foreign-nested','unknown-nested','unmatched-delta','uid-change','cross-frame','same-name-other-uid','cancel','shield-unknown','max-hp-dirty','other-thread','healing-write'])assert(!run(mode).some(e=>e.settlement_complete),mode);
+for(const mode of ['no-writer','multiple-writer','source-uid','foreign-nested','unknown-nested','unmatched-delta','uid-change','cross-frame','same-name-other-uid','cancel','shield-unknown','max-hp-dirty','other-thread','healing-write','nested-normal','nested-direct','nested-transient-uid','cross-thread-foreign','cross-thread-unknown'])assert(!run(mode).some(e=>e.settlement_complete),mode);
 for(const mode of ['positive','overkill'])assert.deepEqual(run(mode,true),run(mode));
 for(const mode of ['changed-guard','changed-entry'])assert(!run(mode,true).some(e=>e.settlement_complete));
 const shield=run('shield');assert.equal(shield.length,1);assert.equal(shield[0].settlement_complete,true,JSON.stringify(shield));assert.equal(shield[0].amount,30);assert.equal(shield[0].shield_absorbed,10);

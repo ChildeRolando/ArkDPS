@@ -2766,6 +2766,7 @@ function installEnemyStateHooks() {
      try{
       const enemy=args[0],key=enemy.toString();
       if(enemy.isNull())return;
+      noteModifierHpWriterAttempt(enemy);
       const existing=enemyHpWrites.get(key);
       if(existing){
        // Same-thread nested setters may implement the outer write. A concurrent
@@ -2780,7 +2781,6 @@ function installEnemyStateHooks() {
        }
        return;
       }
-      noteModifierHpWriterAttempt(enemy);
       const identity=checkedNativeView(enemy,0x1c);
       const klass=ptr(identity.getBigUint64(0,true)),uid=identity.getUint32(0x18,true);
       enemyTarget=isEnemy(enemy,klass);
