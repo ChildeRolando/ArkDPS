@@ -186,6 +186,9 @@ static JSValue queue_run(JSContext *c, JSValueConst, int argc,
                                   h.publication_revision, h.scope_mode_epoch,
                                   h.checkpoint);
 #endif
+#ifdef ARKDPS_CAPTURE_HOOK_POINT
+    arkdps::owned_js::bind_hook(plan.get(), h.phase, h.args[0], h.checkpoint);
+#endif
     std::array<std::uint64_t, 22> packed{
         {h.ticket,
          h.invocation,

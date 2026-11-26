@@ -91,6 +91,19 @@ struct Profile {
   double capture_ms = 0, view_ms = 0;
 };
 static Profile profile;
+static std::uint64_t hook_point_calls = 0, missing_hook_calls = 0;
+#ifdef ARKDPS_CAPTURE_HOOK_POINT
+static JSValue owned_hook_point(JSContext *c, JSValueConst self, int n,
+                                JSValueConst *args) {
+  ++hook_point_calls;
+  return arkdps::owned_js::hook_point(c, self, n, args);
+}
+static JSValue owned_missing_hook(JSContext *c, JSValueConst self, int n,
+                                  JSValueConst *args) {
+  ++missing_hook_calls;
+  return arkdps::owned_js::missing_hook_slot(c, self, n, args);
+}
+#endif
 static std::uint64_t batch_calls = 0, graph_calls = 0, graph_check_calls = 0,
                      batch_output_bytes = 0, graph_output_bytes = 0,
                      selected_slots = 0;
@@ -186,6 +199,10 @@ static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
   arkdps::owned_js::bind_graphs(exact, raw_header.scope_revision,
                                 raw_header.publication_revision, 0);
 #endif
+#ifdef ARKDPS_CAPTURE_HOOK_POINT
+  arkdps::owned_js::bind_hook(plan.get(), raw_header.phase, input.args[0],
+                              raw_header.checkpoint);
+#endif
   profile.view_ms += std::chrono::duration<double, std::milli>(
                          std::chrono::steady_clock::now() - captured)
                          .count();
@@ -214,6 +231,7 @@ static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
 static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
   if (n && JS_ToBool(c, args[0])) {
     profile = {};
+    hook_point_calls = missing_hook_calls = 0;
     batch_calls = graph_calls = graph_check_calls = batch_output_bytes =
         graph_output_bytes = selected_slots = 0;
     return JS_UNDEFINED;
@@ -227,6 +245,8 @@ static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
          {"capture_ms", profile.capture_ms},
          {"view_initialize_ms", profile.view_ms}};
   j["batch_calls"] = batch_calls;
+  j["hook_point_calls"] = hook_point_calls;
+  j["missing_hook_calls"] = missing_hook_calls;
   j["graph_calls"] = graph_calls;
   j["graph_check_calls"] = graph_check_calls;
   j["batch_output_bytes"] = batch_output_bytes;
@@ -355,6 +375,14 @@ int main(int argc, char **argv) {
   JS_SetPropertyStr(
       c, g, "__nativeOwnedReadBatch",
       JS_NewCFunction(c, owned_batch, "__nativeOwnedReadBatch", 5));
+#endif
+#ifdef ARKDPS_CAPTURE_HOOK_POINT
+  JS_SetPropertyStr(
+      c, g, "__nativeOwnedHookPoint",
+      JS_NewCFunction(c, owned_hook_point, "__nativeOwnedHookPoint", 2));
+  JS_SetPropertyStr(c, g, "__nativeOwnedMissingHookSlot",
+                    JS_NewCFunction(c, owned_missing_hook,
+                                    "__nativeOwnedMissingHookSlot", 1));
 #endif
   for (int i = 2; i < argc; i++) {
     if (std::string(argv[i]) == "--disable-ascii")
