@@ -19,7 +19,7 @@ const rows=[
 const modes=['active_child','active_untracked_child','active_cross_thread_child','active_cross_thread_untracked',
  'alias_restored','alias_after_target_entry','cross_thread_after_target_entry',
  'cross_thread_unreadable_after_target_entry',
- 'after_target_entry','hp_before_failed','duplicate_target_callback','missing_target_callback'];
+ 'hp_before_failed','duplicate_target_callback','missing_target_callback'];
 
 function run(platform,row,mode=null){
  const f=fixture({platform,settlement:true,sourcePath:path.join(__dirname,'..',
@@ -99,6 +99,7 @@ function run(platform,row,mode=null){
 const report={};
 for(const platform of ['android','native_pc'])report[platform]={
  valid:rows.map(row=>run(platform,row)),
+ after_target_entry:run(platform,rows[0],'after_target_entry'),
  different_target_parallel:run(platform,rows[0],'different_target_parallel'),
  invalid:Object.fromEntries(modes.map(mode=>[mode,run(platform,rows[0],mode)]))
 };

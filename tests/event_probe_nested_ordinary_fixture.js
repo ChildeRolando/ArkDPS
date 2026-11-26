@@ -2,6 +2,7 @@
 // of fields absent from the rc25 desktop recording.
 const path=require('node:path');
 const {fixture}=require('./native_pc_frida_probe_fixture.js');
+const {world}=require('./native_pc_autochess_context_fixture.js');
 const fixed=x=>BigInt(Math.round(x*4294967296));
 
 function scenario(platform,fault=null,sameActor=true,terminalChild=false){
@@ -70,10 +71,96 @@ const faults=['parent_callback_not_returned','missing_parent_real','parent_hp_mi
  'changed_source_uid','changed_target_uid','changed_source_cid','changed_target_cid','changed_damage_type',
  'cross_frame','cross_time','changed_source_data_uid','unmatched_shield',
  'missing_child_callback','duplicate_child_callback','parent_cancelled','zero_target_uid','child_nominal_underflow'];
+
+// The rc.42 journal identifies a true-damage child entering while its physical
+// parent's target callback is in progress. The HP and signed deltas here are owned
+// test inputs for that ordering, since the journal does not retain the raw writes.
+function childBeforeParent(platform,mode,loggedHit=null){
+ const f=loggedHit?world({fixtureOptions:{settlement:true}}):fixture({platform,settlement:true,
+  sourcePath:path.join(__dirname,'..',platform==='native_pc'?'event_probe_native_pc.js':'event_probe_android2791.js')});
+ const sourceCid='char_4064_mlynar',sourceUid=loggedHit?.sourceUid??1010;
+ const source=f.unit(sourceCid,loggedHit?.sourceInstance??10);
+ const target=f.unit(loggedHit?.target??'enemy_nested_ordinary',loggedHit?.targetUid??12);
+ let initialMark,initialBatch;
+ if(loggedHit){
+  for(const [index,p] of f.players)f.write(p.add(0x18),f.text(String(index)));
+  f.write(f.roleData[0].add(0x50),f.text(sourceCid));
+  f.write(f.roleData[0].add(0x6c),sourceUid);
+  f.write(source.add(0x538).readPointer().add(0x6c),sourceUid);
+  f.write(f.center.add(0x3c),11);
+  f.write(f.level.add(0x18),f.text('Activities/ACT3AUTOCHESS/level_act3autochess_m03'));
+  initialMark=f.mark();
+  initialBatch=f.context.rpc.exports.readEvents(initialMark.sequence,initialMark.sequence);
+ }
+ const childKills=mode==='child_kills'||mode==='child_kills_parent_delta',parentKills=mode==='parent_kills';
+ const childHpBefore=loggedHit?.hpBefore??1000;
+ const childHpAfter=loggedHit?.hpAfterTrue??(childKills?0:950);
+ const childAmount=childHpBefore-childHpAfter;
+ const parentAmount=loggedHit?.nominalPhysical??(parentKills?1200:200);
+ const parentHpAfter=loggedHit?.hpAfterPhysical??Math.max(0,childHpAfter-parentAmount);
+ const parentHpSpent=childHpAfter-parentHpAfter;
+ const parent=f.modifier(source,target,parentAmount,0,1);
+ const child=f.modifier(source,target,childAmount,0,3);
+ const apply=f.callback('ApplyModifier',f.entity),take=f.callback('OnTakeDamage',f.unitClass);
+ const output=f.callback('OnAfterOutputDamage',f.entity);
+ const outer={threadId:1},outerTake={threadId:1},inner={threadId:1},innerTake={threadId:1};
+
+ f.clock(loggedHit?.frame??30,fixed(loggedHit?.when??1));
+ if(loggedHit)f.mark();
+ f.write(target.add(0x40),fixed(childHpBefore));
+ apply.onEnter.call(outer,[target,parent,f.ptr(0)]);
+ take.onEnter.call(outerTake,[target,parent,f.ptr(0)]);
+ if(mode==='unclocked_shield'){
+  const shield=f.callback('_AssignDynamicVar',f.blockDamage),blocked={threadId:1};
+  f.clock(30,undefined);
+  shield.onEnter.call(blocked,[f.ptr(0),f.ptr(0),parent,f.ptr(0)]);
+  f.clock(30,fixed(1));
+  shield.onLeave.call(blocked);
+ }
+ if(mode==='phase_changes_before_child')f.write(f.machine.add(0x5c),5);
+ if(mode==='child_starts_after_unexplained_loss')f.write(target.add(0x40),fixed(990));
+ apply.onEnter.call(inner,[target,child,f.ptr(0)]);
+ if(mode!=='missing_child_callback'){
+  take.onEnter.call(innerTake,[target,child,f.ptr(0)]);
+  take.onLeave.call(innerTake);
+ }
+ f.write(child.add(0x48),fixed(mode==='invalid_child_delta'?-(childAmount-5):-childAmount));
+ f.write(target.add(0x40),fixed(childHpAfter));
+ if(mode==='wrong_scope')f.write(f.machine.add(0x5c),5);
+ const childOutput={threadId:1};
+ output.onEnter.call(childOutput,[source,child]);output.onLeave.call(childOutput);
+ apply.onLeave.call(inner);
+ if(mode==='wrong_scope')f.write(f.machine.add(0x5c),4);
+
+ if(mode!=='missing_parent_return')take.onLeave.call(outerTake);
+ const parentDelta=mode==='missing_parent_delta'?0:mode==='child_kills_parent_delta'?-10:-parentHpSpent;
+ f.write(parent.add(0x48),fixed(parentDelta));
+ f.write(target.add(0x40),fixed(parentHpAfter));
+ const parentOutput={threadId:1};
+ output.onEnter.call(parentOutput,[source,parent]);output.onLeave.call(parentOutput);
+ apply.onLeave.call(outer);
+ const mark=f.context.rpc.exports.mark(),batch=f.context.rpc.exports.readEvents(0,mark.sequence);
+ return {mark,batch,initialMark,initialBatch,parent_source:sourceCid,parent_uid:sourceUid,
+  expected:{childAmount,childHpAfter,parentAmount,parentHpSpent}};
+}
+
+// rc.42 attached journal part 1 line 2839, target 3765, sequences 17384–17387.
+// The failed physical record lacks a raw signed delta, so the owned callback
+// receives it from the two independent enemy HP samples for this replay case.
+const loggedHit={frame:1086,when:36.199965476989746,sourceUid:1048948,sourceInstance:3694,
+ target:'enemy_10124_uashld_2',targetUid:3765,hpBefore:159760.09925796394,
+ hpAfterTrue:159414.07125438424,hpAfterPhysical:156326.4257972762,nominalPhysical:3087.6454571080394};
+
 const reports={};
 for(const platform of ['android','native_pc'])reports[platform]={
  valid:scenario(platform),different_actor:scenario(platform,null,false),
  terminal_child:scenario(platform,null,true,true),terminal_other_actor:scenario(platform,null,false,true),
  terminal_invalid:Object.fromEntries(faults.map(fault=>[fault,scenario(platform,fault,true,true)])),
- invalid:Object.fromEntries(faults.map(fault=>[fault,scenario(platform,fault)]))};
+ invalid:Object.fromEntries(faults.map(fault=>[fault,scenario(platform,fault)])),
+ child_before_parent:Object.fromEntries(['nonlethal','parent_kills','child_kills','child_kills_parent_delta','missing_child_callback',
+  'invalid_child_delta','child_starts_after_unexplained_loss','missing_parent_return','missing_parent_delta','unclocked_shield']
+  .map(mode=>[mode,childBeforeParent(platform,mode)]))};
+reports.autochess={valid:childBeforeParent('native_pc','nonlethal',loggedHit),
+ wrong_scope:childBeforeParent('native_pc','wrong_scope',loggedHit),
+ phase_changes_before_child:childBeforeParent('native_pc','phase_changes_before_child',loggedHit)};
 process.stdout.write(JSON.stringify(reports));

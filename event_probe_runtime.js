@@ -1199,11 +1199,11 @@ function captureParentBeforeNestedSettlement(parent,child){
      parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
      shieldContextUnknown(child.when.frame,hit.target)||shieldTotal(child.when.frame,hit.target)!==0)return null;
   const real=fp(parent.mod.add(0x48)),hp=targetHp(hit.target),amount=fp(parent.mod.add(0x30));
-  // A same-target element can settle inside the parent's active Unit
-  // callback before the parent commits any HP. Capture that separate zero
-  // point and later require the parent's own signed delta after all children.
-  if(!commit.returned&&childType===5&&real===0&&hp>0&&hp===hit.hpBefore&&hp===child.hpBefore)
-   return {child,ordinary:false,ordering:'children_before_parent',when:child.when,uid:hit.uid,
+  // A same-target child can settle inside the parent's active Unit callback.
+  // Anchor the untouched parent HP before the child and verify its own signed
+  // delta when it closes. Ordinary children use the existing single-child proof.
+  if(!commit.returned&&real===0&&hp>0&&hp===hit.hpBefore&&hp===child.hpBefore)
+   return {child,ordinary,ordering:'children_before_parent',when:child.when,uid:hit.uid,
     real,hpBefore:hp,hpAfter:hp};
   if(!commit.returned)return null;
   if(!Number.isFinite(real)||!(real<0)||!Number.isFinite(hp)||!(hp>0)||
@@ -1234,7 +1234,7 @@ function rememberNestedOrdinarySettlement(child,when,evidence,event){
   const checkpoint=parent.nestedTargetCheckpoint;
   parent.nestedOrdinarySettlement=parents.length===1&&parent.nestedOrdinarySettlement===undefined&&
     checkpoint.hpAfter===evidence.hp_before&&sameMitigationTime(checkpoint.when,when)?
-    {child,when,uid:checkpoint.uid,hpBefore:evidence.hp_before,
+    {child,when,event,uid:checkpoint.uid,hpBefore:evidence.hp_before,
      hpAfter:evidence.hp_after,real:evidence.real_delta}:null;
  }
 }
@@ -1245,6 +1245,11 @@ function noteNestedSettlementFailure(scope,stage,reason,childType,childTargetTyp
   parent_target_stage:commit?(commit.returned?'returned':'in_progress'):'unavailable',
   ...(Number.isInteger(childType)?{child_type:childType}:{}),
   ...(Number.isInteger(childTargetType)?{child_target_type:childTargetType}:{})};
+}
+function matchesOpeningAutoChessScope(scope,when){
+ const stamp=when.native_autochess_scope;
+ return scope.nativeScopeKey===undefined?stamp===undefined:
+  !!scope.nativeScopeKey&&stamp?.status==='available'&&stamp.scope_key===scope.nativeScopeKey;
 }
 function captureNestedElementalStep(parent,child,checkpoint,hpBefore){
  try{
@@ -1258,9 +1263,8 @@ function captureNestedElementalStep(parent,child,checkpoint,hpBefore){
      damageTargetUid(child.target)!==checkpoint.uid||!child.mod.add(0x10).readPointer().equals(child.target)||
      parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
      shieldContextUnknown(child.when.frame,child.target)||shieldTotal(child.when.frame,child.target)!==0)return null;
-  const opening=stampEventScope({...child.when}),stamp=opening.native_autochess_scope;
-  if(parent.nativeScopeKey===undefined?stamp!==undefined:
-     !parent.nativeScopeKey||stamp?.status!=='available'||stamp.scope_key!==parent.nativeScopeKey)return null;
+  const opening=stampEventScope({...child.when});
+  if(!matchesOpeningAutoChessScope(parent,opening))return null;
   const targetId=commit.targetKey,targetClass=commit.targetClass;
   const source=child.mod.readPointer();
   if(source.isNull())return {child,source,cid:null,hpBefore,opening,targetId,targetClass};
@@ -1338,12 +1342,28 @@ function verifiedParentBeforeNestedSettlement(scope,target,when,amount,type){
   const proof={target_uid:String(checkpoint.uid),parent_real_delta:parentReal,
    parent_hp_before:checkpoint.hpBefore,parent_hp_after:checkpoint.hpAfter};
   if(checkpoint.ordinary){
-   const kill=scope.nestedOrdinarySettlement;
-   if(!kill||kill.child!==checkpoint.child||!kill.child.settlementRecordEmitted||
-      checkpoint.uid!==kill.uid||kill.hpBefore!==checkpoint.hpAfter||
-      !sameMitigationTime(kill.when,when)||targetHp(target)!==kill.hpAfter)return null;
-   scope.nestedParentSettlementProof={...proof,child_hp_before:kill.hpBefore,child_hp_after:kill.hpAfter,
-    child_real_delta:kill.real};
+   const child=scope.nestedOrdinarySettlement;
+   if(!child||child.child!==checkpoint.child||!child.child.settlementRecordEmitted||
+      child.event!==child.child.settlementRecord||child.event.target_uid!==String(checkpoint.uid)||
+      child.event.target_instance!==target.toString()||
+      checkpoint.uid!==child.uid||child.hpBefore!==checkpoint.hpAfter||
+      !sameMitigationTime(child.when,when))return null;
+   const finalHp=targetHp(target);
+   if(childrenFirst){
+    if(scope.unclockedShield||child.child.unclockedShield||!matchesOpeningAutoChessScope(scope,when)||
+       !sameNativeEventScope(child.event,when))return null;
+    if(parentReal===0){
+     if(!(amount>0)||child.hpAfter!==0||finalHp!==0)return null;
+     zeroAfterChildren=true;
+    }else if(finalHp===null||!(child.hpAfter>finalHp)||
+             Math.abs(child.hpAfter-finalHp+parentReal)>Math.max(0.01,Math.abs(parentReal)*1e-6))return null;
+    parentBefore=proof.parent_hp_before=child.hpAfter;
+    parentAfter=proof.parent_hp_after=finalHp;
+    proof.parent_entry_hp_before=checkpoint.hpBefore;
+    proof.ordering=zeroAfterChildren?'child_before_parent_zero':'child_before_parent';
+   }else if(finalHp!==child.hpAfter)return null;
+   scope.nestedParentSettlementProof={...proof,child_hp_before:child.hpBefore,child_hp_after:child.hpAfter,
+    child_real_delta:child.real};
   }else{
    if(!chain||chain.pending||!chain.steps.length||scope.nestedCrossThreadActivity||scope.nestedModifierConflict)return null;
    let hp=checkpoint.hpAfter,sequence=0;
@@ -1949,17 +1969,22 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  // HP may be capped after the formula even while the target is alive. Use
  // measured HP endpoints and the numeric shield callbacks for this hit.
  const hit=scope.targetHit;
- const chainBefore=targetCommit&&scope.nestedElementalChainProof?.ordering==='children_before_parent'?
-  scope.nestedElementalChainProof.parent_hp_before:hit?.hpBefore;
+ const nestedParent=scope.nestedParentSettlementProof,elementalChain=scope.nestedElementalChainProof;
+ // A certified child-first hit starts at the child's closing HP. The target
+ // callback checkpoint still carries the earlier HP at parent entry.
+ let checkedHpBefore=hit?.hpBefore;
+ if(targetCommit&&elementalChain?.ordering==='children_before_parent')checkedHpBefore=elementalChain.parent_hp_before;
+ if(targetCommit&&(nestedParent?.ordering==='child_before_parent'||nestedParent?.ordering==='child_before_parent_zero'))
+  checkedHpBefore=nestedParent.parent_hp_before;
  const capturedHp=exact&&Number.isFinite(real)&&real<=0&&cancel===0&&exactEvidence?.real_delta===real&&
     Number.isFinite(exactEvidence.hp_before)&&Number.isFinite(exactEvidence.hp_after)&&
     Math.abs(exactEvidence.hp_before-exactEvidence.hp_after+real)<=Math.max(0.01,Math.abs(real)*1e-6)&&
     (type===5&&exactEvidence.hp_before===scope.hpBefore||
      (targetCommit||output)&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
-     !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===chainBefore);
+     !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===checkedHpBefore);
  let killed;
  if(capturedHp&&exactEvidence.killed===true&&exactEvidence.hp_after===0&&
-    (real<0||nested&&targetCommit&&scope.nestedElementalChainProof))killed=true;
+    (real<0||nested&&targetCommit))killed=true;
  if(capturedHp&&exactEvidence.killed===false&&exactEvidence.hp_after>0)killed=false;
  // A matched output can leave HP and shield unchanged during a target
  // transition. Keep the ordinary damage event without adding a zero hit.

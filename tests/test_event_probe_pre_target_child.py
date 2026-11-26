@@ -37,6 +37,24 @@ def test_complete_prior_child_and_later_lethal_parent_settle_separately(reports,
 
 
 @pytest.mark.parametrize('platform', ['android', 'native_pc'])
+def test_child_inside_parent_target_callback_requires_separate_hp_intervals(reports, platform):
+    report = reports[platform]['after_target_entry']
+    child, parent = settlements(report)
+    expected = report['expected']
+    assert child['settlement_complete'] is True and child['killed'] is False
+    assert child['amount'] == pytest.approx(expected['child_amount'])
+    assert parent['settlement_complete'] is True and parent['killed'] is True
+    assert parent['amount'] == pytest.approx(expected['amount'])
+    assert parent['nominal_amount'] == pytest.approx(expected['nominal'])
+    assert parent['target_uid'] == child['target_uid']
+    assert parent['hp_before'] == child['hp_after']
+    proof = parent['proof']['nested_settlement']
+    assert proof['ordering'] == 'child_before_parent'
+    assert proof['parent_entry_hp_before'] == child['hp_before']
+    assert report['mark']['active'] == 0
+
+
+@pytest.mark.parametrize('platform', ['android', 'native_pc'])
 def test_other_target_activity_does_not_block_the_parent_hp_interval(reports, platform):
     report = reports[platform]['different_target_parallel']
     parent, = [event for event in settlements(report) if event.get('killed') is True]
