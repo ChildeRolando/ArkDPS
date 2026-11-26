@@ -23,14 +23,23 @@ No hybrid rest/apply read wrappers remain in the timed path. The source fixture
 ptr factory still has a setup/replay branch. Input writes and the driver loop
 remain in measured elapsed cost; do not interpret the rate as an exact production worker ceiling.
 
-Excluded: complete live scope/publication graph, journal materialization, actual
-bounded FIFO/IPC, and native E/L snapshots for the nested dirty callback. Dirty
-business callbacks themselves execute. These missing layers must be exercised
-before declaring the 30k setter/s + 300/500ms pause requirement passed. The report
-explicitly remains `NOT_FULL_WORKER_ACCEPTANCE` and never measures game FPS.
+With `--full-scope`, the real first-cold fixture prepares metadata and a 40-Chess
+plus Token world, then exports the production 64-field scope and 785-guard
+publication plans. C++ publishes the actual CaptureConfigurations and binds the
+exact retained configuration after every begin. The real source closed-prefix
+and publication journal execute, including the returned publication fence.
 
-Branches check unchanged emits none, every damage change emits one HP observation,
-and a monotone heal run coalesces to two records preserving its actual endpoints.
-All fused dispatches require complete=true and the same leave receiver; swallowed
-structural failures cannot yield a successful receipt. Native read/scalar/point
-counts and capture/view-initialization aggregates help identify the next bottleneck.
+`--queue-rate 30000 --pause-ms 500 --count 300000 --full-scope --pub-every 8571`
+uses actual CaptureLanes with its bounded private queue and four 32MiB spill
+banks. A paced independent producer captures real E/L snapshots; the consumer
+replays serialized owned bytes with strict raw-ticket ordering. Repeat pause
+0/300/500 serially. Requested duration, actual producer duration, queue failure,
+service rate, bytes, age and 100ms backlog trend are reported separately. A
+queue-full stop never counts as completing the requested ten seconds.
+
+Native FFI entry counts and returned slots are measured; internal OwnedView
+field read counts are not measured. GraphCheck may return proof without dynamic
+slots but still validates all required owned fields. Excluded: IPC/native hook
+trampoline, real game scheduling/FPS, and native E/L snapshots of the nested dirty
+callback. Dirty business callbacks execute. Results remain
+`NOT_FULL_WORKER_ACCEPTANCE`; this is an owned workload, not live acceptance.

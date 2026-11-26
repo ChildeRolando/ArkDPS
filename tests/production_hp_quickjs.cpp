@@ -1,7 +1,7 @@
 extern "C" {
 #include "quickjs.h"
 }
-#include "engine_capture_plan.h"
+#include "engine_capture_pipeline.h"
 #include "owned_replay_js.h"
 #include <chrono>
 #include <fstream>
@@ -17,12 +17,19 @@ static std::vector<Region> regions;
 static std::unique_ptr<CompiledPlan> plan;
 static Snapshot snapshot;
 static Context input;
+static std::unique_ptr<CaptureConfigurations> configurations;
+static std::unique_ptr<Lane> capture_lane;
 static Region *region(std::uintptr_t a, std::size_t n) {
-  for (auto &r : regions)
-    if (a >= r.address && a - r.address <= r.data.size() &&
-        n <= r.data.size() - (a - r.address))
-      return &r;
-  return nullptr;
+  auto it = std::upper_bound(
+      regions.begin(), regions.end(), a,
+      [](auto address, const Region &r) { return address < r.address; });
+  if (it == regions.begin())
+    return nullptr;
+  --it;
+  return a - it->address <= it->data.size() &&
+                 n <= it->data.size() - (a - it->address)
+             ? &*it
+             : nullptr;
 }
 static bool read_memory(void *, std::uintptr_t a, void *out,
                         std::size_t n) noexcept {
@@ -41,6 +48,14 @@ static JSValue configure(JSContext *c, JSValueConst, int argc,
     auto j = J::parse(text);
     JS_FreeCString(c, text);
     plan = std::make_unique<CompiledPlan>(compile_plan(j.at("plan"), 0x9000));
+    if (j.contains("scope")) {
+      configurations = std::make_unique<CaptureConfigurations>();
+      configurations->intern(*plan);
+      configurations->publish(j.at("scope"), false);
+      configurations->publish(j.at("publication"), true);
+      capture_lane = std::make_unique<Lane>(CaptureQueue::Config{2, 4096}, 1);
+      capture_lane->depth = 1;
+    }
     for (const auto &r : j.at("ranges")) {
       Region range;
       range.address = plan_address(r.at("address"));
@@ -76,13 +91,80 @@ struct Profile {
   double capture_ms = 0, view_ms = 0;
 };
 static Profile profile;
+static std::uint64_t batch_calls = 0, graph_calls = 0, graph_check_calls = 0,
+                     batch_output_bytes = 0, graph_output_bytes = 0,
+                     selected_slots = 0;
+static void batch_size(JSContext *c, JSValueConst value, std::uint64_t &bytes) {
+  if (!JS_IsObject(value))
+    return;
+  std::size_t size = 0;
+  auto *data = JS_GetArrayBuffer(c, &size, value);
+  if (!data)
+    return;
+  bytes += size;
+  if (size >= 16) {
+    std::uint32_t n = 0;
+    std::memcpy(&n, data + 4, 4);
+    if (n <= 32 && size >= 16 + 16 * n)
+      for (unsigned i = 0; i < n; i++) {
+        std::uint16_t status = 0;
+        std::memcpy(&status, data + 16 + i * 16, 2);
+        if (status != 0xffff)
+          ++selected_slots;
+      }
+  }
+}
+#ifdef ARKDPS_CAPTURE_GRAPH_BATCH
+static JSValue owned_graph(JSContext *c, JSValueConst self, int n,
+                           JSValueConst *args) {
+  ++graph_calls;
+  auto result = arkdps::owned_js::graph_read_batch(c, self, n, args);
+  batch_size(c, result, graph_output_bytes);
+  return result;
+}
+#ifdef ARKDPS_CAPTURE_GRAPH_CHECK
+static JSValue owned_graph_check(JSContext *c, JSValueConst self, int n,
+                                 JSValueConst *args) {
+  ++graph_check_calls;
+  return arkdps::owned_js::graph_check(c, self, n, args);
+}
+#endif
+#endif
+#ifdef ARKDPS_CAPTURE_READ_BATCH
+static JSValue owned_batch(JSContext *c, JSValueConst self, int n,
+                           JSValueConst *args) {
+  ++batch_calls;
+  auto result = arkdps::owned_js::read_batch(c, self, n, args);
+  batch_size(c, result, batch_output_bytes);
+  return result;
+}
+#endif
+static JSValue seal_plans(JSContext *, JSValueConst, int, JSValueConst *) {
+#ifdef ARKDPS_CAPTURE_READ_BATCH
+  arkdps::owned_js::seal_read_plans();
+#endif
+  return JS_UNDEFINED;
+}
 
-static JSValue edge(JSContext *c, JSValueConst, int, JSValueConst *argv) {
+static JSValue edge(JSContext *c, JSValueConst, int argc, JSValueConst *argv) {
   std::int32_t phase = 0;
   JS_ToInt32(c, &phase, argv[0]);
   const auto start = std::chrono::steady_clock::now();
-  const auto error = capture(*plan->plan, phase ? Phase::leave : Phase::entry,
-                             input, read_memory, nullptr, snapshot);
+  RecordHeader raw_header;
+  raw_header.phase = phase ? Phase::leave : Phase::entry;
+  raw_header.invocation = (serial + 2) / 2;
+  if (argc > 1 && JS_ToBool(c, argv[1]))
+    raw_header.publication_request = serial + 1;
+  Error error = Error::ok;
+  if (configurations) {
+    capture_lane->calls[0].id = raw_header.invocation;
+    capture_scope_point(*plan, raw_header.phase, input, configurations->pin(0),
+                        read_memory, nullptr, snapshot, raw_header,
+                        capture_lane.get());
+    error = snapshot.error;
+  } else
+    error = capture(*plan->plan, raw_header.phase, input, read_memory, nullptr,
+                    snapshot);
   if (error != Error::ok)
     return JS_ThrowInternalError(c, "capture error %u",
                                  static_cast<unsigned>(error));
@@ -95,7 +177,15 @@ static JSValue edge(JSContext *c, JSValueConst, int, JSValueConst *argv) {
   const auto result = arkdps::owned_js::begin(
       snapshot.segments.data(), snapshot.segment_count, snapshot.fields.data(),
       snapshot.field_count, snapshot.bytes.data(), snapshot.byte_count,
-      plan->roles, ++serial, Error::ok);
+      configurations ? configurations->roles : plan->roles, ++serial,
+      Error::ok);
+#ifdef ARKDPS_CAPTURE_GRAPH_BATCH
+  const auto *exact = configurations ? configurations->pin(0) : nullptr;
+  if (exact && exact->id != raw_header.configuration_id)
+    exact = nullptr;
+  arkdps::owned_js::bind_graphs(exact, raw_header.scope_revision,
+                                raw_header.publication_revision, 0);
+#endif
   profile.view_ms += std::chrono::duration<double, std::milli>(
                          std::chrono::steady_clock::now() - captured)
                          .count();
@@ -108,6 +198,11 @@ static JSValue edge(JSContext *c, JSValueConst, int, JSValueConst *argv) {
   header[3] = serial;
   header[4] = serial + 1;
   header[5] = 1;
+  header[6] = raw_header.publication_request;
+  header[9] = raw_header.scope_revision;
+  header[10] = raw_header.publication_revision;
+  header[11] = raw_header.cold_revision;
+  header[20] = raw_header.scope_unavailable ? 1 : 0;
   header[14] = phase ? 0 : 1;
   header[15] = phase ? 0 : 1;
   header[17] = 1;
@@ -119,6 +214,8 @@ static JSValue edge(JSContext *c, JSValueConst, int, JSValueConst *argv) {
 static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
   if (n && JS_ToBool(c, args[0])) {
     profile = {};
+    batch_calls = graph_calls = graph_check_calls = batch_output_bytes =
+        graph_output_bytes = selected_slots = 0;
     return JS_UNDEFINED;
   }
   J j = {{"scalar_calls", profile.scalar},
@@ -129,6 +226,20 @@ static JSValue report(JSContext *c, JSValueConst, int n, JSValueConst *args) {
          {"capture_read_bytes", profile.read_bytes},
          {"capture_ms", profile.capture_ms},
          {"view_initialize_ms", profile.view_ms}};
+  j["batch_calls"] = batch_calls;
+  j["graph_calls"] = graph_calls;
+  j["graph_check_calls"] = graph_check_calls;
+  j["batch_output_bytes"] = batch_output_bytes;
+  j["graph_output_bytes"] = graph_output_bytes;
+  j["selected_field_slots"] = selected_slots;
+  j["owned_view_internal_read_calls"] = "not_measured";
+#ifdef ARKDPS_CAPTURE_READ_BATCH
+  j["registered_plans"] = arkdps::owned_js::binding().read_plans.size();
+  j["plans_sealed"] = !arkdps::owned_js::binding().read_plans_open;
+#else
+  j["registered_plans"] = 0;
+  j["plans_sealed"] = false;
+#endif
   const auto text = j.dump();
   return JS_NewStringLen(c, text.data(), text.size());
 }
@@ -187,25 +298,30 @@ static JSValue timer(JSContext *c, JSValueConst, int, JSValueConst *) {
   return JS_NewFloat64(c,
                        std::chrono::duration<double, std::milli>(now).count());
 }
+#include "production_hp_queue.h"
+
 int main(int argc, char **argv) {
-  if (argc != 2)
+  if (argc < 2 || argc > 5)
     return 2;
   std::ifstream stream(argv[1]);
   std::string source((std::istreambuf_iterator<char>(stream)), {});
   arkdps::owned_js::binding().poison = []() noexcept { poisoned = true; };
   auto *rt = JS_NewRuntime();
   auto *c = JS_NewContext(rt);
+  arkdps::owned_js::install(c, []() noexcept { poisoned = true; });
   JS_SetMemoryLimit(rt, 512 * 1024 * 1024);
   auto g = JS_GetGlobalObject(c);
   JS_SetPropertyStr(c, g, "print", JS_NewCFunction(c, print, "print", 1));
   JS_SetPropertyStr(c, g, "__monotonicMs",
                     JS_NewCFunction(c, timer, "__monotonicMs", 0));
+  JS_SetPropertyStr(c, g, "__ownedQueue",
+                    JS_NewCFunction(c, queue_run, "__ownedQueue", 2));
   JS_SetPropertyStr(c, g, "__ownedConfigure",
                     JS_NewCFunction(c, configure, "__ownedConfigure", 1));
   JS_SetPropertyStr(c, g, "__ownedPut",
                     JS_NewCFunction(c, put, "__ownedPut", 2));
   JS_SetPropertyStr(c, g, "__ownedEdge",
-                    JS_NewCFunction(c, edge, "__ownedEdge", 1));
+                    JS_NewCFunction(c, edge, "__ownedEdge", 2));
   JS_SetPropertyStr(c, g, "__nativeOwnedRead",
                     JS_NewCFunction(c, owned_bytes, "__nativeOwnedRead", 5));
   JS_SetPropertyStr(c, g, "__nativeOwnedScalar",
@@ -223,6 +339,33 @@ int main(int argc, char **argv) {
                     JS_NewCFunction(c, healthy, "__nativeReplayHealthy", 0));
   JS_SetPropertyStr(c, g, "__ownedProfile",
                     JS_NewCFunction(c, report, "__ownedProfile", 1));
+  JS_SetPropertyStr(c, g, "__sealReadonlyPlans",
+                    JS_NewCFunction(c, seal_plans, "__sealReadonlyPlans", 0));
+#ifdef ARKDPS_CAPTURE_GRAPH_BATCH
+  JS_SetPropertyStr(
+      c, g, "__nativeOwnedGraphReadBatch",
+      JS_NewCFunction(c, owned_graph, "__nativeOwnedGraphReadBatch", 4));
+#ifdef ARKDPS_CAPTURE_GRAPH_CHECK
+  JS_SetPropertyStr(
+      c, g, "__nativeOwnedGraphCheck",
+      JS_NewCFunction(c, owned_graph_check, "__nativeOwnedGraphCheck", 3));
+#endif
+#endif
+#ifdef ARKDPS_CAPTURE_READ_BATCH
+  JS_SetPropertyStr(
+      c, g, "__nativeOwnedReadBatch",
+      JS_NewCFunction(c, owned_batch, "__nativeOwnedReadBatch", 5));
+#endif
+  for (int i = 2; i < argc; i++) {
+    if (std::string(argv[i]) == "--disable-ascii")
+      JS_SetPropertyStr(c, g, "__nativeOwnedUtf16Ascii", JS_UNDEFINED);
+    if (std::string(argv[i]) == "--disable-graph")
+      JS_SetPropertyStr(c, g, "__nativeOwnedGraphReadBatch", JS_UNDEFINED);
+    if (std::string(argv[i]) == "--disable-batch") {
+      JS_SetPropertyStr(c, g, "__nativeOwnedReadBatch", JS_UNDEFINED);
+      JS_SetPropertyStr(c, g, "__nativeOwnedReadPlanRegister", JS_UNDEFINED);
+    }
+  }
   JS_FreeValue(c, g);
   auto result = JS_Eval(c, source.data(), source.size(), "owned-hp-bench.js",
                         JS_EVAL_TYPE_GLOBAL);
