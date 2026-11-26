@@ -1085,6 +1085,7 @@ void initialize_on_worker(const std::string& source) {
         if (!JS_IsFunction(c,runtime.replay_dispatch)) throw std::runtime_error("native replay dispatch unavailable");
         runtime.dispatch = JS_GetPropertyStr(c, global, "__arkdpsRequest");
         evaluate(c, source, "event-probe.js");
+        arkdps::owned_js::seal_read_plans();
         runtime.prefix_projection=JS_GetPropertyStr(c,global,"__arkdpsOnClosedRecord");
         runtime.publication_publish=JS_GetPropertyStr(c,global,"__arkdpsPublishClosedRecord");
         runtime.publication_request=JS_GetPropertyStr(c,global,"__arkdpsPublicationRequest");

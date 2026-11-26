@@ -227,6 +227,7 @@ scope/mode与当前配置一致且请求号不早于未修复世代。失败、�
 再拒绝一次实际cold候选，要求两个后续请求都捕获cold proof，成功修复后下一次恢复warm。
 它是请求世代/owned读取的验收，不是完整游戏关卡或吞吐替代。
 
+
 ### 缺少通知回调时的结算证据
 
 伤害仍只有 shared runtime 的 `verifiedTargetSettlement → settleDamage` 一个验证与归约入口。
@@ -251,3 +252,25 @@ HP record 不含生产计划中不存在的父 checkpoint，缺证负例必须�
 持续消费能力必须用实际共享 HP 回调和捕获形状验证。128-byte ABI 夹具、索引/标量微测和
 字节容量证明各自只能验证其边界，不能代替完整 scope/publication、真实 FIFO 和暂停后追赶验收，
 也不能代替实机 FPS。实验性的指针表示或字符串 codec 未通过收益门槛时不并入生产候选。
+
+
+### 当前lease的原始ReadPlan批读取
+
+ReadPlan在脚本setup注册，source evaluate结束后由engine显式seal；callback和宿主journal均
+不能再注册。每VM最多32plans，每plan最多32slots、12级指针路径；只描述固定raw bytes
+（1..128）或UTF16原始klass8/length4/text，单次输出硬限16384字节。计划绑定metadata对象
+对应的内部ID，role名在执行时映射当前append-only角色表。它不持有现场值，不计算HP、金额、
+回血、XOR结果、归属或scope结论。
+
+`__arkdpsRegisterOwnedReadPlan(metadata,spec)`返回不可伪造handle；旧provider完全没有API时
+才返回null。`__arkdpsOwnedReadBatch(handle,arg0,tiers)`只在当前固定provider/lease执行，
+每一级pointer与最终bytes仍调用同一OwnedReplayView精确role/checkpoint/field读取；unique
+selector保留原Witness的单字段状态/并发优先级。结构缺口独立poison，不因JS catch消失；
+planned错误只在该slot保留status且没有payload，未请求tier为ffff，访问它是结构缺口。
+
+AB头16字节为u32 version/slot_count/executed_tiers/payload_bytes，各slot随后16字节为
+u16 status/kind、u32 offset/length/reserved0。成功slot由facade返回DataView，字符串raw布局为
+klass8+signed length4+UTF16 bytes；原JS业务验证继续唯一消费。所有返回bytes为新owned副本，
+保留它不延长native lease，也不授权下一record复用事实。注册/执行函数同其余provider一起
+固定身份，midrecord替换global不改变当前选择，下一record失配拒收，不回退现场读取。
+

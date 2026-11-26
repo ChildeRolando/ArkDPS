@@ -1,0 +1,36 @@
+"""Actual QuickJS owned read-plan boundaries; uses an explicit existing cache."""
+from pathlib import Path
+from hashlib import sha256
+import os
+import shutil
+import subprocess
+import pytest
+ROOT=Path(__file__).resolve().parents[1]
+
+
+def test_read_batch_js_provider_contract():
+    result=subprocess.run(['node',str(ROOT/'tests/native_pc_read_batch_fixture.js')],cwd=ROOT,
+                          capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stdout+result.stderr
+    assert 'PASS owned read batch facade:' in result.stdout
+
+
+def test_owned_read_plan_native_boundaries(tmp_path):
+    compiler=shutil.which('g++');configured=os.environ.get('ARKDPS_NATIVE_QJS_STAGE')
+    if compiler is None or not configured:
+        pytest.skip('set ARKDPS_NATIVE_QJS_STAGE to verified existing QuickJS cache; no download')
+    stage=Path(configured);objects=[stage/f'object-{i}.o' for i in range(5)];headers=stage/'quickjs-headers'
+    if not all(p.is_file() for p in objects):
+        objects=[stage/name for name in ('quickjs.o','dtoa.o','libregexp.o','libunicode.o','cutils.o')];headers=stage
+    if not all(p.is_file() for p in objects) or not (headers/'quickjs.h').is_file() or not (stage/'json.hpp').is_file():
+        pytest.skip('explicit QuickJS stage lacks existing objects/headers')
+    assert sha256((stage/'json.hpp').read_bytes()).hexdigest()=='9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6'
+    binary=tmp_path/'owned-read-plan.exe'
+    built=subprocess.run([compiler,'-std=c++17','-static','-O2','-pthread','-Wall','-Wextra','-Werror',
+        '-I',str(ROOT/'native_pc/native_event_runtime'),'-isystem',str(headers),'-isystem',str(stage),
+        str(ROOT/'tests/owned_read_plan_test.cpp'),*[str(p) for p in objects],'-o',str(binary)],
+        capture_output=True,text=True,timeout=60)
+    assert built.returncode==0,built.stdout+built.stderr
+    run=subprocess.run([str(binary)],capture_output=True,text=True,timeout=10)
+    assert run.returncode==0,(run.returncode,run.stdout,run.stderr)
+    assert 'PASS owned read plans:' in run.stdout
