@@ -25,6 +25,9 @@ struct CompiledPlan {
     std::array<SavedEntryRoot, max_roots> entry_roots{};
     std::uint8_t entry_root_count=0;
     bool apply_modifier=false, buff_damage=false, parent_checkpoint_fields=false;
+    bool hp_profile=false, hp_dirty=false, hp_normal=false;
+    std::uintptr_t hp_enemy_class=0;
+    std::array<std::uint8_t,max_fields> hp_field_kind{};
     std::unique_ptr<CompiledPlan> cold;
     bool force_cold_leave=false, force_full_entry=false, force_cold_conditional=false;
     std::uint8_t force_cold_arg=0;
@@ -182,6 +185,24 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
             if (value.at("stop_utf16_literal")!="dynamic")
                 throw std::runtime_error("unsupported capture UTF16 stop literal");
             field.stop_at_dynamic=true;
+        }
+    }
+    if (source.contains("hp_filter")) {
+        const auto& filter=source.at("hp_filter");
+        result.hp_profile=true;
+        result.hp_dirty=!filter.at("attribute_index_arg").is_null();
+        if (result.hp_dirty && plan_uint(filter.at("attribute_index_arg"),15)!=1)
+            throw std::runtime_error("unsupported HP attribute argument");
+        if (plan_uint(filter.at("receiver_arg"),15)!=0 || plan_uint(filter.at("max_hp_attribute"),UINT32_MAX)!=0)
+            throw std::runtime_error("unsupported HP early filter layout");
+        if (!filter.at("enemy_class").is_null()) result.hp_enemy_class=plan_address(filter.at("enemy_class"));
+        result.hp_normal=filter.at("normal_setter").get<bool>();
+        for (unsigned i=0;i<source.at("fields").size();++i) {
+            const auto& field=source.at("fields")[i];
+            const auto name=field.value("name",std::string());
+            result.hp_field_kind[i]=name=="hp.identity" ? 1 : name=="hp.born" ? 2
+                : name=="hp.before" ? 3 : name=="hp.closing" ? 4
+                : field.value("tier",std::string())=="changed" ? 5 : 0;
         }
     }
     result.apply_modifier=source.value("name",std::string())=="Entity.ApplyModifier";

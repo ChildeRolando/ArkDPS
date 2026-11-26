@@ -3,10 +3,11 @@
 #include <iostream>
 using namespace arkdps::capture;
 using J=nlohmann::json;
-struct Reads { unsigned count=0; bool mutate=false; std::uint64_t word=42; };
+struct Reads { unsigned count=0; bool mutate=false; std::uint64_t word=42; std::uint8_t born=0; };
 bool reader(void* p,std::uintptr_t address,void* out,std::size_t size) noexcept {
  auto& r=*static_cast<Reads*>(p); ++r.count;
  if (r.mutate && r.count==2) ++r.word;
+ if(address==reinterpret_cast<std::uintptr_t>(&r.born)&&size==1){std::memcpy(out,&r.born,1);return true;}
  if(address!=reinterpret_cast<std::uintptr_t>(&r.word)||size!=8)return false;
  std::memcpy(out,&r.word,size);return true;
 }
@@ -68,5 +69,28 @@ int main(){
  assert(lane->parent_checkpoints[0].invocation==UINT64_MAX-10 && lane->parent_checkpoints[0].checkpoint==1);
  assert(lane->parent_checkpoints[1].invocation==UINT64_MAX-5 && lane->parent_checkpoints[1].checkpoint==2);
  assert(snapshot->fields[2].checkpoint==1 && snapshot->fields[3].checkpoint==2);
+ plan["arg_count"]=2;plan["arg_mask"]=3;plan["profile"]="hp";
+ plan["hp_filter"]={{"receiver_arg",0},{"attribute_index_arg",1},{"max_hp_attribute",0},{"enemy_class","42"},{"normal_setter",false}};
+ auto hp=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*hp);
+ lane->depth=1;lane->calls[0].hp_ignored=false;context.args_valid=3;context.args[1]=1;
+ reads.count=0;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count==0 && snapshot->field_count==0 && lane->calls[0].hp_ignored);
+ capture_scope_point(*hp,Phase::leave,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count==0 && snapshot->field_count==0);
+ hp->hp_field_kind[1]=1;
+ hp->plan->fields[hp->plan->field_count]=hp->plan->fields[1];
+ auto& born_field=hp->plan->fields[hp->plan->field_count++];
+ born_field.id=20;born_field.bytes=1;born_field.absolute_address=reinterpret_cast<std::uintptr_t>(&reads.born);
+ hp->hp_field_kind[hp->plan->field_count-1]=2;
+ context.args[1]=0;reads.count=0;reads.mutate=false;reads.word=42;reads.born=0;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count==2 && snapshot->field_count==2 && lane->calls[0].hp_ignored);
+ reads.count=0;reads.born=1;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count>2 && !lane->calls[0].hp_ignored);
+ reads.count=0;reads.born=0;reads.word=43;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count>2 && !lane->calls[0].hp_ignored);
  std::cout<<"scope bracket, clock spanning graph, pinned immutable revision passed\n";
 }

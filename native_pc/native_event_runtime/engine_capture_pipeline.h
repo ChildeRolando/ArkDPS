@@ -12,9 +12,37 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
                                 ReadMemory reader, void* user,
                                 Snapshot& snapshot, RecordHeader& header, Lane* lane=nullptr) noexcept {
     capture_begin(snapshot,phase,context,max_bytes,max_reads);
+    InvocationState* invocation=lane && lane->depth ? &lane->calls[lane->depth-1] : nullptr;
+    if (base.hp_profile && invocation) {
+        if (phase==Phase::entry)
+            invocation->hp_ignored=base.hp_dirty && (context.args_valid&2u)
+                && static_cast<std::uint32_t>(context.args[1])!=0;
+        if (invocation->hp_ignored) { capture_finalize(snapshot); return; }
+        if (phase==Phase::entry) {
+            for (std::uint16_t i=0;i<base.plan->field_count;++i)
+                if (base.hp_field_kind[i]==1 || base.hp_field_kind[i]==2)
+                    capture_append(*base.plan,phase,context,reader,user,snapshot,i,i+1);
+            std::uintptr_t klass=0; bool has_klass=false, unborn=false;
+            for (unsigned i=0;i<snapshot.field_count;++i) {
+                const auto& state=snapshot.fields[i];
+                if (state.error!=Error::ok || state.final_segment>=snapshot.segment_count) continue;
+                const auto& segment=snapshot.segments[state.final_segment];
+                for (unsigned j=0;j<base.plan->field_count;++j) if (base.plan->fields[j].id==state.id) {
+                    if (base.hp_field_kind[j]==1 && segment.size>=8) {
+                        std::memcpy(&klass,snapshot.bytes.data()+segment.offset,8);has_klass=true;
+                    } else if (base.hp_field_kind[j]==2 && segment.size>=1)
+                        unborn=snapshot.bytes[segment.offset]==std::byte{0};
+                }
+            }
+            if (has_klass && base.hp_enemy_class && klass==base.hp_enemy_class && unborn) {
+                invocation->hp_ignored=true; capture_finalize(snapshot); return;
+            }
+        }
+    }
     const auto base_stage=[&](unsigned stage) noexcept {
         for (std::uint16_t i=0;i<base.plan->field_count;++i)
-            if (base.field_stage[i]==stage)
+            if (base.field_stage[i]==stage && !(phase==Phase::entry && base.hp_profile && invocation
+                && (base.hp_field_kind[i]==1 || base.hp_field_kind[i]==2)))
                 capture_append(*base.plan,phase,context,reader,user,snapshot,i,i+1);
     };
     base_stage(1);

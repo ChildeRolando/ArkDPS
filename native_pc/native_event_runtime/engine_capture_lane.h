@@ -29,7 +29,7 @@ enum class LaneFault : unsigned { none, thread_identity, threads_full, depth_ful
     invalid_stack, replay_structure, invalid_record, live_replay_access, publication_failure };
 struct InvocationState {
     void* hook = nullptr;
-    bool apply_modifier=false, buff_damage=false;
+    bool apply_modifier=false, buff_damage=false, hp_ignored=false;
     std::uint64_t id = 0, parent = 0, mode_epoch = 0;
     std::uintptr_t return_address = 0;
     const CaptureConfiguration* configuration=nullptr;
