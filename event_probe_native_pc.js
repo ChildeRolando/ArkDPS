@@ -273,6 +273,10 @@ const probeAdapter={
   if(typeof __arkdpsColdClassIdentity!=='function')__arkdpsReplayGap('immutable class identity not frozen');
   return __arkdpsColdClassIdentity(klass,name,namespace);
  },
+ captureClassLineage(klass){
+  if(typeof __arkdpsColdClassLineage!=='function')__arkdpsReplayGap('immutable class lineage not frozen');
+  return __arkdpsColdClassLineage(klass);
+ },
  captureImmutableMetadata(address,size){
   if(typeof __arkdpsColdMetadataRead==='function')return __arkdpsColdMetadataRead(address,size);
   if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive())__arkdpsReplayGap('immutable metadata not frozen');

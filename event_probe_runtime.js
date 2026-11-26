@@ -19,6 +19,25 @@ function immutableClassParent(klass){
  }
  return klass.add(0x58).readPointer();
 }
+const immutableClassLineages=new Map();
+function immutableClassLineage(klass,check=null){
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureClassLineage==='function')
+  return probeAdapter.captureClassLineage(klass);
+ const key=klass.toString();
+ if(immutableClassLineages.has(key))return immutableClassLineages.get(key);
+ const lineage=[],seen=new Set();
+ for(let current=klass;!current.isNull();current=immutableClassParent(current)){
+  if(check)check(8);
+  const address=current.toString();
+  if(seen.has(address))throw new Error('class lineage cycle');
+  // This is a work budget, never evidence that a class is unrelated.
+  if(lineage.length>=4096)throw new Error('class lineage metadata budget');
+  seen.add(address);lineage.push(current);
+ }
+ const complete=Object.freeze(lineage);
+ if(immutableClassLineages.size<4096)immutableClassLineages.set(key,complete);
+ return complete;
+}
 function captureInvocationRead(scope,read){return typeof probeAdapter.captureInvocationRead==='function'?probeAdapter.captureInvocationRead(scope,read):read();}
 function captureClockFrame(){return captureRead('clock_close',()=>clock.readU32());}
 function captureClockFixed(){return captureRead('clock_close',()=>clock.add(4).readS64());}
@@ -409,16 +428,14 @@ function isCharacterSourceClass(klass){
  if(klass.equals(base))return true;
  const key=klass.toString();
  if(sourceCharacterLineage.has(key))return sourceCharacterLineage.get(key);
- let current=klass;
- for(let depth=0;depth<10&&!current.isNull();depth++){
+ for(const current of immutableClassLineage(klass)){
   if(current.equals(base)){
    sourceCharacterLineage.set(key,true);
    return true;
   }
-  current=immutableClassParent(current);
  }
- // Class metadata is stable, but a failed or truncated walk proves nothing.
- if(current.isNull())sourceCharacterLineage.set(key,false);
+ // Only a complete, closed lineage can certify a negative result.
+ sourceCharacterLineage.set(key,false);
  return false;
 }
 function sourceCharacterUid(source,sourceId){

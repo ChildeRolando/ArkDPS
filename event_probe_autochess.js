@@ -587,13 +587,7 @@ function readAutoChess(identity,frame,fixed){
    for(let i=0;i<count;i++){
     const unit=read.p(items.add(0x20+i*8));
     try{
-     let k=read.p(unit),character=null,bObject=null;const seen=new Set();
-     for(let depth=0;depth<10&&!k.isNull();depth++){
-      if(seen.has(k.toString()))throw new Error('AutoChess token lineage cycle');seen.add(k.toString());
-      if(autoIdentity(k,'Character','Torappu.Battle'))character=k;
-      if(autoIdentity(k,'BObject','Torappu.Battle')){bObject=k;break;}
-      k=autoMetadataPointer(k.add(0x58),read);
-     }
+     const {character,bObject}=autoBattleClassLineage(read.p(unit));
      if(!character){liveCharacterDataUids=null;lifecycleInstances=null;continue;}
      read.layout(unit,autoLayout(character,'Character','Torappu.Battle',356,[[78,'<data>k__BackingField',0x538,[18]]]));
      const row=autoData(read.p(read.at(unit,'<data>k__BackingField')),read);
@@ -774,21 +768,18 @@ function stampAutoChessClock(when,allowRefresh=true){
  }
 }
 const AUTO_PRESENCE_SLOT_LIMIT=4096,AUTO_PRESENCE_CHARACTER_LIMIT=128;
-const autoPresenceLineages=new Map();
-function autoPresenceLineage(klass,check){
- const key=klass.toString();
- if(autoPresenceLineages.has(key))return autoPresenceLineages.get(key);
- let character=null,current=klass;
- for(let depth=0;depth<10&&!current.isNull();depth++){
-  check(24);
+function autoBattleClassLineage(klass,check=null){
+ let character=null;
+ for(const current of immutableClassLineage(klass,check)){
+  if(check)check(24);
   if(autoIdentity(current,'Character','Torappu.Battle'))character=current;
-  if(autoIdentity(current,'BObject','Torappu.Battle')){
-   const lineage={character,bObject:current};
-   if(autoPresenceLineages.size<128)autoPresenceLineages.set(key,lineage);
-   return lineage;
-  }
-  current=autoMetadataPointer(current.add(0x58));
+  if(autoIdentity(current,'BObject','Torappu.Battle'))return {character,bObject:current};
  }
+ return {character,bObject:null};
+}
+function autoPresenceLineage(klass,check){
+ const lineage=autoBattleClassLineage(klass,check);
+ if(lineage.bObject)return lineage;
  throw new Error('AutoChess presence lineage');
 }
 function captureAutoChessPresence(mark){
