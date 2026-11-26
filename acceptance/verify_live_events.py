@@ -961,6 +961,27 @@ def pc_mechanism_evidence(events):
                  and child.get('damage_type') == 5)
             and not proof_of(child).get(chain_key) and not proof_of(child).get('nested_settlement'))
 
+    def modern_modifier_observed(event):
+        observation = proof_of(event).get('native_modifier_observation')
+        return (number(event.get('nominal_amount'), nonnegative=True)
+                and event['nominal_amount'] + .01 >= event['amount']
+                and isinstance(observation, dict) and set(observation) == {'version', 'method', 'amount'}
+                and type(observation['version']) is int and observation['version'] == 1
+                and observation['method'] == 'Entity.ApplyModifier'
+                and number(observation['amount'], nonnegative=True)
+                and observation['amount'] == event['nominal_amount'])
+
+    def modern_target_callback(event):
+        checkpoint = proof_of(event).get('target_callback_checkpoint')
+        if (isinstance(checkpoint, dict) and set(checkpoint) == {'version', 'method', 'returned', 'source',
+                'source_character_uid', 'target_uid', 'hp_before', 'frame', 'game_time'}
+                and type(checkpoint['version']) is int and checkpoint['version'] == 1
+                and checkpoint['method'] == 'Unit.OnTakeDamage' and checkpoint['returned'] is True
+                and actor_equal(event, checkpoint) and checkpoint['target_uid'] == event['target_uid']
+                and clock_equal(event, checkpoint) and number(checkpoint['hp_before'], nonnegative=True)):
+            return checkpoint
+        return None
+
     def modern_witness(parent):
         sequence = parent.get('sequence')
         proof = proof_of(parent)
@@ -968,23 +989,10 @@ def pc_mechanism_evidence(events):
                 or not settled(parent) or not hp_evidence(parent) or not owned_actor(parent)
                 or parent.get('damage_type') not in (1, 2, 3) or parent['shield_absorbed'] != 0
                 or parent['amount'] != -parent['real_delta']
-                or not number(parent.get('nominal_amount'), nonnegative=True)
-                or parent['nominal_amount'] + .01 < parent['amount']):
+                or not modern_modifier_observed(parent)):
             return None
-        observation = proof.get('native_modifier_observation')
-        if (not isinstance(observation, dict) or set(observation) != {'version', 'method', 'amount'}
-                or type(observation['version']) is not int or observation['version'] != 1
-                or observation['method'] != 'Entity.ApplyModifier'
-                or not number(observation['amount'], nonnegative=True)
-                or observation['amount'] != parent['nominal_amount']):
-            return None
-        checkpoint = proof.get('target_callback_checkpoint')
-        if (not isinstance(checkpoint, dict) or set(checkpoint) != {'version', 'method', 'returned', 'source',
-                'source_character_uid', 'target_uid', 'hp_before', 'frame', 'game_time'}
-                or type(checkpoint['version']) is not int or checkpoint['version'] != 1
-                or checkpoint['method'] != 'Unit.OnTakeDamage' or checkpoint['returned'] is not True
-                or not actor_equal(parent, checkpoint) or checkpoint['target_uid'] != parent['target_uid']
-                or not clock_equal(parent, checkpoint) or not number(checkpoint['hp_before'], nonnegative=True)):
+        checkpoint = modern_target_callback(parent)
+        if checkpoint is None:
             return None
         chain = proof.get(chain_key)
         scalar = proof.get('nested_settlement')
@@ -1034,7 +1042,8 @@ def pc_mechanism_evidence(events):
             fields = {'target_uid', 'parent_real_delta', 'parent_hp_before', 'parent_hp_after',
                       'child_hp_before', 'child_hp_after', 'child_real_delta'}
             zero = parent.get('settled_after_nested_kill') is True
-            if zero:
+            child_first = isinstance(scalar, dict) and scalar.get('ordering') == 'child_before_parent'
+            if zero or child_first:
                 fields |= {'ordering', 'parent_entry_hp_before'}
             if (not isinstance(scalar, dict) or set(scalar) != fields
                     or scalar['target_uid'] != parent['target_uid']
@@ -1047,13 +1056,31 @@ def pc_mechanism_evidence(events):
             if len(children) != 1:
                 return None
             child = children[0]
+            child_type = child.get('damage_type')
+            ordinary_child = type(child_type) is int and child_type in (1, 2, 3)
+            if zero or child_first:
+                entry_hp = scalar['parent_entry_hp_before']
+                if (not number(entry_hp) or entry_hp != child['hp_before']
+                        or checkpoint['hp_before'] != entry_hp):
+                    return None
+                if ordinary_child:
+                    child_checkpoint = modern_target_callback(child)
+                    if (child_checkpoint is None or child_checkpoint['hp_before'] != entry_hp
+                            or not modern_modifier_observed(child)):
+                        return None
             if zero:
                 if (scalar['ordering'] != 'child_before_parent_zero' or parent['real_delta'] != 0
                         or parent['hp_before'] != 0 or parent['hp_after'] != 0 or parent['nominal_amount'] <= 0
-                        or parent.get('killed') is False or child['hp_after'] != 0 or scalar['parent_entry_hp_before'] != child['hp_before']
-                        or checkpoint['hp_before'] != scalar['parent_entry_hp_before']):
+                        or parent.get('killed') is False or child['hp_after'] != 0
+                        or not (ordinary_child or type(child_type) is int and child_type == 5)):
                     return None
                 ordering = 'child_before_parent_zero'
+            elif child_first:
+                if (not ordinary_child or child['hp_after'] <= 0 or child['hp_after'] != parent['hp_before']
+                        or parent['real_delta'] >= 0 or parent['hp_after'] >= parent['hp_before']
+                        or parent.get('killed') is not (parent['hp_after'] == 0)):
+                    return None
+                ordering = 'child_before_parent'
             else:
                 if (not parent['real_delta'] < 0 or not parent['hp_after'] > 0
                         or parent.get('killed') is not False or child['hp_before'] != parent['hp_after']):

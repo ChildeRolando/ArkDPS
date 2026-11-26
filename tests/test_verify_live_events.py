@@ -918,6 +918,72 @@ def test_both_nested_orderings_match_the_actual_owned_synthetic_producer_callbac
     assert gate['passed'] is True and gate['positive_witnesses'][0]['ordering'] == 'child_before_parent_zero'
 
 
+def ordinary_child_first_events(*, child_after=75, parent_after=40):
+    def settlement(sequence, damage_type, before, after, nominal):
+        return dict(sequence=sequence, kind='damage_settlement', frame=30, game_time=1.0,
+                    source='char_a', source_character_uid=1, target='enemy_a', target_uid='12',
+                    target_instance='0x1000', target_type=0, damage_type=damage_type,
+                    amount=before - after, nominal_amount=nominal, settlement_complete=True,
+                    cancel_reason=0, shield_absorbed=0, real_delta=after - before,
+                    hp_before=before, hp_after=after, killed=after == 0,
+                    proof=dict(method='Entity.ApplyModifier', settlement_wire_version=2,
+                               native_modifier_observation=dict(version=1, method='Entity.ApplyModifier', amount=nominal),
+                               target_callback_checkpoint=dict(version=1, method='Unit.OnTakeDamage', returned=True,
+                                                               source='char_a', source_character_uid=1, target_uid='12',
+                                                               frame=30, game_time=1.0, hp_before=100)))
+
+    child = settlement(10, 3, 100, child_after, 120 if child_after == 0 else 25)
+    parent = settlement(11, 1, child_after, parent_after, 80)
+    ordering = 'child_before_parent'
+    if child_after == 0:
+        parent['settled_after_nested_kill'] = True
+        parent.pop('killed')
+        ordering = 'child_before_parent_zero'
+    parent['proof']['nested_settlement'] = dict(target_uid='12', ordering=ordering, parent_entry_hp_before=100,
+                                               parent_real_delta=parent['real_delta'], parent_hp_before=child_after,
+                                               parent_hp_after=parent_after, child_real_delta=child['real_delta'],
+                                               child_hp_before=100, child_hp_after=child_after)
+    return [child, parent]
+
+
+@pytest.mark.parametrize(('child_after', 'parent_after', 'ordering'), [
+    (75, 40, 'child_before_parent'), (75, 0, 'child_before_parent'), (0, 0, 'child_before_parent_zero')])
+def test_ordinary_child_first_gate_distinguishes_parent_damage_from_full_overkill(child_after, parent_after, ordering):
+    events = ordinary_child_first_events(child_after=child_after, parent_after=parent_after)
+    gate = module.pc_mechanism_evidence(events)['nested']
+    assert gate['passed'] is True
+    witness, = gate['positive_witnesses']
+    assert witness['ordering'] == ordering
+    assert (witness['child_settlement_sequence'], witness['parent_settlement_sequence']) == (10, 11)
+
+
+@pytest.mark.parametrize('fault', ['parent_entry', 'child_checkpoint', 'child_modifier_amount', 'child_type',
+                                  'parent_boundary', 'parent_killed', 'duplicate_child'])
+def test_ordinary_child_first_requires_independent_and_bound_hp_debits(fault):
+    events = ordinary_child_first_events()
+    child, parent = events
+    proof = parent['proof']['nested_settlement']
+    if fault == 'parent_entry':
+        proof['parent_entry_hp_before'] = parent['proof']['target_callback_checkpoint']['hp_before'] = 99
+    elif fault == 'child_checkpoint':
+        child['proof']['target_callback_checkpoint']['returned'] = False
+    elif fault == 'child_modifier_amount':
+        child['proof']['native_modifier_observation']['amount'] = 20
+    elif fault == 'child_type':
+        child['damage_type'] = True
+    elif fault == 'parent_boundary':
+        parent['hp_before'] = proof['parent_hp_before'] = 76
+        parent['amount'] = 36
+        parent['real_delta'] = proof['parent_real_delta'] = -36
+    elif fault == 'parent_killed':
+        parent['killed'] = True
+    else:
+        events.insert(0, dict(deepcopy(child), sequence=9))
+    gate = module.pc_mechanism_evidence(events)['nested']
+    assert gate['passed'] is False
+    assert gate['invalid_sequences'] == [11]
+
+
 def explicit_ep_events():
     events = mechanism_events()[2:4]
     for event in events:
