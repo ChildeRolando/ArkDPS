@@ -7,6 +7,65 @@ function __integer(value) {
  if(typeof value==='number'&&!Number.isSafeInteger(value))throw new TypeError('unsafe integer');
  return BigInt(value);
 }
+// Replay never dereferences a game address. A role is an independently captured
+// observation point, not a last-value cache keyed by pointer.
+let __arkdpsReplay=null;
+function __arkdpsReplayBegin(record){
+ if(__arkdpsReplay!==null)throw new Error('replay already active');
+ if(record?.version!==1||!Array.isArray(record.segments)||typeof record.edge!=='string')
+  throw new Error('invalid capture record');
+ const segments=record.segments.map(segment=>{
+  if(!Number.isInteger(segment.field_id)||segment.field_id<0||segment.field_id>65535||typeof segment.role!=='string'||!Number.isSafeInteger(segment.checkpoint)||segment.checkpoint<0||
+     !(segment.bytes instanceof ArrayBuffer)||!['ok','unreadable','short','limit','guard_changed'].includes(segment.status))
+   throw new Error('invalid owned segment');
+  const address=__integer(segment.address);
+  if(address<0n||address>0xffffffffffffffffn)throw new Error('invalid segment address');
+  return {...segment,address,bytes:segment.bytes.slice(0)};
+ });
+ __arkdpsReplay={record,segments,role:record.edge,checkpoint:0,fieldId:0,structural:[],unreadable:0};
+}
+function __arkdpsReplayRole(role,checkpoint=0,fieldId=0){
+ if(__arkdpsReplay===null||typeof role!=='string'||!Number.isSafeInteger(checkpoint)||checkpoint<0||!Number.isInteger(fieldId)||fieldId<0||fieldId>65535)
+  throw new Error('invalid replay role');
+ __arkdpsReplay.role=role;__arkdpsReplay.checkpoint=checkpoint;__arkdpsReplay.fieldId=fieldId;
+}
+function __arkdpsReplayEnd(){
+ if(__arkdpsReplay===null)throw new Error('no replay active');
+ const result=Object.freeze({complete:__arkdpsReplay.structural.length===0,structural_gaps:Object.freeze([...__arkdpsReplay.structural]),unreadable_reads:__arkdpsReplay.unreadable});
+ __arkdpsReplay=null;return result;
+}
+function __arkdpsReplayGap(reason){
+ if(__arkdpsReplay!==null&&__arkdpsReplay.structural.length<16)__arkdpsReplay.structural.push(reason);
+ throw new Error(reason);
+}
+function __arkdpsOwnedRead(address,size){
+ if(!Number.isSafeInteger(size)||size<0||size>1048576)throw new Error('invalid captured read size');
+ const replay=__arkdpsReplay;
+ if(replay===null)return __read(address,size);
+ const matches=replay.segments.filter(s=>s.role===replay.role&&s.checkpoint===replay.checkpoint&&s.field_id===replay.fieldId&&
+  address>=s.address&&address+BigInt(size)<=s.address+BigInt(s.bytes.byteLength));
+ if(matches.length===0){
+  const failed=(replay.record.fields||[]).filter(f=>f.role===replay.role&&f.field_id===replay.fieldId&&f.status!=='ok');
+  if(failed.length===1){replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
+ }
+ if(matches.length!==1)__arkdpsReplayGap('missing or ambiguous captured read '+replay.role);
+ if(matches[0].status!=='ok'){replay.unreadable++;throw new Error('captured field unreadable '+replay.role);}
+ const segment=matches[0],start=Number(address-segment.address);
+ return segment.bytes.slice(start,start+size);
+}
+function __arkdpsOwnedString(address,length,utf16){
+ if(__arkdpsReplay===null)return utf16?__utf16(address,length):__cstring(address);
+ if(utf16){
+  if(!Number.isSafeInteger(length)||length<0||length>200)throw new Error('invalid captured string length');
+  const v=new DataView(__arkdpsOwnedRead(address,length*2));let result='';
+  for(let i=0;i<length;i++)result+=String.fromCharCode(v.getUint16(i*2,true));
+  return result;
+ }
+ // Immutable metadata strings also require owned bytes during replay.
+ let result='';
+ for(let i=0;i<1024;i++){const c=new Uint8Array(__arkdpsOwnedRead(address+BigInt(i),1))[0];if(c===0)return result;result+=String.fromCharCode(c);}
+ throw new Error('unterminated captured C string');
+}
 class NativeInteger {
  constructor(value){this.value=BigInt(value);}
  toNumber(){return Number(this.value);}
@@ -20,7 +79,7 @@ class NativePointer {
  isNull(){return this.value===0n;}
  toString(){return '0x'+this.value.toString(16);}
  toInt32(){return Number(BigInt.asIntN(32,this.value));}
- readByteArray(size){return __read(this.value,size);}
+ readByteArray(size){return __arkdpsOwnedRead(this.value,size);}
  __view(size){return new DataView(this.readByteArray(size));}
  readPointer(){return new NativePointer(this.__view(8).getBigUint64(0,true));}
  readU8(){return this.__view(1).getUint8(0);}
@@ -30,9 +89,9 @@ class NativePointer {
  readU64(){return new NativeInteger(this.__view(8).getBigUint64(0,true));}
  readS64(){return new NativeInteger(this.__view(8).getBigInt64(0,true));}
  readFloat(){return this.__view(4).getFloat32(0,true);}
- readCString(){return __cstring(this.value);}
- readUtf16String(length){return __utf16(this.value,length);}
- writeU64(value){const b=new ArrayBuffer(8);new DataView(b).setBigUint64(0,BigInt.asUintN(64,__integer(value)),true);__write(this.value,b);return this;}
+ readCString(){return __arkdpsOwnedString(this.value,0,false);}
+ readUtf16String(length){return __arkdpsOwnedString(this.value,length,true);}
+ writeU64(value){if(__arkdpsReplay!==null)__arkdpsReplayGap('native write during replay');const b=new ArrayBuffer(8);new DataView(b).setBigUint64(0,BigInt.asUintN(64,__integer(value)),true);__write(this.value,b);return this;}
  writePointer(value){return this.writeU64(value);}
 }
 function ptr(value){return value instanceof NativePointer?value:new NativePointer(value);}
@@ -66,7 +125,7 @@ function __arkdpsArguments(bytes){
  __argumentViews.set(args,view);
  return new Proxy(args,__argumentHandler);
 }
-const Memory={alloc(size){return ptr(__alloc(size));}};
+const Memory={alloc(size){if(__arkdpsReplay!==null)__arkdpsReplayGap('native allocation during replay');return ptr(__alloc(size));}};
 function __module(name){
  const found=__moduleInfo(String(name));
  return {name:found.name,base:ptr(found.base),size:found.size,
@@ -83,6 +142,7 @@ function NativeFunction(address,result,parameters){
  if(!allowed.has(result)||parameters.some(t=>!allowed.has(t)||t==='void'))throw new Error('only GP IL2CPP signatures are supported');
  const target=ptr(address).value;
  return function(...args){
+  if(__arkdpsReplay!==null)__arkdpsReplayGap('NativeFunction forbidden during replay');
   if(args.length!==parameters.length)throw new Error('native argument count mismatch');
   // A native call could enter a hook recursively on this lock's owner.
   if(__arkdpsMarkRequest!==null)__arkdpsMarkRequest.nativeCall=true;
