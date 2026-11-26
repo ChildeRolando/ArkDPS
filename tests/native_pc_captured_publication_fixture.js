@@ -21,6 +21,16 @@ integer(0x1228,2,4);text(0xa000,stageId);
 function setClock(frame,fixed){integer(0xb000,frame,4);integer(0xb004,fixed);}
 setClock(10,5n*4294967296n);
 const graph=nativeCaptureScopeGraph({autochess:false,identity,roots,scopeGuards:[],addresses:{}},{key:roots+':'+stageId,enabled:false,stageAddress:ptr(0x5018),stagePointer:ptr(0xa000)},ptr(0xb000),1);
+globalThis.scopeGeometryFrozen=Object.isFrozen(graph)&&Object.isFrozen(graph.fields)&&Object.isFrozen(graph.fields[0])&&Object.isFrozen(graph.fields[0].pointer_offsets)&&Object.isFrozen(graph.context.identity);
+let geometryParses=0;const originalPtr=ptr;ptr=value=>{if(typeof value==='string')geometryParses++;return originalPtr(value);};
+const compiledScope=compileCapturedScopeReads(graph),firstParses=geometryParses;
+globalThis.compiledScopeReused=compiledScope===compileCapturedScopeReads(graph)&&geometryParses===firstParses&&firstParses>0;
+ptr=originalPtr;
+const cacheExpected=[['i',0,4]],geometryProbe=sealNativeScopeGraph({fields:[{role:'scope.probe',absolute_address:'0x1000',pointer_offsets:[],offset:0,bytes:4,expected:cacheExpected}],context:{identity:{controller:'0x1000'}}});
+cacheExpected[0][2]=9;globalThis.cacheArrayNotFrozen=geometryProbe.fields[0].expected[0][2]===4&&!Object.isFrozen(cacheExpected)&&!Object.isFrozen(cacheExpected[0]);
+const manualGraph={fields:graph.fields.map(field=>({...field,pointer_offsets:[...field.pointer_offsets]}))};
+const manualPlan=compileCapturedScopeReads(manualGraph),manualAddress=manualPlan[0].base.toString();manualGraph.fields[0].absolute_address='0x9999';
+globalThis.manualOwnerNotFrozen=!Object.isFrozen(manualGraph)&&manualPlan[0].base.toString()===manualAddress;
 nativeCaptureScopes.set(1,graph);
 const binding={native_generation:2,native_identity:identity,native_process_pid:1,native_stage_id:stageId,native_frame:1,native_fixed_time:'1',native_battle_state:2,lifecycle_baseline:{forbidden:true},live_character_collection_empty:true,live_character_data_uids:[]};
 nativeCapturePublications.set(1,{mode_epoch:0,binding,guards:[]});
@@ -42,7 +52,9 @@ active=0;activeHooks=new Map();coalesceEnemyHp=false;sequence=3;epoch=8;fatal=nu
 eventQuality=()=>({enemy_damage_ready:true});currentTerminalBoundary=()=>null;terminalDiagnostics={};
 nativeInitialEnvelope=()=>({initial_boundary:null});probeAdapter={capturedPublicationBinding:nativeCapturedPublicationBinding};
 function attempt(change){const r=record();if(change)change(r);__arkdpsReplayBegin(r);let result;try{result=__arkdpsOnClosedRecord(r);}finally{__arkdpsReplayEnd();}return result;}
-globalThis.good=attempt();queue[0].future='changed-after-publication';
+let scopeReadCount=0;const originalWitness=__arkdpsReplayWitness;__arkdpsReplayWitness=(role,body)=>{if(role.startsWith('scope.'))scopeReadCount++;return originalWitness(role,body);};
+globalThis.good=attempt();const firstScopeReads=scopeReadCount;attempt();globalThis.scopeReadsRepeat=firstScopeReads>=graph.fields.length&&scopeReadCount===firstScopeReads*2;__arkdpsReplayWitness=originalWitness;
+queue[0].future='changed-after-publication';
 __arkdpsPublicationJournal={publishedThrough:2};globalThis.delta=attempt();__arkdpsPublicationJournal={publishedThrough:3};globalThis.emptyDelta=attempt();delete globalThis.__arkdpsPublicationJournal;
 globalThis.notClosed=attempt(r=>r.closed_after=false);
 globalThis.wrongRevision=attempt(r=>r.facts.scope_revision=99);
@@ -74,6 +86,6 @@ globalThis.autoMissingMembershipRejected=autoAttempt(r=>r.segments=r.segments.fi
 globalThis.autoChangedMembershipRejected=false;
 globalThis.autoChangedMembershipRejected=autoAttempt(r=>{const s=r.segments.find(s=>s.role==='publication.close.0'&&s.address==='49172');globalThis.changedMemberInjected=Boolean(s);if(s)new DataView(s.bytes).setUint16(0,88,true);})===null;
 `,context);
-assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
+assert(context.scopeGeometryFrozen);assert(context.compiledScopeReused);assert(context.cacheArrayNotFrozen);assert(context.manualOwnerNotFrozen);assert(context.scopeReadsRepeat);assert(context.good);assert.equal(context.good.mark.sequence,3);assert.equal(context.good.mark.frame,10);assert.equal(context.good.mark.native_battle_state,2);assert.equal(context.good.mark.lifecycle_baseline,undefined);assert(Object.isFrozen(context.good));
 for(const key of ['notClosed','wrongRevision','wrongGeneration','coldRejected','wrongRoots'])assert.equal(context[key],null,key);
 assert(context.autoGood);assert.equal(context.autoGood.mark.native_autochess_context.frame,10);assert.equal(context.autoGood.mark.native_autochess_context.memberships[0].player_uid,'account-one');assert.equal(context.autoMissingMembershipRejected,true);assert.equal(context.autoChangedMembershipRejected,true);assert.equal(context.missingSummary.complete,false);assert.equal(context.changedMemberInjected,true);assert.equal(context.readThroughSequence,0);assert.equal(context.good.events[0].future,undefined);assert.equal(context.delta.events_after,2);assert.equal(context.delta.events_through,3);assert.equal(context.delta.events.length,1);assert.equal(context.delta.events[0].sequence,3);assert.equal(context.emptyDelta.events.length,0);assert.equal(live,0);console.log('PASS_CAPTURED_PUBLICATION normal closed-prefix + five negative fences; no live read/call');

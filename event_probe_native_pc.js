@@ -549,9 +549,18 @@ function finalizeNativeCapturePlan(plan,metadata,capabilities){
   plan.required_projections.every(name=>lowered.has(name))};
 }
 // copies both live observations; no cached HP/phase/round value is evidence.
+function scopeReadGeometry(fields){
+ return Object.freeze(fields.map(field=>Object.freeze({...field,
+  pointer_offsets:Object.freeze([...field.pointer_offsets]),
+  ...(Array.isArray(field.expected)?{expected:Object.freeze(field.expected.map(row=>Array.isArray(row)?Object.freeze([...row]):row))}:{})})));
+}
+function sealNativeScopeGraph(graph){
+ return Object.freeze({...graph,fields:scopeReadGeometry(graph.fields),
+  ...(graph.context?{context:Object.freeze({...graph.context,identity:Object.freeze({...graph.context.identity})})}:{})});
+}
 function nativeCaptureScopeGraph(cache,stage,clockAddress,revision){
  if(!Number.isSafeInteger(revision)||revision<=0)throw new Error('invalid capture scope revision');
- if(!cache||!stage)return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,raw_collection:'all',available:false,fields:[]};
+ if(!cache||!stage)return sealNativeScopeGraph({version:1,revision,mode_epoch:nativeCaptureModeEpoch,raw_collection:'all',available:false,fields:[]});
  const fields=[];let next=1;
  const add=(role,address,bytes,guard,side,expected)=>fields.push({field_id:next++,phase:'checkpoint',role,root:'absolute',root_index:0,absolute_address:address.toString(),pointer_offsets:[],offset:0,bytes,kind:'bytes',required:true,guard_id:guard,guard_side:side,...(expected!==undefined?{expected}:{} )});
  add('scope.clock_open',clockAddress,12,1,'before');
@@ -591,9 +600,9 @@ function nativeCaptureScopeGraph(cache,stage,clockAddress,revision){
  add('scope.clock_close',clockAddress,12,1,'after');
  const before=fields.filter(f=>f.guard_side==='before'),after=fields.filter(f=>f.guard_side==='after');
  const ordered=[...before,...after];
- return {version:1,revision,mode_epoch:nativeCaptureModeEpoch,raw_collection:'all',available:true,fields:ordered,body_insertion_index:before.length,max_bytes:65536,max_reads:4096,
+ return sealNativeScopeGraph({version:1,revision,mode_epoch:nativeCaptureModeEpoch,raw_collection:'all',available:true,fields:ordered,body_insertion_index:before.length,max_bytes:65536,max_reads:4096,
   context:{autochess:enabled,stage_id:stageId,identity:{...identity},header_key:cache.headerKey,fingerprint:cache.fingerprint,roots:cache.roots,
-   stage_pointer:stage.stagePointer.toString(),phase_address:cache.addresses.phase?.toString()??null,round_address:cache.addresses.round?.toString()??null}};
+   stage_pointer:stage.stagePointer.toString(),phase_address:cache.addresses.phase?.toString()??null,round_address:cache.addresses.round?.toString()??null}});
 }
 let nativeCapturePublicationRevision=0;
 const nativeCapturePublications=new Map();
@@ -676,6 +685,23 @@ function nativeCapturedPublicationBinding(forCallback=false){
  delete binding.lifecycle_baseline;delete binding.live_character_collection_empty;delete binding.live_character_data_uids;
  return {...binding,...nativeInitialEnvelope(binding)};
 }
+const nativeCaptureScopeReads=new WeakMap();
+function compileCapturedScopeReads(graph){
+ let reads=nativeCaptureScopeReads.get(graph);if(reads)return reads;
+ // Geometry/expected values are setup metadata. Copy nested block tuples so
+ // sealing a graph never freezes a mutable AutoChess cache owned elsewhere.
+ const fields=Object.isFrozen(graph.fields)?graph.fields:scopeReadGeometry(graph.fields);
+ reads=Object.freeze(fields.map(field=>{
+  const base=Object.freeze(ptr(field.absolute_address)),path=field.pointer_offsets;
+  const kind=field.kind==='utf16'?0:field.bytes===12?1:Array.isArray(field.expected)?2:field.bytes===4?3:4;
+  const expectedPointer=kind===4&&field.expected!==undefined&&field.expected!==null?Object.freeze(ptr(field.expected)):null;
+  return Object.freeze({role:field.role,base,path,offset:field.offset,
+   address:path.length?null:Object.freeze(base.add(field.offset)),kind,bytes:field.bytes,expected:field.expected,expectedPointer,
+   classCheck:field.role.includes('logger.class')?1:field.role.includes('stats.class')?2:0,
+   output:field.role==='scope.open.3'?1:field.role==='scope.open.4'?2:field.role==='scope.controller.state.open'?3:0});
+ }));
+ nativeCaptureScopeReads.set(graph,reads);return reads;
+}
 function capturedNativeScopePoint(when){
  if(__arkdpsReplayActive()&&__arkdpsReplayRecord().facts?.cold_revision!==undefined){
   if(nativeCaptureColdRebuilding)return null;
@@ -690,27 +716,26 @@ function capturedNativeScopePoint(when){
  const graph=nativeCaptureScopes.get(revision);
  if(!graph?.available||graph.mode_epoch!==record.facts?.mode_epoch)return null;
  let phase=null,round=null,state=null;
- for(const field of graph.fields){
+ for(const field of compileCapturedScopeReads(graph)){
   const value=__arkdpsReplayWitness(field.role,()=>{
-   let address=ptr(field.absolute_address);
-   for(const offset of field.pointer_offsets)address=address.add(offset).readPointer();
-   address=address.add(field.offset);
-   if(field.kind==='utf16'){const value=str(address);if(value!==field.expected)throw new Error('captured stage text changed');return value;}
-   if(field.bytes===12){
+   let address=field.address;
+   if(address===null){address=field.base;for(const offset of field.path)address=address.add(offset).readPointer();address=address.add(field.offset);}
+   if(field.kind===0){const value=str(address);if(value!==field.expected)throw new Error('captured stage text changed');return value;}
+   if(field.kind===1){
     const view=checkedNativeView(address,12);
     if(view.getUint32(0,true)!==when.frame||Number(view.getBigInt64(4,true))/4294967296!==when.game_time)throw new Error('captured scope clock mismatch');
     return null;
    }
-   if(Array.isArray(field.expected)){scopeBlock(address,field.bytes,field.expected,'captured scope guard changed');return null;}
-   if(field.bytes===4){const current=address.readS32();if(field.expected!==null&&field.expected!==undefined&&current!==field.expected)throw new Error('captured scope integer changed');return current;}
+   if(field.kind===2){scopeBlock(address,field.bytes,field.expected,'captured scope guard changed');return null;}
+   if(field.kind===3){const current=address.readS32();if(field.expected!==null&&field.expected!==undefined&&current!==field.expected)throw new Error('captured scope integer changed');return current;}
    const current=address.readPointer();
-   if(field.expected!==undefined&&field.expected!==null&&!current.equals(ptr(field.expected)))throw new Error('captured scope pointer changed');
-   if(field.role.includes('logger.class')&&className(current)!=='BattleLogger'||field.role.includes('stats.class')&&className(current)!=='BattleStats')throw new Error('captured scope class changed');
+   if(field.expectedPointer!==null&&!current.equals(field.expectedPointer))throw new Error('captured scope pointer changed');
+   if(field.classCheck===1&&className(current)!=='BattleLogger'||field.classCheck===2&&className(current)!=='BattleStats')throw new Error('captured scope class changed');
    return current;
   });
-  if(field.role==='scope.open.3')phase=value;
-  if(field.role==='scope.open.4')round=value;
-  if(field.role==='scope.controller.state.open')state=value;
+  if(field.output===1)phase=value;
+  if(field.output===2)round=value;
+  if(field.output===3)state=value;
  }
  if(!graph.context.autochess){if(state!==2&&state!==3)return null;return undefined;}
  if(![0,1,2,3,4,5,6,7,8,9,100,101,102,103,104].includes(phase)||!Number.isInteger(round)||round<0)return null;
