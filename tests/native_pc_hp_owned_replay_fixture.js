@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
 const {fixture}=require('./native_pc_frida_probe_fixture.js');
-function run(owned,transition=null){
+function run(owned,transition=null,hookName='SetHpInternal'){
  const f=fixture({platform:'native_pc',enemyHpState:true,sourcePath:path.resolve('event_probe_native_pc.js'),globals:{arkdpsCoalesceEnemyHp:false}});
  f.context.ownedScopeKey='owned:round:8';f.context.ownedRound=8;
  f.vm.runInContext("probeAdapter.stampClock=when=>{when.native_autochess_scope={protocol_version:1,status:'available',verified_same_frame:true,frame:when.frame,game_time:when.game_time,scope_key:ownedScopeKey,phase:4,round:ownedRound,collection_mode:autoCollectionMode(ownedScopeKey,4)};};",f.context);
@@ -9,7 +9,7 @@ function run(owned,transition=null){
  f.write(enemy,f.enemyClass);f.write(enemy.add(0x25),1);f.write(enemy.add(0x26),0);f.write(enemy.add(0x40),100n*4294967296n);f.write(enemy.add(0xb0),attributes);f.write(attributes.add(0x68),cache);f.write(cache.add(0x18),1);f.write(cache.add(0x20),0n);f.write(cache.add(0x28),1000n*4294967296n);f.write(cache.add(0x30),1);
  const string=enemy.add(0x148).readPointer();f.write(string,stringClass);
  f.clock(30,4294967296n);const clockAddress=f.vm.runInContext('clock',f.context);
- const hook=f.callback('SetHpInternal',f.entity),P=f.ptr(0).constructor;
+ const hook=f.callback(hookName,f.entity),P=f.ptr(0).constructor;
  const original=Object.fromEntries(['readByteArray','readPointer','readU8','readU16','readU32','readS32','readU64','readS64','readFloat','readUtf16String','readCString'].map(name=>[name,P.prototype[name]]));
  let reads=0,bytes=0,late=0,entryEpoch=0,scopeEpoch=0,firstMode=null;let plan;
  if(owned){
@@ -20,7 +20,7 @@ function run(owned,transition=null){
   f.vm.runInContext('globalThis.replaying=()=>__arkdpsReplayActive();globalThis.ownedRead=(a,n)=>__arkdpsOwnedRead(BigInt(a),n);',f.context);
   const adapter=fs.readFileSync('event_probe_native_pc.js','utf8');
   const c=vm.createContext({});vm.runInContext(adapter.slice(adapter.indexOf('function nativeCapturePlan(')),c);
-  plan=c.nativeCapturePlan('hp.Entity.SetHpInternal',{toString:()=> '0x1'},{clock:clockAddress,string_class:stringClass.toString(),skill_offsets:{},classes:{Enemy:f.enemyClass.toString(),BObject:f.bObject.toString()},immutable_class_parents:true});
+  plan=c.nativeCapturePlan('hp.Entity.'+hookName,{toString:()=> '0x1'},{clock:clockAddress,string_class:stringClass.toString(),skill_offsets:{},classes:{Enemy:f.enemyClass.toString(),BObject:f.bObject.toString()},immutable_class_parents:true});
   function copy(p,n){reads++;bytes+=n;if(n===1)return Uint8Array.of(original.readU8.call(p)).buffer;return original.readByteArray.call(p,n);}
   function capture(edge){const segments=[],fields=[];
    for(const field of plan.fields.filter(x=>x.phase===edge)){
@@ -51,8 +51,8 @@ function run(owned,transition=null){
  }
  let index=0;
  for(const hp of [101,102,98,99,99,101]){
-  const invocation={threadId:1};
-  if(owned)f.context.replayCall(f.capture('entry'),()=>hook.onEnter.call(invocation,[enemy]));else hook.onEnter.call(invocation,[enemy]);
+  const invocation={threadId:1},args=hookName==='OnAttributeDirty'?[enemy,f.ptr(0),f.ptr(1000n*4294967296n)]:[enemy];
+  if(owned)f.context.replayCall(f.capture('entry'),()=>hook.onEnter.call(invocation,args));else hook.onEnter.call(invocation,args);
   if(owned&& !invocation.write)throw Error('no write '+JSON.stringify({keys:Object.keys(invocation),summary:f.context.summary,quality:JSON.parse(f.vm.runInContext('JSON.stringify(eventQuality())',f.context))}));
   if(owned&&transition&&index===0){f.vm.runInContext('installCaptureMode(false,{version:1,mode_epoch:1})',f.context);scopeEpoch=1;if(transition==='newscope'){f.context.ownedScopeKey='owned:round:9';f.context.ownedRound=9;f.clock(31,2n*4294967296n);}}
   f.write(enemy.add(0x40),BigInt(hp)*4294967296n);
@@ -75,3 +75,5 @@ const baseline=run(false),owned=run(true);assert.deepEqual(owned.events,baseline
 console.log(JSON.stringify({status:'PASS_OWNED_HP_SOURCE_REPLAY',callbacks:6,events:owned.events.length,source_reads:owned.reads,source_bytes:owned.bytes,late_reads:owned.late,raw_events_equal:true}));
 
 const sameScope=run(true,'same'),newScope=run(true,'newscope');assert.equal(sameScope.firstMode.mode,'all');assert.equal(newScope.firstMode.mode,'local');assert.equal(newScope.firstMode.scope_key,'owned:round:9');assert.equal(newScope.events.length,4);assert.equal(newScope.late,0);console.log('PASS_REAL_HP_MODE_TRANSITION old invocation/new physical scope uses observed preference, old same scope remains latched');
+
+for(const name of ['SetHpInternalDirectly','OnAttributeDirty']){const b=run(false,null,name),r=run(true,null,name);assert.deepEqual(r.events,b.events);assert.equal(r.events.length,5);assert.equal(r.late,0);}console.log('PASS_ALL_HP_SOURCE_HOOKS real SetHpInternal/Directly/OnAttributeDirty exact owned events');
