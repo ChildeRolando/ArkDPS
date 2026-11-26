@@ -627,6 +627,16 @@ function nativeGraphSlot(kind,graph,index,chunks){
  const chunk=Math.floor(index/32);if(chunks[chunk]===undefined)chunks[chunk]=__arkdpsOwnedGraphReadBatch(kind,graph,chunk);
  return chunks[chunk]===null?null:chunks[chunk].slot(index%32);
 }
+function capturedGraphField(kind,graph,index,chunks,role,read){
+ if(chunks===null)return __arkdpsReplayWitness(role,()=>read(null));
+ // Native GraphBatch already checks the exact field/unique status. Retain the
+ // JS role/checkpoint for errors and canonical comparisons without a second FFI.
+ return __arkdpsReplayCheckpoint(role,__arkdpsReplayRecord().checkpoint??0,()=>{
+  if(!Number.isSafeInteger(index)||index<0)__arkdpsReplayGap('missing graph read field');
+  const raw=nativeGraphSlot(kind,graph,index,chunks);
+  return raw?read(raw):__arkdpsReplayWitness(role,()=>read(null));
+ });
+}
 function publicationGuardFields(guards,stringClass,revision){
  const chunks=[];
  for(let start=0;start<guards.length;start+=60){
@@ -665,11 +675,9 @@ function publishNativeCapturePublication(binding){
  __publishCapturePublication(graph);
 }
 function capturedGuardValue(guard,role,geometry=null,chunks=null){
- return __arkdpsReplayWitness(role,()=>{
+ const slot=geometry?.slots[role];
+ return capturedGraphField('publication',geometry?.graph,slot,chunks,role,raw=>{
   const [kind,address,before,size]=guard;
-  const slot=geometry?.slots[role];
-  if(geometry&&slot===undefined)__arkdpsReplayGap('missing publication read role');
-  const raw=geometry?nativeGraphSlot('publication',geometry.graph,slot,chunks):null;
   if(kind==='block'){
    if(raw)scopeBlockView(raw,size,before,'captured publication guard changed');else scopeBlock(address,size,before,'captured publication guard changed');
    return true;
@@ -749,8 +757,7 @@ function capturedNativeScopePoint(when){
  if(!graph?.available||graph.mode_epoch!==record.facts?.mode_epoch)return null;
  let phase=null,round=null,state=null;const chunks=nativeGraphChunks();
  for(const field of compileCapturedScopeReads(graph)){
-  const value=__arkdpsReplayWitness(field.role,()=>{
-   const raw=nativeGraphSlot('scope',graph,field.slot,chunks);
+  const value=capturedGraphField('scope',graph,field.slot,chunks,field.role,raw=>{
    let address=field.address;
    if(!raw&&address===null){address=field.base;for(const offset of field.path)address=address.add(offset).readPointer();address=address.add(field.offset);}
    if(field.kind===0){const value=raw?capturedUtf16(raw):str(address);if(value!==field.expected)throw new Error('captured stage text changed');return value;}
