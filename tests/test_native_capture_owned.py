@@ -14,7 +14,7 @@ def test_native_capture_owned_memory_contract(tmp_path):
         pytest.skip('owned C++ capture test requires g++')
     binary = tmp_path / 'owned-capture.exe'
     source = ROOT / 'native_pc/native_event_runtime'
-    build = subprocess.run([compiler, '-std=c++20', '-static', '-O2', '-Wall', '-Wextra', '-Werror',
+    build = subprocess.run([compiler, '-std=c++17', '-static', '-O2', '-Wall', '-Wextra', '-Werror',
         '-I', str(source), str(ROOT / 'tests/native_capture_owned.cpp'),
         str(source / 'native_capture.cpp'), '-o', str(binary)], capture_output=True, text=True, timeout=60)
     assert build.returncode == 0, build.stdout + build.stderr

@@ -55,6 +55,9 @@ struct Segment {
 struct FieldState {
     std::uint16_t id = 0, role = 0;
     Error error = Error::missing_plan_field;
+    std::uint16_t final_segment = 0xffff;
+    std::uintptr_t attempted_address = 0;
+    std::uint32_t attempted_size = 0;
 };
 // Owned, trivially copyable record. Addresses are labels, never delayed read permissions.
 struct Snapshot {
@@ -63,6 +66,7 @@ struct Snapshot {
     Phase phase = Phase::entry;
     std::uint16_t segment_count = 0, field_count = 0;
     std::uint32_t byte_count = 0;
+    std::uint32_t read_count = 0, read_bytes = 0; // Attempted native reads/bytes, including failed reads.
     Error error = Error::ok;
     std::array<bool, max_guards> guard_valid{};
     std::array<Segment, max_segments> segments{};

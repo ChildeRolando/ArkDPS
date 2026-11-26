@@ -20,11 +20,14 @@ struct Writer {
     Snapshot& out;
     ReadMemory reader;
     void* user;
-    std::uint32_t byte_budget, read_budget, bytes_read = 0, reads = 0;
+    std::uint32_t byte_budget, read_budget;
+    std::uintptr_t attempted_address = 0;
+    std::uint32_t attempted_size = 0;
     Error raw(std::uintptr_t address, void* target, std::size_t size) noexcept {
+        attempted_address = address; attempted_size = static_cast<std::uint32_t>(size);
         if (!size) return Error::ok;
-        if (reads >= read_budget || size > byte_budget - bytes_read) return Error::bounds;
-        ++reads; bytes_read += static_cast<std::uint32_t>(size);
+        if (out.read_count >= read_budget || size > byte_budget - out.read_bytes) return Error::bounds;
+        ++out.read_count; out.read_bytes += static_cast<std::uint32_t>(size);
         return reader && reader(user, address, target, size) ? Error::ok : Error::field_unreadable;
     }
     Error copy(const Field& field, std::uintptr_t address, std::size_t size) noexcept {
@@ -75,19 +78,22 @@ Error field_capture(const HookCapturePlan& plan, std::size_t index, const Contex
     if (!address || !address_add(address, field.offset, address)) return Error::missing_root;
     if (field.kind == Kind::bytes) return writer.copy(field, address, field.bytes);
     if (field.kind == Kind::counted_bytes) {
-        const Segment* count_segment = nullptr;
+        const Field* count_field = nullptr;
+        for (std::size_t previous = 0; previous < index; ++previous)
+            if (plan.fields[previous].id == field.count_field_id && plan.fields[previous].phase == field.phase)
+                count_field = &plan.fields[previous];
+        if (!count_field) return Error::invalid_length;
+        const FieldState* count_state = nullptr;
         for (std::size_t previous = 0; previous < writer.out.field_count; ++previous) {
             const auto& state = writer.out.fields[previous];
-            if (state.id == field.count_field_id && state.error != Error::ok) return Error::invalid_length;
+            if (state.id == count_field->id && state.role == count_field->role) count_state = &state;
         }
-        for (std::size_t n = 0; n < writer.out.segment_count; ++n) {
-            const auto& segment = writer.out.segments[n];
-            if (segment.field_id == field.count_field_id && segment.size == sizeof(std::uint32_t)) {
-                if (count_segment) return Error::invalid_length;
-                count_segment = &segment;
-            }
-        }
-        if (!count_segment) return Error::invalid_length;
+        if (!count_state || count_state->error != Error::ok
+            || count_state->final_segment >= writer.out.segment_count) return Error::invalid_length;
+        const auto* count_segment = &writer.out.segments[count_state->final_segment];
+        if (count_segment->field_id != count_field->id || count_segment->role != count_field->role
+            || count_segment->size != sizeof(std::uint32_t)) return Error::invalid_length;
+        writer.attempted_address = count_segment->address; writer.attempted_size = count_segment->size;
         std::uint32_t count = 0;
         std::memcpy(&count, writer.out.bytes.data() + count_segment->offset, sizeof(count));
         if (count > field.max_count) return Error::invalid_length;
@@ -95,13 +101,12 @@ Error field_capture(const HookCapturePlan& plan, std::size_t index, const Contex
         return writer.copy(field, address, static_cast<std::size_t>(count) * field.element_bytes);
     }
     if (field.kind != Kind::utf16) return Error::invalid_plan;
-    std::array<std::byte, 20> header{};
-    auto error = writer.scalar(field, address, header.data(), header.size());
-    if (error != Error::ok) return error;
-    std::uintptr_t klass = 0;
+    std::uintptr_t klass = 0, length_address = 0;
     std::int32_t length = 0;
-    std::memcpy(&klass, header.data(), sizeof(klass));
-    std::memcpy(&length, header.data() + 16, sizeof(length));
+    if (!address_add(address, 16, length_address)) return Error::bounds;
+    auto error = writer.scalar(field, address, &klass, sizeof(klass));
+    if (error != Error::ok) return error;
+    if ((error = writer.scalar(field, length_address, &length, sizeof(length))) != Error::ok) return error;
     if (!field.expected_class || klass != field.expected_class) return Error::class_mismatch;
     if (length < 0 || length > field.max_units || field.max_units > max_string_units) return Error::invalid_length;
     std::uintptr_t text;
@@ -109,10 +114,13 @@ Error field_capture(const HookCapturePlan& plan, std::size_t index, const Contex
     const auto text_offset = writer.out.byte_count;
     const auto bytes = static_cast<std::size_t>(length) * 2;
     if ((error = writer.copy(field, text, bytes)) != Error::ok) return error;
-    // Re-read exact owned length, never a max-size read across a valid short string.
-    std::array<std::byte, 20> after{};
-    if ((error = writer.raw(address, after.data(), after.size())) != Error::ok) return error;
-    if (header != after) return Error::changed_guard;
+    // The monitor and padding are not string identity facts. Only class,
+    // length and the exact text are owned and checked again.
+    std::uintptr_t after_class = 0;
+    std::int32_t after_length = 0;
+    if ((error = writer.raw(address, &after_class, sizeof(after_class))) != Error::ok) return error;
+    if ((error = writer.raw(length_address, &after_length, sizeof(after_length))) != Error::ok) return error;
+    if (klass != after_class || length != after_length) return Error::changed_guard;
     std::array<std::byte, max_string_units * 2> repeated{};
     if (bytes && (error = writer.raw(text, repeated.data(), bytes)) != Error::ok) return error;
     if (bytes && std::memcmp(writer.out.bytes.data() + text_offset, repeated.data(), bytes)) return Error::changed_guard;
@@ -143,7 +151,7 @@ Error validate_plan(const HookCapturePlan& plan) noexcept {
         std::size_t count = field.depth + 1, read_count = field.depth + 1;
         if (field.kind == Kind::utf16) {
             if (!field.expected_class || !field.max_units || field.max_units > max_string_units) return Error::invalid_plan;
-            n = 2 * (20 + field.max_units * 2); ++count; read_count = field.depth + 4;
+            n = 2 * (12 + field.max_units * 2); count += 2; read_count = field.depth + 6;
         } else if (field.kind == Kind::counted_bytes) {
             bool found = false;
             for (std::size_t j = 0; j < i; ++j) {
@@ -178,7 +186,7 @@ Error validate_plan(const HookCapturePlan& plan) noexcept {
 
 Error capture(const HookCapturePlan& plan, Phase phase, const Context& context,
               ReadMemory reader, void* user, Snapshot& out) noexcept {
-    out.segment_count = out.field_count = 0; out.byte_count = 0; out.error = Error::ok;
+    out.segment_count = out.field_count = 0; out.byte_count = 0; out.read_count = out.read_bytes = 0; out.error = Error::ok;
     out.guard_valid.fill(true);
     out.phase = phase; out.checkpoint = context.checkpoint;
     out.invocation_id = context.invocation_id; out.parent_invocation_id = context.parent_invocation_id;
@@ -196,9 +204,12 @@ Error capture(const HookCapturePlan& plan, Phase phase, const Context& context,
         if (field.phase != phase) continue;
         if (field.guard_id >= max_guards) return out.error = Error::invalid_plan;
         begin[i] = out.segment_count;
+        writer.attempted_address = 0; writer.attempted_size = 0;
         const auto error = field_capture(plan, i, context, writer);
         end[i] = out.segment_count;
-        out.fields[out.field_count++] = {field.id, field.role, error};
+        out.fields[out.field_count++] = {field.id, field.role, error,
+            static_cast<std::uint16_t>(error == Error::ok && end[i] > begin[i] ? end[i] - 1 : 0xffff),
+            error == Error::ok ? 0 : writer.attempted_address, error == Error::ok ? 0 : writer.attempted_size};
         if (field.required && error != Error::ok && out.error == Error::ok) out.error = error;
         if (field.guard_id) {
             if (error != Error::ok) out.guard_valid[field.guard_id] = false;
