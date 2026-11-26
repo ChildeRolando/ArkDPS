@@ -18,10 +18,10 @@ function resolve(role,cp,id,address,size){
  if(cp!==0||!['body','before','after'].includes(role)||![7,-1].includes(id)||address<4096n||address+BigInt(size)>4160n){status=9;return false;}
  status=0;return true;
 }
-function __nativeOwnedRead(role,cp,id,address,size){readCalls++;if(!resolve(role,cp,id,address,size))return;return b.slice(Number(address-4096n),Number(address-4096n)+size);}
-function __nativeOwnedScalar(role,cp,id,address,kind){scalarCalls++;const sizes=[1,2,4,4,8,8,4];if(!resolve(role,cp,id,address,sizes[kind]))return;const at=Number(address-4096n);return [()=>v.getUint8(at),()=>v.getUint16(at,true),()=>v.getUint32(at,true),()=>v.getInt32(at,true),()=>v.getBigUint64(at,true),()=>v.getBigInt64(at,true),()=>v.getFloat32(at,true)][kind]();}
-function __nativeOwnedStatus(){return status;}
-function __nativeOwnedPoint(role,cp){pointCalls++;if(!leased)return (1<<24)|(2<<16)|7;if(fault)return (1<<24)|(fault<<16)|7;if(cp!==0)return (9<<16);if(role==='multi')return (2<<24)|(5<<16);if(role==='missing')return 0;return (1<<24)|(['unreadable','guard'].includes(role)?(role==='guard'?8:5)<<16:0)|7;}
+function __nativeOwnedRead(role,cp,id,address,size){if(arguments.length!==5)throw Error('native read argc');readCalls++;if(!resolve(role,cp,id,address,size))return;return b.slice(Number(address-4096n),Number(address-4096n)+size);}
+function __nativeOwnedScalar(role,cp,id,address,kind){if(arguments.length!==5)throw Error('native scalar argc');scalarCalls++;const sizes=[1,2,4,4,8,8,4];if(!resolve(role,cp,id,address,sizes[kind]))return;const at=Number(address-4096n);return [()=>v.getUint8(at),()=>v.getUint16(at,true),()=>v.getUint32(at,true),()=>v.getInt32(at,true),()=>v.getBigUint64(at,true),()=>v.getBigInt64(at,true),()=>v.getFloat32(at,true)][kind]();}
+function __nativeOwnedStatus(){if(arguments.length!==0)throw Error('native status argc');return status;}
+function __nativeOwnedPoint(role,cp){if(arguments.length!==2)throw Error('native point argc');pointCalls++;if(!leased)return (1<<24)|(2<<16)|7;if(fault)return (1<<24)|(fault<<16)|7;if(cp!==0)return (9<<16);if(role==='multi')return (2<<24)|(5<<16);if(role==='missing')return 0;return (1<<24)|(['unreadable','guard'].includes(role)?(role==='guard'?8:5)<<16:0)|7;}
 function nativeRecord(){const r={version:1,native_view:true,ticket:'17',edge:'entry',checkpoint:0};Object.defineProperties(r,{segments:{get(){throw Error('enumerated native segments');}},fields:{get(){throw Error('enumerated native fields');}}});return r;}
 function rejects(fn){try{fn();return false;}catch(error){return true;}}
 `,c);
@@ -88,6 +88,7 @@ __arkdpsReplayBegin(nativeRecord());globalThis.providerReused=cachedProvider===_
 globalThis.__nativeOwnedRead=(...args)=>savedRead(...args);__arkdpsReplayBegin(nativeRecord());globalThis.providerRebuilt=cachedProvider!==__arkdpsReplay.native;globalThis.compactRebuilt=__arkdpsReplayEnd(true);globalThis.__nativeOwnedRead=savedRead;
 status=0;__arkdpsReplayBegin(nativeRecord());leased=false;globalThis.compactExpired=__arkdpsReplayEnd(true);leased=true;
 status=0;__arkdpsReplayBegin(nativeRecord());status=9;globalThis.compactPoison=__arkdpsReplayEnd(true);status=0;
+status=0;__arkdpsReplayBegin(nativeRecord());globalThis.unknownOperation=rejects(()=>__arkdpsNativeCall('unknown'));globalThis.unknownOperationEnd=__arkdpsReplayEnd();
 globalThis.liveCount=live;
 `,c);
 assert.deepEqual(Array.from(c.values),[251,65000,0xfedcba98,-123456,'18364758544493064720','-9223372036854775807',-13.25,'0xfedcba9876543210']);
@@ -107,3 +108,5 @@ assert(c.badAddress);assert.equal(c.badAddressEnd.complete,false);
 assert.deepEqual(Array.from(c.wrapValues),['0xffffffffffffffff','0x1','0xffffffffffffffff']);
 
 assert(c.providerFrozen);assert(c.providerReused);assert(c.providerRebuilt);assert.equal(c.compactGood,true);assert.equal(c.compactRebuilt,true);assert.equal(c.publicEnd.complete,true);assert.equal(c.compactExpired,false);assert.equal(c.compactPoison,false);
+
+assert(c.unknownOperation);assert.equal(c.unknownOperationEnd.complete,false);

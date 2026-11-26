@@ -230,8 +230,19 @@ function __arkdpsNativeReadFailure(status){
  if(!Number.isInteger(status)||status<1||status>10||__arkdpsNativeStructuralStatus(status))__arkdpsReplayGap('native owned structural failure '+status);
  __arkdpsReplay.unreadable++;throw new Error('native owned unreadable '+status);
 }
-function __arkdpsNativeCall(name,...args){
- try{return __arkdpsReplay.native[name](...args);}catch(error){__arkdpsReplayGap('native owned provider failed '+name);}
+function __arkdpsNativeCall(name,a,b,c,d,e){
+ // Preserve the native ABI's exact argc without allocating a rest array for
+ // every scalar/read. Provider selection remains pinned by ReplayBegin.
+ try{
+  const native=__arkdpsReplay.native;
+  switch(name){
+   case '__nativeOwnedStatus':return native.__nativeOwnedStatus();
+   case '__nativeOwnedPoint':return native.__nativeOwnedPoint(a,b);
+   case '__nativeOwnedRead':return native.__nativeOwnedRead(a,b,c,d,e);
+   case '__nativeOwnedScalar':return native.__nativeOwnedScalar(a,b,c,d,e);
+  }
+ }catch(error){__arkdpsReplayGap('native owned provider failed '+name);}
+ __arkdpsReplayGap('invalid native owned operation '+name);
 }
 function __arkdpsNativePoint(role,checkpoint){
  const packed=__arkdpsNativeCall('__nativeOwnedPoint',role,checkpoint);
