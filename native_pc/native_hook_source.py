@@ -36,7 +36,7 @@ DLL_NAME = 'ArkDPS.NativeEvents.dll'
 PROVIDER = 'arkdps-native-hooks'
 PROTOCOL = 1
 RUNTIME_SOURCES = ('engine.cpp', 'engine.h', 'engine_worker.h', 'engine_capture_lane.h',
-                   'engine_capture_plan.h', 'capture_queue.h', 'native_capture.cpp', 'native_capture.h',
+                   'engine_capture_plan.h', 'capture_queue.h', 'capture_spill_pool.h', 'native_capture.cpp', 'native_capture.h',
                    'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'cold_plan.js', 'build.py')
 NATIVE_HOOK_LICENSES = {
     'quickjs-LICENSE': '598fd7fc928e4350abce36e337ba5a1346923c5c692f5be92c3d8e29ddd7c18d',
