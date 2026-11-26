@@ -233,8 +233,7 @@ function withCapturedMode(record,body){
 function capturedCollectionMode(read){
  const record=__arkdpsReplayRecord(),epoch=record.facts?.scope_mode_epoch;
  if(!Number.isSafeInteger(epoch)||!nativeCaptureModeHistory.has(epoch))__arkdpsReplayGap('captured scope mode epoch unavailable');
- const desired=nativeAutoDesiredMode;nativeAutoDesiredMode=nativeCaptureModeHistory.get(epoch);
- try{return read();}finally{nativeAutoDesiredMode=desired;}
+ return read(nativeCaptureModeHistory.get(epoch));
 }
 function captureNativeInvocationRead(scope,read){
  if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive())return read();

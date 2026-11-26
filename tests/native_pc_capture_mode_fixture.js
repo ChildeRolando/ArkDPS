@@ -25,10 +25,20 @@ nativeAutoEffective={scope_key:'old',mode:'all'};
 globalThis.sameScope=withCapturedMode(__arkdpsReplayRecord(),()=>autoCollectionMode('old',4));
 globalThis.newScope=withCapturedMode(__arkdpsReplayRecord(),()=>autoCollectionMode('new',4));
 globalThis.assistScope=withCapturedMode(__arkdpsReplayRecord(),()=>autoCollectionMode('assist',5));
+// Reading a captured preference supplies a value; it must not temporarily
+// mutate the surrounding callback's independently selected record mode.
+withCapturedMode(__arkdpsReplayRecord(),()=>{
+ globalThis.scopeArgument=capturedCollectionMode(desired=>{globalThis.scopeReadAmbient=nativeAutoDesiredMode;return desired;});
+ globalThis.scopeReadThrew=rejected(()=>capturedCollectionMode(()=>{throw Error('read failed');}));
+ globalThis.scopeAfterThrow=nativeAutoDesiredMode;
+});
+__arkdpsReplayRecord=()=>({facts:{mode_epoch:0,scope_mode_epoch:99}});
+globalThis.latchedUnknownScopeRejected=rejected(()=>autoCollectionMode('assist',5));
 __arkdpsReplayRecord=()=>({facts:{mode_epoch:99}});globalThis.unknownEpochRejected=rejected(()=>callback.onEnter());
 __arkdpsReplayActive=()=>false;for(let i=2;i<256;i++)installCaptureMode(true,{version:1,mode_epoch:i});globalThis.historyBoundRejected=rejected(()=>installCaptureMode(false,{version:1,mode_epoch:256}));
 `,context);
 assert.equal(context.installed.mode_epoch,1);assert.equal(context.installed.desired_mode,'local');assert.equal(context.oldEffective,'all');
-for(const key of ['duplicateEpochRejected','skippedEpochRejected','unknownEpochRejected','historyBoundRejected'])assert.equal(context[key],true,key);
+for(const key of ['duplicateEpochRejected','skippedEpochRejected','unknownEpochRejected','latchedUnknownScopeRejected','scopeReadThrew','historyBoundRejected'])assert.equal(context[key],true,key);
+assert.equal(context.scopeArgument,'local');assert.equal(context.scopeReadAmbient,'all');assert.equal(context.scopeAfterThrow,'all');
 assert.equal(context.sameScope,'all');assert.equal(context.newScope,'local');assert.equal(context.assistScope,'all');assert.equal(context.ran,true);assert.equal(context.oldDesired,'all');assert.equal(context.newDesired,'local');assert.equal(context.restoredDesired,'local');assert.equal(context.gap,'captured mode epoch unavailable');
 console.log('PASS_CAPTURE_MODE_HISTORY entry-pinned old/new epoch + restore/latest and bounded history; no live access');

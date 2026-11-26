@@ -14,19 +14,19 @@ function setAutoChessMode(enabled){
 }
 function autoCollectionMode(scope_key,phase){
  return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureCollectionMode==='function'
-  ?probeAdapter.captureCollectionMode(()=>autoCollectionModePoint(scope_key,phase)):autoCollectionModePoint(scope_key,phase);
+  ?probeAdapter.captureCollectionMode(desired=>autoCollectionModePoint(scope_key,phase,desired)):autoCollectionModePoint(scope_key,phase);
 }
-function autoCollectionModePoint(scope_key,phase){
+function autoCollectionModePoint(scope_key,phase,desired=nativeAutoDesiredMode){
  // Only a proven combat scope can latch a preference. Terminal observations
  // retain the completed combat's effective mode until another combat starts.
  if([4,5,6].includes(phase)&&nativeAutoEffective?.scope_key!==scope_key){
-  let mode=nativeAutoDesiredMode;
+  let mode=desired;
   // The assisted battlefield may have only other accounts' deployed actors.
   if(phase===5)mode='all';
   else if(phase===4&&probeAdapter.supportsAutoChessAllDefense!==true)mode='local';
   nativeAutoEffective={scope_key,mode};
  }
- return nativeAutoEffective?.mode??nativeAutoDesiredMode;
+ return nativeAutoEffective?.mode??desired;
 }
 function autoEventOwner(event){
  const scope=event.native_autochess_scope,owners=nativeAutoOwners;
