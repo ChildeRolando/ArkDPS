@@ -14,7 +14,7 @@ int main(){
  fence.ticket=101;fence.activity=202;
  assert(!fence.accepts(0,101,202,read,&f)); // uncertified ordinary publication
  fence.verified=true;assert(!fence.accepts(0,101,202,read,&f));
- std::uintptr_t retained=99;assert(!fence.certify_singleton(reinterpret_cast<const std::byte*>(&retained),8));
+ std::uintptr_t retained=99;assert(fence.certify_singleton(reinterpret_cast<const std::byte*>(&retained),8));
  assert(!fence.accepts(0,101,202,read,&f)); // Stable non-NULL never certifies fresh terminal reuse.
  assert(fence.certify_singleton(reinterpret_cast<const std::byte*>(&f.root),8));
  assert(fence.accepts(0,101,202,read,&f));

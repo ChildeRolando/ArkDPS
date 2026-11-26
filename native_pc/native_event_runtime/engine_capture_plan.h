@@ -33,6 +33,7 @@ struct CompiledPlan {
     std::array<SavedEntryRoot, max_roots> entry_roots{};
     std::uint8_t entry_root_count=0;
     std::array<std::uint16_t,3> terminal_guard_fields{};
+    std::array<std::uint16_t,14> terminal_retained_fields{};
     bool terminal_destroy=false;
     bool apply_modifier=false, buff_damage=false, parent_checkpoint_fields=false;
     bool hp_profile=false, hp_dirty=false, hp_normal=false, hp_defer_scope=false;
@@ -257,6 +258,11 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         const auto role=value.at("role").get<std::string>();
         const int slot=name=="terminal.singleton" ? 0 : role=="clock_open" ? 1 : role=="clock_close" ? 2 : -1;
         if (slot>=0) result.terminal_guard_fields[slot]=result.plan->fields[i].id;
+        constexpr std::array<const char*,14> retained{{"controller","controller.state","native","native.owner","logger",
+            "logger.owner","stats","level","receiver.logger_view","receiver.level_class","receiver.stats_class",
+            "terminal.old_logger_stats","terminal.old_stage_pointer","terminal.stage_text"}};
+        for(unsigned field=0;field<retained.size();++field)
+            if(name==retained[field])result.terminal_retained_fields[field]=result.plan->fields[i].id;
     }
     result.apply_modifier=source.value("name",std::string())=="Entity.ApplyModifier";
     result.buff_damage=source.value("name",std::string())=="Buff.OnTakeDamage";
