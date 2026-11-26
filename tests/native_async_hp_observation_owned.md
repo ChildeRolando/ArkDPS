@@ -31,5 +31,13 @@ recorded; no sleep manufactures an in-flight game operation.
 
 Static validation: Python compilation, actual producer plan/finalizer output
 completeHP11fields/11observations/full3fieldcoldbracket, and generated JS syntax.
-Actual DLL execution remains pending a final native build; do not treat static
-checks as engine integration acceptance.
+Actual DLL execution passed three cases against build-source813160f, binary
+SHA4ff028d178cbe774f2c5fe2b2e2f14fdd4d6c3ad4a28454d99d6d96ae6eec6cf.
+Initial raw reserved/processed/closed/published tickets were2; mode1tickets4;
+publication fences match and delivered eventsequence remains0. Wrongroot and
+wrongphase both produced nativecode6 even through catch, with original ABI intact.
+After that fatal response NativePipe deliberately poisons/closes the channel, so
+ACK is not sent; no claim is made that a second RPC traverses that closed pipe.
+The first test incorrectly expected a second native6 and failed; that receipt is
+retained alongside the corrected contract and finalfrontier receipts. These are
+engine binding/strict-frontier checks, not business/FPS/30k throughput acceptance.

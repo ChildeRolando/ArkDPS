@@ -163,14 +163,17 @@ def run(binary, source_root, hostile=False):
             result, calls = request_and_call(pipe, fixture)
             if hostile:
                 assert isinstance(result, RuntimeError) and 'native capture failed: code=6' in str(result), repr(result)
+                assert pipe._poisoned is True, 'failure must close the authenticated request channel'
+                ack_refusal=None
                 try:
                     pipe.request('ack', sequence=1)
                 except RuntimeError as error:
-                    assert 'native capture failed: code=6' in str(error), str(error)
+                    assert 'closed or has an incomplete request' in str(error), str(error)
+                    ack_refusal=str(error)
                 else:
                     raise AssertionError('hostile caught failure unexpectedly accepted ACK')
                 return dict(hostile=hostile, identity=fixture.identity, original_abi_preserved=True,
-                    error=str(result), calls=calls, source_sha256=sha256(text.encode()).hexdigest(),
+                    error=str(result), ack_not_sent_after_poison=True, ack_refusal=ack_refusal, calls=calls, source_sha256=sha256(text.encode()).hexdigest(),
                     plan_sha256=sha256(json.dumps(plan,sort_keys=True).encode()).hexdigest())
             if isinstance(result, BaseException):
                 raise result
@@ -185,6 +188,7 @@ def run(binary, source_root, hostile=False):
             assert not result.get('retry') and result.get('error') is None, result
             assert result['entries'] == result['leaves'] == len(calls), result
             assert {row['mode'] for row in result['records']} == {0}, result
+            initial_call_count=len(calls)
             # Deliberately install mode1 before producing new callbacks. A fresh
             # publication cannot be fabricated, so this no-callback request retries.
             switch = pipe.request('mark', autochess_enabled=False)
@@ -198,6 +202,14 @@ def run(binary, source_root, hostile=False):
             assert modes == {0, 1}, later
             assert all(row['checkpoint'] == 0 for row in later['records']), later
             assert later['native_async_capture']['failure_code'] == 0, later
+            for reply, count, epoch in ((result, initial_call_count, 0), (later, len(calls), 1)):
+                counters=reply['native_async_capture']
+                assert counters['reserved_ticket']==counters['processed_ticket']==counters['closed_ticket']==2*count, reply
+                assert counters['published_ticket']==counters['closed_ticket'], reply
+                assert counters['desired_mode_epoch']==counters['published_mode_epoch']==epoch, reply
+                assert counters['delivered_event_sequence']==0, reply
+                fence=reply['native_publication']
+                assert int(fence['closed_ticket'])==counters['published_ticket'] and fence['sequence']==0, reply
             return dict(hostile=False, identity=fixture.identity, original_abi_preserved=True,
                 initial=result, switch=switch, mode1=later, retries=retries, calls=calls,
                 source_sha256=sha256(text.encode()).hexdigest(),
@@ -215,6 +227,13 @@ if __name__ == '__main__':
     options = parser.parse_args()
     binary = options.binary.resolve()
     receipt = dict(scope=__doc__, binary_sha256=sha256(binary.read_bytes()).hexdigest(), cases=[])
+    receipt['test_sha256']=sha256(Path(__file__).read_bytes()).hexdigest()
+    receipt['source_root_head']=subprocess.check_output(['git','rev-parse','HEAD'],cwd=options.source_root.resolve(),text=True).strip()
+    build_metadata=binary.with_suffix('.build.json')
+    if build_metadata.is_file():
+        receipt['build_metadata_sha256']=sha256(build_metadata.read_bytes()).hexdigest()
+        receipt['build_metadata']=json.loads(build_metadata.read_text(encoding='utf-8'))
+
     try:
         for hostile in (False, 'root', 'phase'):
             receipt['cases'].append(run(binary, options.source_root.resolve(), hostile))
