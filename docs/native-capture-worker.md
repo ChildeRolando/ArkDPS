@@ -210,3 +210,19 @@ worker的标量验证使用固定kind范围，不为每次读取创建范围数�
 原生独立poison或浮点NaN的原始含义。`native_async_scalar_validation_owned.py`可在已有DLL的自有
 child中，使用真实owned lease与原生provider对照两个实际标量验证函数；它测量helper成本，
 不包含完整scope/publication/生产HP吞吐，也不声明游戏FPS改善。
+
+
+### 跨宿主mark截止时间的冷捕获重试
+
+warm候选在worker回放时失败，可能已经晚于该请求的100ms截止时间。冷捕获需求因此保留为
+尚未修复的请求世代下界，而非仅匹配失败请求的相等ID；后续N+1/N+2请求仍会采集真正的
+cold roots/body，不会因为换了宿主请求号就再次借用已失效的warm图。
+
+清除需求必须发生在已验证的closed publication之后，并同时满足当前fresh raw ticket门槛、
+scope/mode与当前配置一致且请求号不早于未修复世代。失败、旧成功或错误mode不能清除；
+每请求最多两次native claim保持不变，无请求时不会由此触发逐HP冷捕获。该状态机不修改
+事件序号、ACK、frame0事实、终局证据或读数归约。
+
+`native_async_cold_deadline_owned.py`用真实DLL自有child，故意让首个warm候选越过截止时间，
+再拒绝一次实际cold候选，要求两个后续请求都捕获cold proof，成功修复后下一次恢复warm。
+它是请求世代/owned读取的验收，不是完整游戏关卡或吞吐替代。

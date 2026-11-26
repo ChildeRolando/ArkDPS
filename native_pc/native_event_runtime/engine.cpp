@@ -839,6 +839,9 @@ void replay_record(const std::byte* bytes, std::size_t length) {
                     throw std::runtime_error("published configuration epoch does not bind captured scope point");
                 runtime.published_mode_epoch=header.scope_mode_epoch;
                 runtime.published_sequence=arkdps::capture::plan_uint(fence.at("sequence"),9007199254740991ULL);
+                clear_cold_publication(runtime.cold_publication_request,header.publication_request,header.ticket,
+                    runtime.lanes->minimum_publication_ticket.load(std::memory_order_acquire),header.scope_mode_epoch,
+                    runtime.capture_mode_epoch.load(std::memory_order_acquire),header.closed_after && header.active_after==0);
                 auto pending=header.publication_request;
                 if (pending && header.ticket>=runtime.lanes->minimum_publication_ticket.load(std::memory_order_acquire))
                     runtime.lanes->pending_publication.compare_exchange_strong(pending,0,std::memory_order_acq_rel);
@@ -850,7 +853,7 @@ void replay_record(const std::byte* bytes, std::size_t length) {
         // guards succeeded. The next bounded candidate must capture actual
         // cold facts; never mutate old expected roots or retry every callback.
         if (runtime.published_ticket!=header.ticket)
-            runtime.cold_publication_request.store(header.publication_request,std::memory_order_release);
+            require_cold_publication(runtime.cold_publication_request,header.publication_request);
         auto claimed=header.publication_request;
         runtime.lanes->publication_claim.compare_exchange_strong(claimed,0,std::memory_order_acq_rel);
     }
@@ -983,7 +986,7 @@ extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
     header.depth=lane->depth; header.phase=Phase::entry; header.arg_mask=context.args_valid;
     capture_scope_point(hook->capture_plan,Phase::entry,context,call.configuration,
                         capture_read,nullptr,lane->snapshot,header,lane,
-                        header.publication_request && runtime.cold_publication_request.load(std::memory_order_acquire)==header.publication_request);
+                        header.publication_request && cold_publication_required(header.publication_request,runtime.cold_publication_request.load(std::memory_order_acquire)));
     save_entry_roots(hook->capture_plan,lane->snapshot,context);
     header.activity=runtime.activity_generation.load(std::memory_order_acquire);
     header.capture_concurrent=entry_capture_concurrent(header.active,header.depth,header.activity_begin,header.activity,
@@ -1035,7 +1038,7 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
     call.context.return_value=frame->rax; call.context.return_valid=true;
     capture_scope_point(hook->capture_plan,Phase::leave,call.context,call.configuration,
                         capture_read,nullptr,lane->snapshot,header,lane,
-                        header.publication_request && runtime.cold_publication_request.load(std::memory_order_acquire)==header.publication_request);
+                        header.publication_request && cold_publication_required(header.publication_request,runtime.cold_publication_request.load(std::memory_order_acquire)));
     header.activity=runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel)+1;
     header.active_after=runtime.active.fetch_sub(1,std::memory_order_acq_rel)-1;
     header.closed_after=header.active_after==0 && header.activity==header.activity_begin+1;

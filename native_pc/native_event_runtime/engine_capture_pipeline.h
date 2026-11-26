@@ -7,6 +7,25 @@ inline bool publication_claimable(std::uint64_t request,unsigned attempts,unsign
     return request && attempts<2 && active==1;
 }
 
+// A failed candidate can be replayed after its host mark deadline. Keep the
+// cold retry obligation across later request IDs; a new deadline is not proof
+// that the stale warm graph became valid again.
+inline bool cold_publication_required(std::uint64_t requested,std::uint64_t required) noexcept {
+    return requested && required && requested>=required;
+}
+inline void require_cold_publication(std::atomic<std::uint64_t>& required,std::uint64_t request) noexcept {
+    auto current=required.load(std::memory_order_acquire);
+    while(request>current && !required.compare_exchange_weak(current,request,std::memory_order_acq_rel)) {}
+}
+inline bool clear_cold_publication(std::atomic<std::uint64_t>& required,std::uint64_t request,
+                                   std::uint64_t ticket,std::uint64_t minimum_ticket,
+                                   std::uint64_t scope_mode,std::uint64_t desired_mode,bool verified_closed) noexcept {
+    if(!verified_closed || ticket<minimum_ticket || scope_mode!=desired_mode)return false;
+    auto current=required.load(std::memory_order_acquire);
+    return cold_publication_required(request,current)
+        && required.compare_exchange_strong(current,0,std::memory_order_acq_rel);
+}
+
 // All pieces share one budget and guard session. In particular the original
 // callback clock closes only after the scope graph has closed; independently
 // finalized snapshots cannot certify a combined historical observation.
