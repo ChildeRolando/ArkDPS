@@ -47,9 +47,9 @@ globalThis.__arkdpsOnClosedRecord=record=>{
   activity_end:record.activity_end,active_after:record.active_after,closed_after:record.closed_after});
  const events=records.map((record,index)=>({...record,sequence:index+1}));
  return Object.freeze({mark:{sequence:records.length,epoch:serial,active:0,active_hooks:[],
-  frame:records.length,game_time:records.length/30,error:null,retry:false,stopped:false,mode_epoch:record.facts.mode_epoch,
+  frame:records.length,game_time:records.length/30,error:null,retry:false,stopped:false,mode_epoch:record.facts.mode_epoch,native_capture_scope_mode_epoch:record.facts.scope_mode_epoch,
   records:records.slice(),retained_arguments:retainedArgumentProof(),owned_closed_record:lastClosedRecord},
-  acknowledged:ownedAcknowledged,events:events.filter(e=>e.sequence>ownedAcknowledged),
+  acknowledged:ownedAcknowledged,events_after:__arkdpsPublicationJournal.publishedThrough,events_through:records.length,events:events.filter(e=>e.sequence>__arkdpsPublicationJournal.publishedThrough),
   hp_context:[],read_fields:{error:null,stopped:false},terminal_read:null});
 };
 // The production engine must route these through the journal, never back here.

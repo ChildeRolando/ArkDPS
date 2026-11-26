@@ -9,7 +9,7 @@ int main() {
         "address":"0x1234","abi":"win64-gp","profile":"owned","arg_count":16,
         "arg_mask":65535,"globals":[],"fields":[],"max_bytes":65536,"max_reads":4096,
         "required_projections":[]})");
-    expect(compile_plan(base,0x1234).plan.arg_mask==65535);
+    expect(compile_plan(base,0x1234).plan->arg_mask==65535);
     unsigned rejections=0;
     auto reject=[&](Json plan) {
         bool rejected=false;
@@ -33,7 +33,7 @@ int main() {
         {"offset",0},{"bytes",0},{"kind","projection_tree"},{"projection_root",0},
         {"guard_id",0},{"guard_side","none"},{"required",true}}});
     const auto compiled=compile_plan(tree,0x1234);
-    expect(compiled.plan.projection_count==1 && compiled.plan.projections[0].bytes==8);
+    expect(compiled.plan->projection_count==1 && compiled.plan->projections[0].bytes==8);
     plan=tree; plan["projections"][0]["kind"]="callback"; reject(plan);
     plan=tree; plan["projections"][0]["max_visits"]=257; reject(plan);
     plan=tree; plan["projections"][0]["child_count"]=2; reject(plan);

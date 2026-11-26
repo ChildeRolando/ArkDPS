@@ -14,7 +14,7 @@ namespace arkdps {
 // native callback producers never touch this mailbox, mutex or condition.
 class EngineWorker final {
 public:
-    void start(std::function<void()> initialize, std::function<void()> poll) {
+    void start(std::function<void()> initialize, std::function<bool()> poll) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (started_) throw std::runtime_error("native worker already started");
         started_ = true;
@@ -26,11 +26,11 @@ public:
             }
             changed_.notify_all();
             for (;;) {
-                if (!startup_error_) poll();
+                const bool ready_more=!startup_error_ && poll();
                 std::packaged_task<std::string()> job;
                 {
                     std::unique_lock<std::mutex> guard(mutex_);
-                    if (jobs_.empty()) changed_.wait_for(guard, std::chrono::milliseconds(1));
+                    if (jobs_.empty() && !ready_more) changed_.wait_for(guard, std::chrono::milliseconds(1));
                     if (!jobs_.empty()) { job = std::move(jobs_.front()); jobs_.pop_front(); }
                 }
                 if (job.valid()) job();
