@@ -27,6 +27,7 @@ function nativeRecord(){const r={version:1,native_view:true,ticket:'17',edge:'en
 function rejects(fn){try{fn();return false;}catch(error){return true;}}
 `,c);
 vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8'),c);
+vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/cold_plan.js','utf8'),c);
 vm.runInContext(`
 const header=new ArrayBuffer(192),headerView=new DataView(header);
 const words=[0xffffffffffffffffn,9007199254740993n,7n,11n,12n,134401659939984618n,19n,3n,4n,21n,22n,23n,8n,0n,1n,0n,2n,31n,1n,1n,0n,1n];
@@ -91,7 +92,8 @@ status=0;__arkdpsReplayBegin(nativeRecord());globalThis.nativeCall=rejects(()=>N
 status=0;__arkdpsReplayBegin(nativeRecord());status=9;globalThis.directPoisonEnd=__arkdpsReplayEnd();
 globalThis.versionRejected=rejects(()=>__arkdpsReplayBegin({...nativeRecord(),version:2}));
 status=0;const beforeMetadataReads=readCalls;__arkdpsReplayBegin(nativeRecord());globalThis.metadataMissing=rejects(()=>__arkdpsCapturedAssignable(ptr(1),ptr(2)));globalThis.metadataMissingEnd=__arkdpsReplayEnd();globalThis.metadataDidNotRead=readCalls===beforeMetadataReads;
-globalThis.__arkdpsColdMetadataRead=(address,size)=>{if(address.toString()!=='0x5a'||size!==8)throw Error('unexpected immutable key');const owned=new ArrayBuffer(8);new DataView(owned).setBigUint64(0,1n,true);return owned;};status=0;__arkdpsReplayBegin(nativeRecord());globalThis.metadataAssignable=__arkdpsCapturedAssignable(ptr(1),ptr(2));globalThis.metadataGoodEnd=__arkdpsReplayEnd();
+__arkdpsSealClassHierarchy(new Map([['0x1','0x0'],['0x2','0x1']]));status=0;__arkdpsReplayBegin(nativeRecord());globalThis.metadataAssignable=__arkdpsCapturedAssignable(ptr(1),ptr(2));globalThis.metadataGoodEnd=__arkdpsReplayEnd();
+status=0;__arkdpsReplayBegin(nativeRecord());globalThis.metadataUnknown=rejects(()=>__arkdpsCapturedAssignable(ptr(1),ptr(3)));globalThis.metadataUnknownEnd=__arkdpsReplayEnd();
 status=0;__arkdpsReplayBegin(nativeRecord());globalThis.badAddress=rejects(()=>__arkdpsOwnedRead('invalid',1));globalThis.badAddressEnd=__arkdpsReplayEnd();
 globalThis.wrapValues=[ptr(-1n).toString(),ptr(0x10000000000000001n).toString(),ptr(-0x10000000000000001n).toString()];
 status=0;__arkdpsReplayBegin(nativeRecord());const cachedProvider=__arkdpsReplay.native;globalThis.providerFrozen=Object.isFrozen(cachedProvider);globalThis.compactGood=__arkdpsReplayEnd(true);
@@ -133,7 +135,7 @@ console.log('PASS_NATIVE_OWNED_FACADE fake backend only; seven scalar kinds/poin
 
 assert(Array.from(c.allHelpersRejected).every(Boolean));assert.equal(c.idleExpiredEnd.complete,false);for(const key of ['badScalar','noErrorUndefined','shortBytes','badPoint','nativeCall']){assert(c[key]);assert.equal(c[key+'End'].complete,false);}assert.equal(c.directPoisonEnd.complete,false);assert(c.versionRejected);
 
-assert(c.metadataMissing);assert.equal(c.metadataMissingEnd.complete,false);assert(c.metadataDidNotRead);assert(c.metadataAssignable);assert.equal(c.metadataGoodEnd.complete,true);
+assert(c.metadataUnknown);assert.equal(c.metadataUnknownEnd.complete,false);assert(c.metadataMissing);assert.equal(c.metadataMissingEnd.complete,false);assert(c.metadataDidNotRead);assert(c.metadataAssignable);assert.equal(c.metadataGoodEnd.complete,true);
 
 assert(c.badAddress);assert.equal(c.badAddressEnd.complete,false);
 
