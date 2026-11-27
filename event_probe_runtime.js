@@ -3200,7 +3200,18 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       this.modifierScope=scope;
       if(scope)observeSettlementDomain(scope,readSettlementDomain(this.target,this.mod,this.when));
       if(scope&&scope.source===this.source&&sameMitigationTime(scope.when,this.when)){
-       if(scope.targetHit)scope.targetHitAmbiguous=true;
+       if(!scope.target?.equals(this.target)){
+        const unique=!scope.targetHit&&!scope.targetHitAmbiguous&&!scope.targetCallbackMismatch;
+        // This receiver is a real callback observation, but cannot certify the
+        // parent's different Modifier target. Keep descriptive entry values;
+        // never borrow its pointer from a later parent replay lease.
+        scope.targetCallbackMismatch=unique?{target:targetKey(this.target),
+         target_instance:this.target.toString()}:{target:null,target_instance:null};
+        scope.targetHitAmbiguous=true;scope.targetCommitRejected=true;
+       }else if(scope.targetHit||scope.targetCallbackMismatch){
+        scope.targetHitAmbiguous=true;
+        if(scope.targetCallbackMismatch)scope.targetCallbackMismatch={target:null,target_instance:null};
+       }
        else{
         scope.targetHit={target:this.target,hpBefore:this.hpBefore,uid:damageTargetUid(this.target)};
         beginTargetSettlement(this,scope);
@@ -3418,6 +3429,12 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      const proof={method:this.name,type,target:targetType};
      if(probeAdapter.directHealingProof&&kind==='healing')proof.direct_healing=directHealingProof(this,amount);
      if(kind==='damage'){
+      if(this.targetCallbackMismatch){
+       evidence={target:this.targetCallbackMismatch.target,
+        target_instance:this.targetCallbackMismatch.target_instance,
+        target_type:targetType,damage_type:type};
+       noteSettlementProofGap(this,end,'target callback receiver differs from modifier target');
+      }else{
       const hit=this.targetHitAmbiguous||this.outputAmbiguous?null:this.targetHit;
       const settlement=hit&&this.settlement;
       // Prefer the settled callback for this exact Modifier& and target. A
@@ -3463,6 +3480,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       if(this.nestedElementalChainProof)proof.nested_elemental_chain=this.nestedElementalChainProof;
       settleDamage(this,damageTarget,end,amount,type,reduction,targetEvidence||
                    (evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null));
+      }
      }
      if(kind==='damage'&&enemyDamageReady){
       finalizeModifierSettlement(this,end);

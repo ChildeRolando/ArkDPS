@@ -511,8 +511,10 @@ function nativeCapturePlan(name,address,metadata){
   }
   // The parent pointers come from native TLS, never the delayed JS stack.
   for(const [offset,bytes] of [[0,8],[0x10,8],[0x30,8],[0x48,8],[0x60,4],[0x68,4],[0x70,4]])add('checkpoint','parent.modifier','parent_ref',1,[],offset,bytes,{required:false});
-  add('checkpoint','parent.hp','parent_ref',1,[0x10],0x40,8,{required:false});
-  entity('checkpoint','parent.source',1,[0],true,'parent_ref',true,{born:false,hp:false});
+  // Parent proof consumes stable actor identity, not the parent's token/form
+  // interpretation. The parent's own callback still captures those fields.
+  entity('checkpoint','parent.source',1,[0],true,'parent_ref','uid',{born:false,hp:false});
+  // This target shape supplies the single HP witness for this parent point.
   entity('checkpoint','parent.target',1,[0x10],true,'parent_ref',false,{born:false});
  }else if(['Entity.SetHpInternal','Entity.SetHpInternalDirectly','Entity.OnAttributeDirty'].includes(normalized)){
   profile='hp';clock('entry');clock('leave');

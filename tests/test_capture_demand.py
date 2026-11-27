@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
     ('formula_demand_consumer_contract_fixture.js', 'PASS_FORMULA_CONSUMER_CONTRACT'),
     ('damage_demand_semantics.js', 'damage_demand_owned_semantics'),
     ('damage_demand_owned_trace.js', 'missingParentRejected'),
+    ('damage_demand_branches.js', 'strict_damage_demand_branches'),
 ])
 def test_capture_demand_source_contracts(fixture, marker):
     if not shutil.which('node'):

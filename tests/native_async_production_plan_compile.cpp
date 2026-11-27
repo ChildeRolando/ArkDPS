@@ -41,7 +41,18 @@ int main(int argc,char** argv){
         main_host|=name=="source.data.host";
         parent_host|=field.at("phase")=="checkpoint"&&name=="parent.source.data.host";
        }
-       check(!main_host&&parent_host);
+       check(!main_host&&!parent_host);
+       bool parent_class=false,parent_data_class=false,parent_data_uid=false;
+       const std::vector<std::string> deleted{"parent.hp","parent.source.data.flags","parent.source.data.host_uid","parent.source.data.cid_pointer","parent.source.data.host_pointer","parent.source.data.cid","parent.source.data.host","parent.source.player_side"};
+       for(const auto& field:plan.at("fields")){
+        const auto name=field.value("name",std::string());
+        check(std::find(deleted.begin(),deleted.end(),name)==deleted.end());
+        if(field.at("phase")!="checkpoint")continue;
+        parent_class|=name=="parent.source"&&field.at("offset")==0&&field.at("bytes")==8;
+        parent_data_class|=name=="parent.source.data"&&field.at("offset")==0&&field.at("bytes")==8;
+        parent_data_uid|=name=="parent.source.data"&&field.at("offset")==108&&field.at("bytes")==4;
+       }
+       check(parent_class&&parent_data_class&&parent_data_uid);
       }
    }
    if(plan["profile"]=="shield") {
