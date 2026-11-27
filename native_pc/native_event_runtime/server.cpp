@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <set>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -224,8 +225,11 @@ bool equal_token(const std::string& left, const std::string& right) {
 }
 
 Json hello() {
-    return Json{{"provider", "arkdps-native-hooks"}, {"protocol", 1}, {"capture_pause_version", 1},
-        {"ready", parse(arkdps::readiness())}};
+    auto ready=parse(arkdps::readiness());
+    Json reply{{"provider", "arkdps-native-hooks"}, {"protocol", 1}, {"capture_pause_version", 1},{"ready",ready}};
+    if(ready.value("native_mark_scheduler_version",Json())==1&&ready.value("mode_control_version",Json())==1)
+        reply.update({{"native_mark_scheduler_version",1},{"mode_control_version",1}});
+    return reply;
 }
 
 std::string safe_diagnostic(const char* message, const char* phase) {
@@ -284,8 +288,49 @@ std::string safe_diagnostic(const char* message, const char* phase) {
             "hook thunk allocation failed", "hook thunk protection failed", "could not initialize native hook library",
             "could not create JavaScript runtime", "could not create JavaScript context", "probe did not publish readiness",
             "could not queue native hooks", "could not enable native hooks", "could not apply native hook changes",
-            "memory length exceeds the bounded runtime limit", "allocation limit exceeded", "unsafe integer"}) {
+            "memory length exceeds the bounded runtime limit", "allocation limit exceeded", "unsafe integer",
+            "native async capture plan is absent, incomplete or unbound",
+            "native hook requires a complete capture contract", "native callback replay has structural gaps",
+            "native capture replay failed", "native capture failed during replay",
+            "native replay violated the capture boundary", "native capture record exceeds worker buffer",
+            "native capture record has structural error", "cold metadata unreadable",
+            "cold metadata changed during setup", "cold field type unavailable", "cold generic cache mismatch",
+            "cold class hierarchy cycle", "cold class hierarchy incomplete", "cold class hierarchy budget",
+            "cold class hierarchy relation budget", "cold class hierarchy address"}) {
         if (first == text || first == type + ": " + text) detail = text;
+    }
+    // Sampling failures are exact finite diagnostics, never exception text.
+    for (const char* text : {"sampling plan requires independent clock roots and cold fallback",
+            "sampling clock bracket is not independent and paired",
+            "invalid sampling capture plan",
+            "sampling checkpoint serial exhausted",
+            "sampling owned view rejected structural capture",
+            "sampling checkpoint violated owned boundary",
+            "sampling publication failed",
+            "sampling publication certificate mismatch",
+            "invalid sampling transaction operation",
+            "native mark requires a sampling transaction",
+            "native preference requires mode control",
+            "mode control requires a preference",
+            "invalid sample request identity",
+            "sample request no longer active",
+            "sample request transaction binding changed",
+            "sample request identity exhausted",
+            "native sampling capture plan changed during setup",
+            "sampling checkpoint lacks native authority",
+            "invalid sampling checkpoint",
+            "sampling publication lacks native authority"}) {
+        if (first == text || first == type + ": " + text) detail = text;
+    }
+    for (unsigned code = 0; code <= 10; ++code) {
+        const auto fixed = std::string("sampling structural capture error: ") + std::to_string(code);
+        if (first == fixed || first == type + ": " + fixed) detail = fixed;
+    }
+    // The finite producer fault code contains no pointer, token or game text.
+    // Preserve it instead of reducing queue exhaustion to an opaque exception.
+    for (unsigned code = 0; code <= 32; ++code) {
+        const auto fixed = std::string("native capture failed: code=") + std::to_string(code);
+        if (first == fixed || first == type + ": " + fixed) detail = fixed;
     }
     if (first.rfind("InternalError: native hook creation failed:", 0) == 0
             || first.rfind("Error: native hook creation failed:", 0) == 0
@@ -300,12 +345,40 @@ std::string safe_diagnostic(const char* message, const char* phase) {
                 detail += suffix;
         }
     }
+    // Only numeric, bounded replay context crosses this privacy boundary.
+    static const std::regex replay_gap(R"(^native_replay_gap:v1,h=[0-9]{1,5},e=[01],t=[0-9]{1,20},r=[0-9]{1,5},p=[0-9]{1,5},f=(-1|[0-9]{1,5}),g=[0-9]{1,2},m=[0-9]{1,7},k=[0-9]{1,2}(\.[0-9]{1,2}){0,15},q=(0|[12]:[0-9]{1,6}(\.[12]:[0-9]{1,6}){0,2})$)");
+    if(first.size()<=256 && std::regex_match(first,replay_gap))detail=first;
+    for(unsigned code=0;code<=32;++code){
+        const auto prefix=std::string("native capture failed: code=")+std::to_string(code)+"; ";
+        const auto candidate=first.rfind(type+": ",0)==0 ? first.substr(type.size()+2) : first;
+        if(candidate.rfind(prefix,0)!=0)continue;
+        const auto suffix=candidate.substr(prefix.size());
+        if(suffix.size()<=256&&std::regex_match(suffix,replay_gap))detail=prefix+suffix;
+    }
+    // Checkpoint failures have no hook identity. Keep only their finite stage
+    // and bounded numeric owned-view context, with no original exception text.
+    const auto sampling_candidate=first.rfind(type+": ",0)==0 ? first.substr(type.size()+2) : first;
+    static const std::regex sampling_failure(R"(^native_sampling_failure:v1,s=[1-7],c=(0|[1-9]|[12][0-9]|3[0-2]),j=(0|[1-5][0-9]{2})$)");
+    static const std::regex sampling_gap(R"(^native_sampling_gap:v1,t=(0|[1-9][0-9]{0,19}),r=(0|[1-9][0-9]{0,4}),p=(0|[1-9][0-9]{0,4}),f=(-1|0|[1-9][0-9]{0,4}),g=([1-9]|1[0-6]),m=(0|[1-9][0-9]{0,6}),k=(0|[1-9]|[12][0-9]|3[01])(\.(0|[1-9]|[12][0-9]|3[01])){0,15},q=(0|[12]:[0-9]{1,6}(\.[12]:[0-9]{1,6}){0,2})$)");
+    const auto valid_sampling_gap=[&](const std::string& candidate){
+        std::smatch match;if(!std::regex_match(candidate,match,sampling_gap))return false;
+        try {
+            (void)std::stoull(match[1].str());
+            return std::stoull(match[2].str())<=65535 && std::stoull(match[3].str())<=65535
+                && (match[4]=="-1"||std::stoull(match[4].str())<=65535) && std::stoull(match[6].str())<=1048576;
+        } catch (...) {return false;}
+    };
+    const auto separator=sampling_candidate.find("; ");
+    if(std::regex_match(sampling_candidate,sampling_failure)||valid_sampling_gap(sampling_candidate))detail=sampling_candidate;
+    else if(separator!=std::string::npos && std::regex_match(sampling_candidate.substr(0,separator),sampling_failure)
+            &&valid_sampling_gap(sampling_candidate.substr(separator+2)))detail=sampling_candidate;
     if (type == "TypeError" && first.find("not a function") != std::string::npos)
         detail = "TypeError: not a function";
     std::string result = std::string("native runtime ") + phase + " failed; error_type=" + type;
     if (!detail.empty()) result += "; " + detail;
 
-    if (result.size() > 256) result.resize(256);
+    const auto limit=(detail.find("native_replay_gap:v1,")!=std::string::npos||detail.find("native_sampling_gap:v1,")!=std::string::npos)?384u:256u;
+    if (result.size() > limit) result.resize(limit);
     return result;
 }
 
@@ -327,7 +400,9 @@ DWORD WINAPI worker(void* argument) {
             Json id = nullptr;
             const char* phase = authenticated ? "request" : "authentication";
             try {
+                const auto parse_started = arkdps::timing_begin();
                 Json request = parse(line);
+                arkdps::timing_transport(0, parse_started, line.size());
                 if (!request.is_object() || !request.contains("id") || !request["id"].is_number_unsigned()
                         || request["id"].get<std::uint64_t>() != expected || expected > 9007199254740991ULL
                         || !request.contains("operation") || !request["operation"].is_string())
@@ -363,7 +438,7 @@ DWORD WINAPI worker(void* argument) {
                     phase = "readiness";
                     result = hello();
                 } else {
-                    for (const char* known : {"mark", "read", "ack", "stop", "capture_control", "capture_status"})
+                    for (const char* known : {"mark", "read", "ack", "stop", "capture_control", "capture_status", "configure_mode"})
                         if (operation == known) phase = known;
                     request.erase("id");
                     const auto response = arkdps::request(request.dump());
@@ -372,12 +447,20 @@ DWORD WINAPI worker(void* argument) {
                         + std::to_string(expected).size();
                     if (reply_bytes > wire_limit)
                         throw SafeError(response_limit_error(reply_bytes, operation, request));
+                    const auto decode_started = arkdps::timing_begin();
                     result = parse(response);
+                    arkdps::timing_transport(0, decode_started, response.size());
                 }
+                const auto encode_started = arkdps::timing_begin();
                 auto wire_response = Json{{"id", id}, {"result", std::move(result)}}.dump();
+                arkdps::timing_transport(1, encode_started, wire_response.size());
                 if (wire_response.size() > wire_limit)
                     throw SafeError(response_limit_error(wire_response.size(), operation, request));
-                if (!write_payload(pipe.value, std::move(wire_response))) break;
+                const auto write_started = arkdps::timing_begin();
+                const auto wire_bytes = wire_response.size();
+                const bool written = write_payload(pipe.value, std::move(wire_response));
+                arkdps::timing_transport(2, write_started, wire_bytes);
+                if (!written) break;
                 ++expected;
                 if (operation == "stop") break;
             } catch (const SafeError& error) {

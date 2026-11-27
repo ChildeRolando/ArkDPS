@@ -10,9 +10,72 @@ import time
 from uuid import uuid4
 
 from log_context import LogContext
+from metrics import sanitize_native_async_capture, NATIVE_CAPTURE_RETRY_REASONS
 
 
 ENEMY_STATE_DELTA = 'desktop_enemy_state_delta_v1'
+
+
+def _performance_fields(kind, data):
+    """Normal-mode profiling accepts only bounded numeric summaries, never events."""
+    if type(data) is not dict or data.get('schema') != 1:
+        return None
+    def numeric(source, names):
+        return {key: source[key] for key in names if type(source.get(key)) is int
+                and 0 <= source[key] <= 2**64-1}
+    source = data.get('source')
+    if source not in ('collector', 'native_runtime', 'presentation', 'worker_stdio'):
+        return None
+    result = dict(schema=1, source=source)
+    result.update(numeric(data, ('pid', 'monotonic_ns', 'window_ns', 'emission_failures', 'queue_dropped')))
+    if type(data.get('utc')) is str:
+        result['utc'] = data['utc'][:64]
+    if kind == 'performance_timing':
+        phases = data.get('phases')
+        if type(phases) is not dict:
+            return None
+        result.update(clock='perf_counter_ns', sampling='all_batches', phases={})
+        for name, row in list(phases.items())[:33]:
+            if type(name) is str and re.fullmatch(r'[A-Za-z_.]{1,64}', name) and type(row) is dict:
+                result['phases'][name] = numeric(row, ('calls', 'inclusive_ns', 'exclusive_ns', 'max_ns'))
+        return result
+    native = data.get('native')
+    if 'async_capture' in data:
+        async_data = data['async_capture']
+        identity = ((async_data.get('pid'), async_data.get('process_created_filetime'))
+                    if type(async_data) is dict else None)
+        result['async_capture'] = sanitize_native_async_capture(async_data, native=native, identity=identity)
+    if kind == 'native_capture_pressure':
+        if (source != 'native_runtime' or data.get('phase') not in ('pending', 'recovered', 'steady')
+                or type(data.get('reason')) is not str or data['reason'] not in NATIVE_CAPTURE_RETRY_REASONS):
+            return None
+        result.update(phase=data['phase'], reason=data['reason'])
+        if 'async_capture' in result:
+            result['async_capture'].pop('callback_timing', None)
+        return result
+    result['available'] = data.get('available') is True and type(native) is dict
+    if not result['available']:
+        return result
+    values = numeric(native, ('schema', 'pid', 'qpc', 'qpc_frequency', 'thread_capacity', 'process_created_filetime', 'summary_build_ticks',
+                              'skipped_busy_cells', 'omitted_cells'))
+    values.update(enabled=native.get('enabled') is True, cumulative=True,
+                  thread_overflow=native.get('thread_overflow') is True,
+                  sampling='hooks_random_1_in_128_nested_inherited_requests_all_reads_detail_1_in_128', rows=[])
+    rows = native.get('rows')
+    if type(rows) is not list:
+        return None
+    for row in rows[:128]:
+        if type(row) is not dict:
+            continue
+        clean = numeric(row, ('thread_id', 'cell', 'calls', 'samples', 'ticks', 'exclusive_ticks',
+                              'max_ticks', 'vm_wait_ticks', 'vm_wait_max_ticks', 'vm_hold_ticks',
+                              'vm_hold_max_ticks', 'js_ticks', 'read_calls', 'read_bytes', 'read_ticks', 'read_detail_spans', 'address'))
+        for key in ('kind', 'hook'):
+            if type(row.get(key)) is str:
+                clean[key] = row[key][:96]
+        values['rows'].append(clean)
+    result['native'] = values
+    return result
 ENEMY_STATE_RECORDS = frozenset(('published', 'lifecycle_summary', 'coverage_closed'))
 CAPTURE_SEGMENT_BYTES = 64 * 1024 ** 2
 CAPTURE_TOTAL_BYTES = 512 * 1024 ** 2
@@ -169,6 +232,9 @@ def sanitize_native_hook_startup(record, *, event=None):
 
 
 KEY_EVENTS = {
+    'performance_timing': None,
+    'native_performance_timing': None,
+    'native_capture_pressure': None,
     'worker_started': ('platform', 'event_observation'),
     'worker_stopped': ('pending_history_count', 'cleanup_ok'),
     'connection_attempt': ('revision', 'platform', 'event_observation'),
@@ -189,12 +255,16 @@ KEY_EVENTS = {
     'event_capture_segment': ('reason', 'revision', 'previous_feed', 'feed'),
     'event_capture_control': ('supported', 'requested_paused', 'paused', 'state', 'revision'),
     'native_hook_request_failed': ('op', 'error_type', 'win32_error', 'code', 'response_bytes',
-                                   'response_limit', 'requested_event_count'),
+                                   'response_limit', 'requested_event_count', 'replay_hook_id', 'replay_edge',
+                                   'replay_ticket', 'replay_role_id', 'replay_checkpoint', 'replay_field_id',
+                                   'replay_gap_count', 'metadata_read_size', 'replay_reason_codes', 'replay_script_lines',
+                                   'native_failure_code', 'sampling_failure_reason', 'sampling_capture_error_code',
+                                   'sampling_stage', 'sampling_lane_fault', 'sampling_json_exception_id'),
     'lifecycle_state': ('previous', 'state'),
     'capture_health': None,  # Sanitized before the journal mode is applied.
     'event_gap': ('error_type', 'code'),
     'capture_retry': ('error_type', 'code'),
-    'capture_error': ('error_type', 'code'),
+    'capture_error': ('error_type', 'code', 'cursor_failure'),
     'history_error': ('code',),
     'history_saved': ('written',),
     'stopped': (),
@@ -241,6 +311,57 @@ def _capture_health_fields(data):
     return result
 
 
+SAMPLING_FAILURE_REASONS = frozenset(('plan_contract', 'clock_contract', 'invalid_plan', 'serial_exhausted', 'owned_view_structure', 'owned_boundary', 'publication_failed', 'publication_certificate_mismatch', 'invalid_transaction', 'invalid_request_identity', 'request_inactive', 'transaction_binding_changed', 'request_identity_exhausted', 'structural_capture_error', 'plan_changed_during_setup', 'checkpoint_authority', 'invalid_checkpoint', 'publication_authority', 'native_stage_failure'))
+
+
+def sanitize_sampling_failure(data):
+    """Only finite sampler categories cross the normal or detailed journal."""
+    result = dict(data)
+    reason = result.pop('sampling_failure_reason', None)
+    code = result.pop('sampling_capture_error_code', None)
+    stage = result.pop('sampling_stage', None)
+    lane = result.pop('sampling_lane_fault', None)
+    json_id = result.pop('sampling_json_exception_id', None)
+    if type(reason) is str and reason in SAMPLING_FAILURE_REASONS:
+        if reason == 'native_stage_failure' and not (type(stage) is int and 1 <= stage <= 7
+                and type(lane) is int and 0 <= lane <= 32
+                and type(json_id) is int and (json_id == 0 or 100 <= json_id <= 599)):
+            reason = None
+        if reason is not None:
+            result['sampling_failure_reason'] = reason
+        if reason == 'native_stage_failure':
+            result.update(sampling_stage=stage, sampling_lane_fault=lane, sampling_json_exception_id=json_id)
+        if reason == 'structural_capture_error' and type(code) is int and 0 <= code <= 10:
+            result['sampling_capture_error_code'] = code
+    if result.get('code') == 'native_sampling_gap':
+        result.pop('replay_hook_id', None)
+        result.pop('replay_edge', None)
+        bounds = dict(replay_ticket=(0, 2**64-1), replay_role_id=(0, 65535), replay_checkpoint=(0, 65535),
+                      replay_field_id=(-1, 65535), replay_gap_count=(1, 16), metadata_read_size=(0, 1048576))
+        codes, lines = result.get('replay_reason_codes'), result.get('replay_script_lines')
+        valid = all(type(result.get(key)) is int and low <= result[key] <= high
+                    for key, (low, high) in bounds.items())
+        valid = valid and type(codes) is str and re.fullmatch(r'(?:0|[1-9]|[12][0-9]|3[01])(?:\.(?:0|[1-9]|[12][0-9]|3[01])){0,15}', codes)
+        valid = valid and type(lines) is str and re.fullmatch(r'(?:0|[12]:[0-9]{1,6}(?:\.[12]:[0-9]{1,6}){0,2})', lines)
+        if not valid:
+            result.pop('code')
+            for key in (*bounds, 'replay_reason_codes', 'replay_script_lines'):
+                result.pop(key, None)
+    return result
+
+
+def sanitize_cursor_failure(value):
+    """Failure-only state identity, without tokens, addresses or arbitrary text."""
+    flags = ('owner_matches', 'observer_present', 'expected_present', 'actual_present')
+    if (type(value) is not dict or set(value) != {'version', 'reason', 'phase', *flags}
+            or type(value.get('version')) is not int or value['version'] != 1
+            or value.get('reason') != 'cursor_lifetime_changed'
+            or value.get('phase') not in ('acquisition', 'pending_prefix', 'accepted_before_acquisition')
+            or any(type(value.get(key)) is not bool for key in flags)):
+        return None
+    return dict(value)
+
+
 def _event_fields(data, fields):
     if not isinstance(data, dict):
         return {}
@@ -249,6 +370,11 @@ def _event_fields(data, fields):
         if name not in data:
             continue
         value = data[name]
+        if name == 'cursor_failure':
+            clean = sanitize_cursor_failure(value)
+            if clean is not None:
+                result[name] = clean
+            continue
         if isinstance(value, Enum):
             value = value.value
         if value is None or type(value) in (bool, int) or (
@@ -370,10 +496,16 @@ class DesktopCaptureJournal:
                 data = sanitize_native_hook_startup(data, event=kind)
                 if data is None:
                     return
+            elif kind in ('performance_timing', 'native_performance_timing', 'native_capture_pressure'):
+                data = _performance_fields(kind, data)
+                if data is None:
+                    return
             elif kind == 'capture_health':
                 data = _capture_health_fields(data)
                 if data is None:
                     return
+            if kind == 'native_hook_request_failed':
+                data = sanitize_sampling_failure(data)
             detailed = bool(self.debug_enabled())
             if detailed != self._detailed:
                 previous = self._detailed

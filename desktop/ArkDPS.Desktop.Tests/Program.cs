@@ -36,6 +36,27 @@ internal static class Program
         // Host real product resource dictionaries without launching its Application.
         System.Reflection.Assembly.SetEntryAssembly(null);
         System.Windows.Application.ResourceAssembly = typeof(App).Assembly;
+        long timingClock=1;
+        int timingReads=0;
+        var timingWrites=new System.Collections.Generic.List<string>();
+        var timingJobs=new System.Collections.Generic.List<Action>();
+        var timings=new PerformanceTimings(timingWrites.Add,()=>{timingReads++;return timingClock;},timingJobs.Add);
+        Check("disabled performance timer does not read clock",timings.Begin()==0 && timingReads==0);
+        timings.Enabled=true;
+        long timingStart=timings.Begin();
+        timingClock+=System.Diagnostics.Stopwatch.Frequency;
+        timings.End(PerformanceTimings.Phase.ApplyState,timingStart);
+        Check("performance output is deferred",timingJobs.Count==1 && timingWrites.Count==0);
+        timingStart=timings.Begin();
+        timingClock+=System.Diagnostics.Stopwatch.Frequency;
+        timings.End(PerformanceTimings.Phase.ApplyState,timingStart);
+        Check("slow sink cannot create a task backlog",timingJobs.Count==1);
+        timingJobs[0]();
+        Check("performance summary has phase and clock identity",timingWrites.Count==1 &&
+            timingWrites[0].Contains("ApplyState") && timingWrites[0].Contains("qpc_frequency"));
+        timings.Enabled=false;
+        timingReads=0;
+        Check("disabled timer stops reading clock again",timings.Begin()==0 && timingReads==0);
         if (args is ["--event-capture-pause"])
         {
             EventCapturePauseTests.Run();

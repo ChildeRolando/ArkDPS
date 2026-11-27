@@ -1,0 +1,250 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 0,
+        "registered_plans": 2,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 500,
+      "dirty": 0,
+      "elapsed_ms": 0.7900000065565109,
+      "setters_per_second": 632911.3871522906,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 0.5582000017166138,
+        "scope_inside_pub_ms": 0.5582000017166138,
+        "prefix_ms": 5.751499995589256,
+        "journal_ms": 0.6096999943256378
+      },
+      "native_profile": {
+        "batch_calls": 2500,
+        "batch_output_bytes": 358500,
+        "byte_read_calls": 2,
+        "capture_ms": 0.9338000000000006,
+        "capture_read_bytes": 143386,
+        "capture_read_count": 9738,
+        "edges": 1000,
+        "graph_calls": 0,
+        "graph_check_calls": 2,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 7,
+        "registered_plans": 2,
+        "scalar_calls": 5,
+        "selected_field_slots": 4500,
+        "view_initialize_ms": 0.3693000000000005
+      },
+      "branch": "unchanged",
+      "setters": 500,
+      "dirty": 0,
+      "elapsed_ms": 44.54290001094341,
+      "setters_per_second": 11225.133520205436,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 36.76329979300499,
+        "scope_inside_pub_ms": 0.08179999887943268,
+        "prefix_ms": 20.055299997329712,
+        "journal_ms": 12.827500000596046
+      },
+      "native_profile": {
+        "batch_calls": 3500,
+        "batch_output_bytes": 466500,
+        "byte_read_calls": 2,
+        "capture_ms": 2.1723999999999877,
+        "capture_read_bytes": 762146,
+        "capture_read_count": 51654,
+        "edges": 1000,
+        "graph_calls": 0,
+        "graph_check_calls": 502,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 507,
+        "registered_plans": 2,
+        "scalar_calls": 505,
+        "selected_field_slots": 5500,
+        "view_initialize_ms": 1.7830999999999844
+      },
+      "branch": "changed_damage",
+      "setters": 500,
+      "dirty": 0,
+      "elapsed_ms": 128.33130000531673,
+      "setters_per_second": 3896.1656273978765,
+      "publication_count": 1,
+      "scope_stamps": 500,
+      "sequence_delta": 500,
+      "event_kinds": {
+        "enemy_hp": 500
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 36.77799952030182,
+        "scope_inside_pub_ms": 0.0836000144481659,
+        "prefix_ms": 3.355999991297722,
+        "journal_ms": 0.61769999563694
+      },
+      "native_profile": {
+        "batch_calls": 3500,
+        "batch_output_bytes": 466500,
+        "byte_read_calls": 2,
+        "capture_ms": 2.2020999999999886,
+        "capture_read_bytes": 762146,
+        "capture_read_count": 51654,
+        "edges": 1000,
+        "graph_calls": 0,
+        "graph_check_calls": 502,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 507,
+        "registered_plans": 2,
+        "scalar_calls": 505,
+        "selected_field_slots": 5500,
+        "view_initialize_ms": 1.8499999999999845
+      },
+      "branch": "heal_coalesced",
+      "setters": 500,
+      "dirty": 0,
+      "elapsed_ms": 97.68140000104904,
+      "setters_per_second": 5118.681755120528,
+      "publication_count": 1,
+      "scope_stamps": 500,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 35.442800000309944,
+        "scope_inside_pub_ms": 0.08379998803138733,
+        "prefix_ms": 3.3222000002861023,
+        "journal_ms": 0.7672000080347061
+      },
+      "native_profile": {
+        "batch_calls": 3500,
+        "batch_output_bytes": 466500,
+        "byte_read_calls": 2,
+        "capture_ms": 1.9915999999999867,
+        "capture_read_bytes": 762146,
+        "capture_read_count": 51654,
+        "edges": 1000,
+        "graph_calls": 0,
+        "graph_check_calls": 502,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 507,
+        "registered_plans": 2,
+        "scalar_calls": 505,
+        "selected_field_slots": 5500,
+        "view_initialize_ms": 1.709899999999983
+      },
+      "branch": "maxhp_dirty",
+      "setters": 500,
+      "dirty": 5,
+      "elapsed_ms": 93.54349999129772,
+      "setters_per_second": 5345.106822457088,
+      "publication_count": 1,
+      "scope_stamps": 500,
+      "sequence_delta": 11,
+      "event_kinds": {
+        "enemy_hp": 11
+      }
+    }
+  ],
+  "provenance": {
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_runtime.js": "e7ecc34b299ef3c00931b0886828e51ac82db85174c5c3747f8e6a5f6ae84bd3",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_autochess.js": "3ee8014bb1de459c1a312327326bd238924fa1d92ebb92d1f59fb19207fb7b89",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_native_pc.js": "9f8be6777b4988e30f159f1a234b3e4bd23568bf251020486b07a816ba37580f",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime\\bridge.js": "6469d9ac52e6a23cab092af554c9a18be9a352c3844432805f544c4ef48077d4",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime\\owned_replay_view.h": "ed286e5953d543a8598e7a8d4843da2913de1876be5c949f97556c127da5c792",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime\\owned_replay_js.h": "a4943b813517dc803a8913f7d0e74d1520eac0a3006073fbf6f05f9edcdc737c",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime\\native_capture.h": "d787bda15d26afea7ef605def24fbc6bcad0e2c04391fbaccf65570cd0d9db2a",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime\\native_capture.cpp": "c714fb232d5a3661ac6a5b587d31c0d2870f7fb39fe540afff92167a3b179b2a",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime\\engine_capture_plan.h": "c6b37110941b33a3679afb2188862bb8f799179a9ed20544bfdea745a906fb08",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-production-hp-throughput\\tests\\production_hp_quickjs.cpp": "5d0bcc5b9503ea67f65011f7b67900873c6c3f72a3d7bb8900b1ed8aba814720",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-production-hp-throughput\\tests\\production_hp_quickjs_bundle.py": "c47904bd498c67cd9e00ae1d6246bdb4a94170b72010613d4a977bc47466e849",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-0.o": "9b57de662910a8500a96eb201fa51a9b5a22881b5f44083bfcf6295e36df7a61",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-1.o": "d42a47f5f2a9d8b619496753faec5691c137a77d6726ba7b998072d28ead71a6",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-2.o": "13058fb02edd05f161d2e437a21a4d72dcc6ee194b56488ac59f6371fbc1abdd",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-3.o": "2a234ea2e284edb4f3c36bdd936bcb124df699321199ff329527df8b5b3c31af",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-4.o": "3eb1e8db3d287e212ce53de2aaad29c5200c7b18c5941b2eaacbbec1328bcbd3"
+  },
+  "ascii_disabled": false,
+  "binary_sha256": "77380c723feef482c9fe4acb6805843440ab12062c9fec65383f7f516f9ad58e",
+  "script_sha256": "0ae33ff51e1b53ade626ce8ec636ec2104c6a10289d72317b4ce11b77337a845",
+  "build_command": [
+    "C:\\msys64\\ucrt64\\bin\\g++.EXE",
+    "-DARKDPS_CAPTURE_GRAPH_BATCH",
+    "-DARKDPS_CAPTURE_READ_BATCH",
+    "-std=c++17",
+    "-static",
+    "-O2",
+    "-I",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime",
+    "-I",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\quickjs-headers",
+    "-I",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-production-hp-throughput\\tests\\production_hp_quickjs.cpp",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime\\native_capture.cpp",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-0.o",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-1.o",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-2.o",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-3.o",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-4.o",
+    "-o",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-production-hp-throughput\\runtime\\production-hp-throughput\\predicate-profile\\production-hp.exe"
+  ],
+  "readiness": "NOT_FULL_WORKER_ACCEPTANCE; excluded layers remain required"
+}

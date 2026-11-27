@@ -1,0 +1,39 @@
+{
+  "decision": "approve_for_integration_with_measurement_boundary",
+  "provider_commit": "e26580c011573d6d03314a9f2251a18e48f986c0",
+  "provider_clean": true,
+  "source_commit": "1194521b9bad7d85dcc8ac588d6c41b462756c97",
+  "source_target_tests_passed": 108,
+  "provider_source_sha256": {
+    "native_pc/native_event_runtime/bridge.js": "73579927b1be0f65e5f2b1b56d3fed9bd61019e9dd70fa22f5eeaad342c8d5ff",
+    "native_pc/native_event_runtime/owned_replay_js.h": "7a3dc826f96e331eb2bcf1026bcab4b7a1cba7aaba1ed78c5912b8ed0420e2d2",
+    "native_pc/native_event_runtime/engine_capture_config.h": "47ecf84ccac009a74adb8899e7800be7c9de59e14008578a063ba3a3f9df071b",
+    "native_pc/native_event_runtime/engine_capture_plan.h": "c1e506580a7ae4a156f0f307b8c4acc44381dde966095c52d2095bf714e214b3",
+    "native_pc/native_event_runtime/owned_replay_view.h": "13f993309f0d1c3890d69683a18ea6537c5142f256703ce26fa23a73b1b5df59",
+    "native_pc/native_event_runtime/engine.cpp": "776f4e55188248706201bb87fee8eff8e8fe9abdf6f43b9f22c800a596c443c1"
+  },
+  "five_axes": {
+    "correctness": "All observations remain per original record; current role/checkpoint, Auto independent good spans and unique clock/expected ID checks remain. Count/words only consumed in original order; no Q32/XOR/amount/actor policy moved to native.",
+    "architecture": "Source applies one HP entry/leave state owner to both ordinary and native providers. Mechanical codecs are derived from the same CompiledPlan, with no separate HP ReadPlan registry or alternate reducer.",
+    "robustness": "All predecoded field failures stay deferred until actual getter demand; requested absent/structural errors use independent native consume poison. Nullable attributes are not fabricated from failed prefixes. Actual record mode is bound separately from installation contract mode. Private IO rejects stale lease, foreign attributes and changed numeric receiver.",
+    "maintainability": "Same shared clock/MaxHP decoding and same installed callback state path; explicit raw method contract and source schema. Deep-sealed metadata snapshots have private provenance and shared immutable cold metadata.",
+    "validation": "Source 108 targeted tests; own saved receiver mutation control PASS and disabled numerical guard mutation FAIL. Provider owner reported actual CPP+Node suite PASS including UTF16 code units, independent Auto, unique-point failure priority, mode/checkpoint/lease. Those suites were not redundantly rerun here."
+  },
+  "mustfix_resolved": {
+    "issue": "same mutable NativePointer object bypassed numerical receiver root check",
+    "control_exit": 0,
+    "mutant_exit": 1,
+    "mutation": "In memory only: if(root!==this.#root) changed to if(false&&root!==this.#root); no provider tree files changed",
+    "evidence": [
+      "receiver-final.stdout.txt",
+      "receiver-final.stderr.txt",
+      "receiver-mutant.stdout.txt",
+      "receiver-mutant.stderr.txt"
+    ]
+  },
+  "remaining_boundaries": [
+    "No game attach/memory/pipe/UI interaction.",
+    "Not a throughput, no-overflow, infinite-stability or game FPS acceptance.",
+    "Function profile is a separate instrumented standalone owned experiment; its times are inclusive and not additive."
+  ]
+}

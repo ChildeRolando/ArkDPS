@@ -1,0 +1,137 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
+const root=process.env.ARKDPS_PROBE_FIXTURE_ROOT||path.join(__dirname,'..');
+const source=fs.readFileSync(path.join(root,'native_pc/native_event_runtime/publication.js'),'utf8');
+const storeSource=fs.readFileSync(path.join(root,'event_probe_store.js'),'utf8');
+const context=vm.createContext({});
+vm.runInContext(storeSource+'\n'+source+'\nglobalThis.Journal=ArkdpsPublicationJournal;globalThis.Store=ArkdpsEventStore;',context);
+let store;
+class Journal extends context.Journal {constructor(options={}){const own=new context.Store();super({...options,store:own.view()});this.ownerStore=own;store=own;}}
+let checks=0;
+function check(condition){assert.ok(condition);checks++;}
+function plain(value){return JSON.parse(JSON.stringify(value));}
+function record(ticket){return {version:1,edge:'leave',ticket:String(ticket),activity_begin:String(ticket*2),
+ activity_end:String(ticket*2+1),closed_after:true,active_after:0};}
+function projection(sequence,ack=0,epoch=sequence+1,after=ack){
+ while(store.sequence<sequence){const n=store.sequence+1;store.append({sequence:n,amount:n,frame:n});}
+ const snapshot=store.snapshot(after,sequence);return {
+ mark:{sequence,epoch,frame:sequence,game_time:sequence/30,active:0,active_hooks:[],error:null,stopped:false,
+  native_generation:1,native_identity:{controller:'0x10000'},native_fixed_time:String(sequence),
+  native_autochess_context:{scope_key:'round1',memberships:[{uid:7}]}},
+ acknowledged:ack,events_after:after,events_through:sequence,
+ events:snapshot.events.slice(),
+ hp_context:[],read_fields:{native_generation:1,frame:sequence,game_time:sequence/30,
+  baseline_discarded_skill_events_complete:true,autochess_round_start:{sequence:0}},terminal_read:null};}
+function read(j,p,after,through,operation='read',served=()=>{}){
+ return j.read({operation,publication_token:p.native_publication.token,after,through},n=>{served(n);j.ownerStore.served(n);});
+}
+{
+ const j=new Journal(),p=projection(2);j.ownerStore.appendContext(2,{hp:10});p.hp_context=j.ownerStore.snapshot(0,2).hp_context;
+ const m=j.publish(record(1),p);
+ check(!m.retry&&m.native_publication.closed_ticket==='1');
+ check(j.ack(2,()=>{throw Error('must not commit');}).error!=null);
+ // A hostile old mutable reducer buffer cannot alter an already published fact.
+ assert.throws(()=>{p.events[1].amount=900;});p.mark.native_autochess_context.memberships[0].uid=999;assert.throws(()=>{p.hp_context[0].context.hp=0;});
+ const served=[],first=read(j,m,0,2,'read',n=>served.push(n));
+ check(first.events[1].amount===2&&first.hp_context[0].hp===10);
+ check(j.mark().native_autochess_context.memberships[0].uid===7);
+ first.events[0].amount=1000;
+ check(read(j,m,0,2).events[0].amount===1);
+ check(plain(served).join(',')==='2');
+ check(j.ack(3,()=>{throw Error('must not commit');}).error!=null);
+ const wrong=j.ack(2,()=>({acknowledged:1,error:'source rejected'}));
+ check(wrong.error&&j.acknowledged===0&&j.events.length===2);
+ check(j.ack(2,n=>j.ownerStore.ack(n)).acknowledged===2&&j.events.length===0);
+ // Cumulative ACK retries must not call the reducer again.
+ check(j.ack(2,()=>{throw Error('duplicate ACK');}).acknowledged===2);
+ check(read(j,m,0,2).retry===true);
+}
+{
+ const j=new Journal(),a=j.publish(record(1),projection(2));
+ // Continuous game activity after a captured closed prefix cannot erase it.
+ const open={...record(2),closed_after:false,active_after:4};
+ check(j.publish(open,projection(3)).native_publication_failure===true&&j.failure!=null);
+ // A structural producer failure seals the journal rather than ACKing old data.
+ check(read(j,a,0,2).native_publication_failure&&j.ack(0,()=>({acknowledged:0})).error);
+}
+{
+ const j=new Journal(),a=j.publish(record(1),projection(2));
+ const b=j.publish(record(3),projection(4,0,5,2));
+ check(read(j,a,0,2).events.length===2);
+ check(read(j,b,2,4).events.map(x=>x.sequence).join(',')==='3,4');
+ check(read(j,a,0,3).retry===true);
+ check(j.read({operation:'read',publication_token:'invented',after:0,through:0},()=>{}).retry===true);
+ check(j.publishedThrough===4&&j.readThrough===4);
+ const baseline=read(j,b,4,4);
+ check(baseline.events.length===0&&baseline.autochess_round_start.sequence===0);
+ // Same normalized sequence can have later independent clocks/scopes.
+ const p=projection(4,0,8,4);p.mark.frame=10;p.read_fields.frame=10;
+ const c=j.publish(record(5),p);
+ check(c.native_publication.token!==b.native_publication.token&&read(j,b,4,4).frame===4&&read(j,c,4,4).frame===10);
+}
+{
+ const j=new Journal(),p=projection(2);
+ p.mark.damage_settlement_scope=1;
+ p.mark.terminal_boundary={sequence:2,epoch:p.mark.epoch,frame:2,game_time:p.mark.game_time,damage_settlement_scope:1,scope:'old'};
+ p.terminal_read={...p.mark,retry:false,error:null,terminal_read_version:1,
+  after:0,through:2,events:p.events,terminal_only:true};
+ const m=j.publish(record(1),p);
+ check(m.native_publication.terminal_verified===true);
+ check(read(j,m,0,1,'terminal_read').retry===true);
+ const batch=read(j,m,0,2,'terminal_read');
+ check(batch.terminal_only&&batch.terminal_read_version===1&&batch.events.length===2&&batch.terminal_boundary.scope==='old');
+ check(j.ack(2,n=>j.ownerStore.ack(n)).acknowledged===2);
+}
+{
+ const j=new Journal(),p=projection(0);
+ p.terminal_read={terminal_boundary:{sequence:0},retry:false};
+ check(j.publish(record(1),p).native_publication_failure&&j.failure==='invalid terminal publication endpoint');
+}
+{
+ const j=new Journal({maxMarks:2}),a=j.publish(record(1),projection(0));
+ j.publish(record(2),projection(0));j.publish(record(3),projection(0));
+ check(read(j,a,0,0).mark_retry_reason==='native_publication_token_expired');
+ check(j.marks.length===2);
+}
+for(const mutate of [
+ p=>p.events.splice(0,1),p=>p.events[1]={...p.events[1],sequence:1},p=>p.acknowledged=1,p=>p.mark.active=1,
+ p=>p.mark.epoch=-1,p=>p.mark.game_time=Infinity,p=>p.events[1]={...p.events[1],amount:NaN},
+ p=>p.mark.sequence=3,p=>p.hp_context=[{eventSequence:-1,context:{}}]
+ ,p=>p.events_after=1,p=>p.events_through=1
+]){
+ const j=new Journal(),p=projection(2);mutate(p);
+ check(j.publish(record(1),p).native_publication_failure===true&&j.failure!=null&&j.events.length===0&&j.readThrough===0);
+}
+{
+ const j=new Journal(),p=projection(1);p.mark.error='shared producer queue overflow';
+ const failed=j.publish(record(1),p);
+ check(failed.native_publication_failure&&failed.retry===false&&failed.error==='native publication producer failed or stopped');
+ check(j.mark().native_publication_failure&&j.ack(0,()=>{throw Error('failed stream ACK');}).error);
+}
+{
+ const j=new Journal({maxEvents:1});
+ check(j.publish(record(1),projection(2)).native_publication_failure&&j.events.length===0);
+ const small=new Journal({maxBytes:100});
+ check(small.publish(record(1),projection(1)).native_publication_failure&&small.events.length===0);
+ const fenceBudget=new Journal({maxBytes:650});
+ check(fenceBudget.publish(record(1),projection(0)).native_publication_failure&&fenceBudget.bytes===0);
+}
+{
+ const j=new Journal(),m=j.publish(record(1),projection(2));
+ check(read(j,m,1,2).mark_retry_reason==='native_publication_unserved_prefix');
+ check(j.ack(2,()=>{throw Error('must not skip unserved prefix');}).error!=null&&j.events.length===2);
+ check(read(j,m,2,2).retry===true);
+ const baseline=j.read({operation:'read',publication_token:m.native_publication.token,after:2,through:2,baseline:true},n=>j.ownerStore.served(n));
+ check(baseline.events.length===0&&j.readThrough===2);
+ check(j.ack(2,n=>j.ownerStore.ack(n)).acknowledged===2);
+}
+{
+ const j=new Journal(),m=j.publish(record(1),projection(1));
+ assert.throws(()=>read(j,m,0,1,'read',()=>{throw Error('served failed');}));
+ check(j.readThrough===0&&j.ack(1,()=>{throw Error('unexpected commit');}).error!=null);
+ // Full unsigned native tickets are strings, never rounded through doubles.
+ const wide=record(1);wide.ticket='18446744073709551615';wide.activity_begin='18446744073709551613';wide.activity_end='18446744073709551614';
+ const q=new Journal(),published=q.publish(wide,projection(0));
+ check(published.native_publication.closed_ticket==='18446744073709551615');
+}
+process.stdout.write(JSON.stringify({checks,live_reads:0,live_calls:0})+'\n');

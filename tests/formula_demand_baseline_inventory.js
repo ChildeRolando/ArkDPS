@@ -1,0 +1,10 @@
+'use strict';
+const cp=require('child_process'),vm=require('vm'),fs=require('fs');
+const head='ef1486640e42146e7a8aaaae22488b1ac0be35f0';
+const src=fs.readFileSync(process.argv[2],'utf8');
+const start=src.indexOf('function nativeCapturePlan('),end=src.indexOf('// Publish only',start);
+const ctx={};vm.createContext(ctx);vm.runInContext(src.slice(start,end),ctx);
+const metadata={clock:{toString:()=> '0x1000'},string_class:'0x2000',classes:{},immutable_class_parents:true,attack_type_offset:24,factory_addresses:['0x7000','0x8000']};
+const specs=[['BattleFormula.CalculateDamage','0x1'],['BattleFormula.CalculateDamageNoEvent','0x2'],['BattleFormula.CalculateDamageInternal','0x3'],['AttackInfo.GetFinalAtk','0x4'],['Modifier.NewDamageModifierAfterCalculate','0x7000'],['Modifier.NewDamageModifierAfterCalculate','0x8000']];
+const plans=specs.map(([name,address])=>{ctx.metadata=metadata;ctx.name=name;ctx.address={toString:()=>address};return vm.runInContext('nativeCapturePlan(name,address,metadata)',ctx);});
+fs.writeFileSync('runtime/capture-demand/formula-baseline-plans.json',JSON.stringify({head,plans},null,2)+'\n');

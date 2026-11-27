@@ -1,0 +1,867 @@
+{
+  "kind": "self_owned_capture_demand_measurement",
+  "baseline_head": "ef1486640e42146e7a8aaaae22488b1ac0be35f0",
+  "product_source_sha256": {
+    "event_probe_native_pc.js": "d0c972dfc2c5d376fd640b6212baf972600dbc1e01369b0adc5bb4f4491b4ad6",
+    "event_probe_runtime.js": "390493dd4cfa7e7e3b0ce66afb3eb4b9376b9706dd716fb2fe7a768a6dfd5f8c",
+    "native_pc/native_event_runtime/engine_capture_plan.h": "230a0ed5bd8f82efdaebe71400fc6822f94e674acb469f1f1df3e284e79f7fdc",
+    "native_pc/native_event_runtime/engine_capture_pipeline.h": "aefb5f5e084815ca8465f51242b91b285508537d38e176f3786f227c327fcd8a"
+  },
+  "distribution": "five equally weighted synthetic routes; not a measured game distribution",
+  "game_access": false,
+  "instrumentation": "normal final gates use product timing-off semantics; explicit profile separate; original native_capture.cpp unchanged",
+  "summary": {
+    "before": {
+      "cycles_per_s": [
+        663.512064905281,
+        655.8819989578035,
+        662.3321004683614
+      ],
+      "median_cycles_per_s": 662.3321004683614,
+      "produce_ms": [
+        881.3786,
+        912.6349,
+        896.6195
+      ],
+      "median_produce_ms": 896.6195,
+      "pause": {
+        "abi_reads": 30400,
+        "capture_read_bytes": 69021840,
+        "capture_reads": 5698960,
+        "catchup_ms": 965.5961000000002,
+        "closed": 43200,
+        "cycles": 4000,
+        "edges": 43200,
+        "elapsed_ms": 10019.1208,
+        "failure": 0,
+        "fatal": "",
+        "first_ticket": 0,
+        "packed_bytes": 345938000,
+        "pause_observed": true,
+        "peak_bytes": 17723229,
+        "peak_lag_edges": 2214,
+        "peak_records": 2214,
+        "planned_hp_edges": 0,
+        "processed": 43200,
+        "produce_ms": 10005.4685,
+        "producer_error": "",
+        "published": 43200,
+        "raw": 43200,
+        "sequence": 4001
+      }
+    },
+    "after": {
+      "cycles_per_s": [
+        686.8612104884805,
+        680.1736456110299,
+        700.5629864271526
+      ],
+      "median_cycles_per_s": 686.8612104884805,
+      "produce_ms": [
+        420.6952,
+        451.9594,
+        432.341
+      ],
+      "median_produce_ms": 432.341,
+      "pause": {
+        "abi_reads": 28000,
+        "capture_read_bytes": 33394640,
+        "capture_reads": 2922960,
+        "catchup_ms": 616.2687999999998,
+        "closed": 43200,
+        "cycles": 4000,
+        "edges": 43200,
+        "elapsed_ms": 10013.2336,
+        "failure": 0,
+        "fatal": "",
+        "first_ticket": 0,
+        "packed_bytes": 175422800,
+        "pause_observed": true,
+        "peak_bytes": 8842150,
+        "peak_lag_edges": 2176,
+        "peak_records": 2176,
+        "planned_hp_edges": 0,
+        "processed": 43200,
+        "produce_ms": 10003.2302,
+        "producer_error": "",
+        "published": 43200,
+        "raw": 43200,
+        "sequence": 4001
+      }
+    }
+  },
+  "producer_reduction_percent": 51.78099517130734,
+  "whole_pipeline_change_percent": 3.703445749160217,
+  "cases": [
+    {
+      "version": "before",
+      "case": "semantic-route0",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "135f68398945fec63345280995e24f76257b1b20402e8a3024cdb48dc7623afa"
+    },
+    {
+      "version": "after",
+      "case": "semantic-route0",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "135f68398945fec63345280995e24f76257b1b20402e8a3024cdb48dc7623afa"
+    },
+    {
+      "version": "before",
+      "case": "semantic-route1",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "135f68398945fec63345280995e24f76257b1b20402e8a3024cdb48dc7623afa"
+    },
+    {
+      "version": "after",
+      "case": "semantic-route1",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "135f68398945fec63345280995e24f76257b1b20402e8a3024cdb48dc7623afa"
+    },
+    {
+      "version": "before",
+      "case": "semantic-route2",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "72bffe85c6325466692762d3e6475cbe06f82e4297a2f38e006bf52e41a7c896"
+    },
+    {
+      "version": "after",
+      "case": "semantic-route2",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "72bffe85c6325466692762d3e6475cbe06f82e4297a2f38e006bf52e41a7c896"
+    },
+    {
+      "version": "before",
+      "case": "semantic-route3",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "135f68398945fec63345280995e24f76257b1b20402e8a3024cdb48dc7623afa"
+    },
+    {
+      "version": "after",
+      "case": "semantic-route3",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "135f68398945fec63345280995e24f76257b1b20402e8a3024cdb48dc7623afa"
+    },
+    {
+      "version": "before",
+      "case": "semantic-route4",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "135f68398945fec63345280995e24f76257b1b20402e8a3024cdb48dc7623afa"
+    },
+    {
+      "version": "after",
+      "case": "semantic-route4",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "135f68398945fec63345280995e24f76257b1b20402e8a3024cdb48dc7623afa"
+    },
+    {
+      "version": "before",
+      "case": "semantic-route5",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "f7f8bfe3b804f5b623148bfe5d186a274904aaa9d7b3b7290b8f38994c65ef53"
+    },
+    {
+      "version": "after",
+      "case": "semantic-route5",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "f7f8bfe3b804f5b623148bfe5d186a274904aaa9d7b3b7290b8f38994c65ef53"
+    },
+    {
+      "version": "before",
+      "case": "unpaced1000-repeat1",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "963a3a8d85eb5e2d0d3b7f33930232c0963fad904f8430876801ea99895415ff"
+    },
+    {
+      "version": "after",
+      "case": "unpaced1000-repeat1",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "963a3a8d85eb5e2d0d3b7f33930232c0963fad904f8430876801ea99895415ff"
+    },
+    {
+      "version": "before",
+      "case": "unpaced1000-repeat2",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "963a3a8d85eb5e2d0d3b7f33930232c0963fad904f8430876801ea99895415ff"
+    },
+    {
+      "version": "after",
+      "case": "unpaced1000-repeat2",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "963a3a8d85eb5e2d0d3b7f33930232c0963fad904f8430876801ea99895415ff"
+    },
+    {
+      "version": "before",
+      "case": "unpaced1000-repeat3",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "963a3a8d85eb5e2d0d3b7f33930232c0963fad904f8430876801ea99895415ff"
+    },
+    {
+      "version": "after",
+      "case": "unpaced1000-repeat3",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "963a3a8d85eb5e2d0d3b7f33930232c0963fad904f8430876801ea99895415ff"
+    },
+    {
+      "version": "before",
+      "case": "paced400-pause500",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "d0d77f235b388714071581a4500228febc80bbe6eaec131edd2eeab277dbdfcc"
+    },
+    {
+      "version": "after",
+      "case": "paced400-pause500",
+      "returncode": 0,
+      "input_sha256": "edfbff04ef89a827c448c84563e2b490fe02cb6bdfdab479816065555e0841c7",
+      "event_sha256": "d0d77f235b388714071581a4500228febc80bbe6eaec131edd2eeab277dbdfcc"
+    }
+  ],
+  "extra800": {
+    "steady_state_passed": false,
+    "report": {
+      "abi_reads": 336000,
+      "capture_read_bytes": 66789280,
+      "capture_reads": 5845920,
+      "catchup_ms": 11212.88,
+      "closed": 646400,
+      "cycles": 8000,
+      "edges": 646400,
+      "elapsed_ms": 12712.959,
+      "failure": 0,
+      "fatal": "",
+      "first_ticket": 0,
+      "packed_bytes": 525565600,
+      "pause_observed": true,
+      "peak_bytes": 111238435,
+      "peak_lag_edges": 136956,
+      "peak_records": 136956,
+      "planned_hp_edges": 560000,
+      "processed": 646400,
+      "produce_ms": 10008.5248,
+      "producer_error": "",
+      "published": 646400,
+      "raw": 646400,
+      "sequence": 8001
+    },
+    "reason": "backlog grows during offered load; long catch-up despite eventual closure; no service headroom proved"
+  },
+  "explicit_profile": {
+    "before": {
+      "source_profile": {
+        "scope_ms": 516.6121991276741,
+        "scope_inside_publication_ms": 2.8248999416828156,
+        "prefix_ms": 159.86159992218018,
+        "journal_ms": 50.27219992876053,
+        "journal_calls": 40
+      },
+      "native_profile": {
+        "consumer_drain_busy_ticks": 65043460,
+        "consumer_drain_calls": 2656762,
+        "consumer_drain_ticks": 90446515,
+        "consumer_empty_poll_ticks": 25403055,
+        "producer": [
+          {
+            "callback_ticks": 18461,
+            "capture_ticks": 18118,
+            "edge": "enter",
+            "hook": "Entity.ApplyModifier",
+            "hook_id": 1,
+            "queue_ticks": 125,
+            "rpm_ticks": 16988,
+            "sampled_native_reads": 2608,
+            "samples": 16
+          },
+          {
+            "callback_ticks": 54055,
+            "capture_ticks": 53597,
+            "edge": "leave",
+            "hook": "Entity.ApplyModifier",
+            "hook_id": 1,
+            "queue_ticks": 387,
+            "rpm_ticks": 49831,
+            "sampled_native_reads": 7533,
+            "samples": 33
+          },
+          {
+            "callback_ticks": 27091,
+            "capture_ticks": 26749,
+            "edge": "enter",
+            "hook": "Entity.OnAfterOutputDamage",
+            "hook_id": 2,
+            "queue_ticks": 154,
+            "rpm_ticks": 25100,
+            "sampled_native_reads": 3776,
+            "samples": 16
+          },
+          {
+            "callback_ticks": 13745,
+            "capture_ticks": 13654,
+            "edge": "leave",
+            "hook": "Entity.OnAfterOutputDamage",
+            "hook_id": 2,
+            "queue_ticks": 74,
+            "rpm_ticks": 12881,
+            "sampled_native_reads": 1888,
+            "samples": 8
+          },
+          {
+            "callback_ticks": 54686,
+            "capture_ticks": 53999,
+            "edge": "enter",
+            "hook": "Unit.OnTakeDamage",
+            "hook_id": 3,
+            "queue_ticks": 334,
+            "rpm_ticks": 50531,
+            "sampled_native_reads": 7316,
+            "samples": 31
+          },
+          {
+            "callback_ticks": 40163,
+            "capture_ticks": 39840,
+            "edge": "leave",
+            "hook": "Unit.OnTakeDamage",
+            "hook_id": 3,
+            "queue_ticks": 272,
+            "rpm_ticks": 37402,
+            "sampled_native_reads": 5428,
+            "samples": 23
+          },
+          {
+            "callback_ticks": 6840,
+            "capture_ticks": 6612,
+            "edge": "enter",
+            "hook": "Buff.OnTakeDamage",
+            "hook_id": 4,
+            "queue_ticks": 65,
+            "rpm_ticks": 6155,
+            "sampled_native_reads": 801,
+            "samples": 9
+          },
+          {
+            "callback_ticks": 2632,
+            "capture_ticks": 2601,
+            "edge": "leave",
+            "hook": "Buff.OnTakeDamage",
+            "hook_id": 4,
+            "queue_ticks": 22,
+            "rpm_ticks": 2445,
+            "sampled_native_reads": 356,
+            "samples": 4
+          },
+          {
+            "callback_ticks": 3055,
+            "capture_ticks": 2995,
+            "edge": "enter",
+            "hook": "BlockDamage._AssignDynamicVar",
+            "hook_id": 5,
+            "queue_ticks": 18,
+            "rpm_ticks": 2782,
+            "sampled_native_reads": 374,
+            "samples": 2
+          },
+          {
+            "callback_ticks": 7009,
+            "capture_ticks": 6925,
+            "edge": "leave",
+            "hook": "BlockDamage._AssignDynamicVar",
+            "hook_id": 5,
+            "queue_ticks": 53,
+            "rpm_ticks": 6326,
+            "sampled_native_reads": 903,
+            "samples": 7
+          },
+          {
+            "callback_ticks": 1481,
+            "capture_ticks": 1431,
+            "edge": "enter",
+            "hook": "BattleFormula.CalculateDamage",
+            "hook_id": 6,
+            "queue_ticks": 9,
+            "rpm_ticks": 1334,
+            "sampled_native_reads": 206,
+            "samples": 2
+          },
+          {
+            "callback_ticks": 3275,
+            "capture_ticks": 3247,
+            "edge": "leave",
+            "hook": "BattleFormula.CalculateDamage",
+            "hook_id": 6,
+            "queue_ticks": 21,
+            "rpm_ticks": 3040,
+            "sampled_native_reads": 412,
+            "samples": 4
+          },
+          {
+            "callback_ticks": 10533,
+            "capture_ticks": 10221,
+            "edge": "enter",
+            "hook": "BattleFormula.CalculateDamageNoEvent",
+            "hook_id": 7,
+            "queue_ticks": 90,
+            "rpm_ticks": 9537,
+            "sampled_native_reads": 1457,
+            "samples": 15
+          },
+          {
+            "callback_ticks": 10769,
+            "capture_ticks": 10644,
+            "edge": "leave",
+            "hook": "BattleFormula.CalculateDamageNoEvent",
+            "hook_id": 7,
+            "queue_ticks": 95,
+            "rpm_ticks": 9913,
+            "sampled_native_reads": 1435,
+            "samples": 15
+          },
+          {
+            "callback_ticks": 5209,
+            "capture_ticks": 5063,
+            "edge": "enter",
+            "hook": "BattleFormula.CalculateDamageInternal",
+            "hook_id": 8,
+            "queue_ticks": 42,
+            "rpm_ticks": 4742,
+            "sampled_native_reads": 729,
+            "samples": 9
+          },
+          {
+            "callback_ticks": 4736,
+            "capture_ticks": 4684,
+            "edge": "leave",
+            "hook": "BattleFormula.CalculateDamageInternal",
+            "hook_id": 8,
+            "queue_ticks": 40,
+            "rpm_ticks": 4392,
+            "sampled_native_reads": 648,
+            "samples": 8
+          },
+          {
+            "callback_ticks": 12670,
+            "capture_ticks": 12348,
+            "edge": "enter",
+            "hook": "AttackInfo.GetFinalAtk",
+            "hook_id": 9,
+            "queue_ticks": 99,
+            "rpm_ticks": 11530,
+            "sampled_native_reads": 1701,
+            "samples": 21
+          },
+          {
+            "callback_ticks": 13662,
+            "capture_ticks": 13480,
+            "edge": "leave",
+            "hook": "AttackInfo.GetFinalAtk",
+            "hook_id": 9,
+            "queue_ticks": 133,
+            "rpm_ticks": 12641,
+            "sampled_native_reads": 1944,
+            "samples": 24
+          },
+          {
+            "callback_ticks": 5466,
+            "capture_ticks": 5226,
+            "edge": "enter",
+            "hook": "Modifier.NewDamageModifierAfterCalculate",
+            "hook_id": 10,
+            "queue_ticks": 28,
+            "rpm_ticks": 4920,
+            "sampled_native_reads": 740,
+            "samples": 5
+          },
+          {
+            "callback_ticks": 17178,
+            "capture_ticks": 17033,
+            "edge": "leave",
+            "hook": "Modifier.NewDamageModifierAfterCalculate",
+            "hook_id": 10,
+            "queue_ticks": 122,
+            "rpm_ticks": 15960,
+            "sampled_native_reads": 2420,
+            "samples": 11
+          },
+          {
+            "callback_ticks": 5810,
+            "capture_ticks": 5537,
+            "edge": "enter",
+            "hook": "Modifier.NewDamageModifierAfterCalculate",
+            "hook_id": 11,
+            "queue_ticks": 40,
+            "rpm_ticks": 5176,
+            "sampled_native_reads": 740,
+            "samples": 5
+          },
+          {
+            "callback_ticks": 12133,
+            "capture_ticks": 12031,
+            "edge": "leave",
+            "hook": "Modifier.NewDamageModifierAfterCalculate",
+            "hook_id": 11,
+            "queue_ticks": 81,
+            "rpm_ticks": 11343,
+            "sampled_native_reads": 1760,
+            "samples": 8
+          },
+          {
+            "callback_ticks": 3495,
+            "capture_ticks": 3111,
+            "edge": "enter",
+            "hook": "Entity.SetHpInternal",
+            "hook_id": 12,
+            "queue_ticks": 45,
+            "rpm_ticks": 2515,
+            "sampled_native_reads": 348,
+            "samples": 29
+          },
+          {
+            "callback_ticks": 797,
+            "capture_ticks": 698,
+            "edge": "leave",
+            "hook": "Entity.SetHpInternal",
+            "hook_id": 12,
+            "queue_ticks": 35,
+            "rpm_ticks": 538,
+            "sampled_native_reads": 78,
+            "samples": 26
+          }
+        ],
+        "qpc_frequency": 10000000,
+        "sample_rate": "xorshift 1/128 per boundary"
+      }
+    },
+    "after": {
+      "source_profile": {
+        "scope_ms": 495.6254997551441,
+        "scope_inside_publication_ms": 2.765099912881851,
+        "prefix_ms": 154.70320001244545,
+        "journal_ms": 85.88410007953644,
+        "journal_calls": 40
+      },
+      "native_profile": {
+        "consumer_drain_busy_ticks": 61953241,
+        "consumer_drain_calls": 2568751,
+        "consumer_drain_ticks": 89519379,
+        "consumer_empty_poll_ticks": 27566138,
+        "producer": [
+          {
+            "callback_ticks": 17571,
+            "capture_ticks": 17273,
+            "edge": "enter",
+            "hook": "Entity.ApplyModifier",
+            "hook_id": 1,
+            "queue_ticks": 122,
+            "rpm_ticks": 16080,
+            "sampled_native_reads": 2336,
+            "samples": 16
+          },
+          {
+            "callback_ticks": 53751,
+            "capture_ticks": 53346,
+            "edge": "leave",
+            "hook": "Entity.ApplyModifier",
+            "hook_id": 1,
+            "queue_ticks": 344,
+            "rpm_ticks": 49281,
+            "sampled_native_reads": 6972,
+            "samples": 33
+          },
+          {
+            "callback_ticks": 24118,
+            "capture_ticks": 23802,
+            "edge": "enter",
+            "hook": "Entity.OnAfterOutputDamage",
+            "hook_id": 2,
+            "queue_ticks": 143,
+            "rpm_ticks": 22421,
+            "sampled_native_reads": 3392,
+            "samples": 16
+          },
+          {
+            "callback_ticks": 12559,
+            "capture_ticks": 12475,
+            "edge": "leave",
+            "hook": "Entity.OnAfterOutputDamage",
+            "hook_id": 2,
+            "queue_ticks": 70,
+            "rpm_ticks": 11710,
+            "sampled_native_reads": 1696,
+            "samples": 8
+          },
+          {
+            "callback_ticks": 26799,
+            "capture_ticks": 26286,
+            "edge": "enter",
+            "hook": "Unit.OnTakeDamage",
+            "hook_id": 3,
+            "queue_ticks": 168,
+            "rpm_ticks": 24541,
+            "sampled_native_reads": 3658,
+            "samples": 31
+          },
+          {
+            "callback_ticks": 29412,
+            "capture_ticks": 29184,
+            "edge": "leave",
+            "hook": "Unit.OnTakeDamage",
+            "hook_id": 3,
+            "queue_ticks": 191,
+            "rpm_ticks": 27428,
+            "sampled_native_reads": 4094,
+            "samples": 23
+          },
+          {
+            "callback_ticks": 309,
+            "capture_ticks": 174,
+            "edge": "enter",
+            "hook": "Buff.OnTakeDamage",
+            "hook_id": 4,
+            "queue_ticks": 12,
+            "rpm_ticks": 124,
+            "sampled_native_reads": 18,
+            "samples": 9
+          },
+          {
+            "callback_ticks": 27,
+            "capture_ticks": 15,
+            "edge": "leave",
+            "hook": "Buff.OnTakeDamage",
+            "hook_id": 4,
+            "queue_ticks": 6,
+            "rpm_ticks": 0,
+            "sampled_native_reads": 0,
+            "samples": 4
+          },
+          {
+            "callback_ticks": 683,
+            "capture_ticks": 642,
+            "edge": "enter",
+            "hook": "BlockDamage._AssignDynamicVar",
+            "hook_id": 5,
+            "queue_ticks": 5,
+            "rpm_ticks": 584,
+            "sampled_native_reads": 90,
+            "samples": 2
+          },
+          {
+            "callback_ticks": 4907,
+            "capture_ticks": 4842,
+            "edge": "leave",
+            "hook": "BlockDamage._AssignDynamicVar",
+            "hook_id": 5,
+            "queue_ticks": 49,
+            "rpm_ticks": 4473,
+            "sampled_native_reads": 637,
+            "samples": 7
+          },
+          {
+            "callback_ticks": 281,
+            "capture_ticks": 242,
+            "edge": "enter",
+            "hook": "BattleFormula.CalculateDamage",
+            "hook_id": 6,
+            "queue_ticks": 3,
+            "rpm_ticks": 221,
+            "sampled_native_reads": 34,
+            "samples": 2
+          },
+          {
+            "callback_ticks": 178,
+            "capture_ticks": 165,
+            "edge": "leave",
+            "hook": "BattleFormula.CalculateDamage",
+            "hook_id": 6,
+            "queue_ticks": 8,
+            "rpm_ticks": 142,
+            "sampled_native_reads": 20,
+            "samples": 4
+          },
+          {
+            "callback_ticks": 1789,
+            "capture_ticks": 1559,
+            "edge": "enter",
+            "hook": "BattleFormula.CalculateDamageNoEvent",
+            "hook_id": 7,
+            "queue_ticks": 31,
+            "rpm_ticks": 1370,
+            "sampled_native_reads": 199,
+            "samples": 15
+          },
+          {
+            "callback_ticks": 593,
+            "capture_ticks": 545,
+            "edge": "leave",
+            "hook": "BattleFormula.CalculateDamageNoEvent",
+            "hook_id": 7,
+            "queue_ticks": 30,
+            "rpm_ticks": 454,
+            "sampled_native_reads": 65,
+            "samples": 15
+          },
+          {
+            "callback_ticks": 111,
+            "capture_ticks": 15,
+            "edge": "enter",
+            "hook": "BattleFormula.CalculateDamageInternal",
+            "hook_id": 8,
+            "queue_ticks": 8,
+            "rpm_ticks": 0,
+            "sampled_native_reads": 0,
+            "samples": 9
+          },
+          {
+            "callback_ticks": 34,
+            "capture_ticks": 14,
+            "edge": "leave",
+            "hook": "BattleFormula.CalculateDamageInternal",
+            "hook_id": 8,
+            "queue_ticks": 10,
+            "rpm_ticks": 0,
+            "sampled_native_reads": 0,
+            "samples": 8
+          },
+          {
+            "callback_ticks": 825,
+            "capture_ticks": 580,
+            "edge": "enter",
+            "hook": "AttackInfo.GetFinalAtk",
+            "hook_id": 9,
+            "queue_ticks": 26,
+            "rpm_ticks": 479,
+            "sampled_native_reads": 63,
+            "samples": 21
+          },
+          {
+            "callback_ticks": 509,
+            "capture_ticks": 438,
+            "edge": "leave",
+            "hook": "AttackInfo.GetFinalAtk",
+            "hook_id": 9,
+            "queue_ticks": 40,
+            "rpm_ticks": 344,
+            "sampled_native_reads": 48,
+            "samples": 24
+          },
+          {
+            "callback_ticks": 841,
+            "capture_ticks": 667,
+            "edge": "enter",
+            "hook": "Modifier.NewDamageModifierAfterCalculate",
+            "hook_id": 10,
+            "queue_ticks": 7,
+            "rpm_ticks": 606,
+            "sampled_native_reads": 90,
+            "samples": 5
+          },
+          {
+            "callback_ticks": 956,
+            "capture_ticks": 908,
+            "edge": "leave",
+            "hook": "Modifier.NewDamageModifierAfterCalculate",
+            "hook_id": 10,
+            "queue_ticks": 26,
+            "rpm_ticks": 791,
+            "sampled_native_reads": 110,
+            "samples": 11
+          },
+          {
+            "callback_ticks": 788,
+            "capture_ticks": 627,
+            "edge": "enter",
+            "hook": "Modifier.NewDamageModifierAfterCalculate",
+            "hook_id": 11,
+            "queue_ticks": 9,
+            "rpm_ticks": 568,
+            "sampled_native_reads": 90,
+            "samples": 5
+          },
+          {
+            "callback_ticks": 661,
+            "capture_ticks": 633,
+            "edge": "leave",
+            "hook": "Modifier.NewDamageModifierAfterCalculate",
+            "hook_id": 11,
+            "queue_ticks": 15,
+            "rpm_ticks": 562,
+            "sampled_native_reads": 80,
+            "samples": 8
+          },
+          {
+            "callback_ticks": 3136,
+            "capture_ticks": 2790,
+            "edge": "enter",
+            "hook": "Entity.SetHpInternal",
+            "hook_id": 12,
+            "queue_ticks": 41,
+            "rpm_ticks": 2379,
+            "sampled_native_reads": 348,
+            "samples": 29
+          },
+          {
+            "callback_ticks": 813,
+            "capture_ticks": 715,
+            "edge": "leave",
+            "hook": "Entity.SetHpInternal",
+            "hook_id": 12,
+            "queue_ticks": 37,
+            "rpm_ticks": 555,
+            "sampled_native_reads": 78,
+            "samples": 26
+          }
+        ],
+        "qpc_frequency": 10000000,
+        "sample_rate": "xorshift 1/128 per boundary"
+      }
+    }
+  },
+  "raw_receipts": {
+    "final-gates/suite.json": {
+      "sha256": "03ce9328c141de10204ec5c0d32f63043d6fd52db47ef92f26a4128d33f591f0"
+    },
+    "final-extra800/receipt.json": {
+      "sha256": "d824668a8e1deb43bdc2d53a98aa2969961f98fa62b4a6ce5dcf0eaa6295eb44"
+    },
+    "final-stages-before/receipt.json": {
+      "sha256": "6a0a8239b40d0f72b1df2caa455a2f178f87557eb14f5cb49f86f72c0c063162"
+    },
+    "final-stages-after/receipt.json": {
+      "sha256": "1828a2c3dd016ae5970cd856b4f838a8f1fbf0ff646c7c76d2c2b7155d6a5626"
+    },
+    "hp-padding800-clean/receipt.json": {
+      "sha256": "8ea4326f849c42d29c668a405242841e24659f7b6c009cc980f94e4c7bce76b2"
+    },
+    "clean-gates/suite.json": {
+      "sha256": "6435e27ff9fd7fd9860dcfd72ae9c3ed9f056b1618cd91004df4e9b4936bd061"
+    }
+  },
+  "producer_count_receipt": {
+    "path": "runtime/capture-demand/producers/round3/result/receipt.json",
+    "sha256": "c8c3eacdca79d0593fc08e3344127501d73433c7885f49141f15031697b0ac99"
+  },
+  "review": {
+    "path": "runtime/capture-demand/final/formula-final-review.json",
+    "sha256": "a083d92725d387ee6456ce1b1fe6777dec24f4fd30d584138d402fad928aa26b"
+  },
+  "limitations": [
+    "Synthetic owned memory, not game FPS or measured natural hook distribution.",
+    "No change to queue capacity, acknowledgement or rejection conditions.",
+    "Previous wrapper-on and QPC-on runs retained; not pooled into final timing-off results."
+  ]
+}

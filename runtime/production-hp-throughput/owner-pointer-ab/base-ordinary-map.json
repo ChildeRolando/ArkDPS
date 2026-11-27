@@ -1,0 +1,92 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_fixture_backend",
+  "includes": [
+    "actual shared HP callback"
+  ],
+  "excluded": [
+    "native capture",
+    "native owned view",
+    "scope guard validation",
+    "production publication",
+    "IPC/queue"
+  ],
+  "results": [
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "input_only_baseline",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 2.096100002527237,
+      "setters_per_second": 954152.9495675919,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "unchanged",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 73.79589998722076,
+      "setters_per_second": 27101.776661661963,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "changed_damage",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 136.75420001149178,
+      "setters_per_second": 14624.779347412623,
+      "publication_count": 0,
+      "scope_stamps": 2000,
+      "sequence_delta": 2000,
+      "event_kinds": {
+        "enemy_hp": 2000
+      }
+    },
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "heal_coalesced",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 112.3875000178814,
+      "setters_per_second": 17795.573348297545,
+      "publication_count": 0,
+      "scope_stamps": 2000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "js_profile": null,
+      "native_profile": null,
+      "branch": "maxhp_dirty",
+      "setters": 2000,
+      "dirty": 20,
+      "elapsed_ms": 104.82060000300407,
+      "setters_per_second": 19080.218964046013,
+      "publication_count": 0,
+      "scope_stamps": 2000,
+      "sequence_delta": 41,
+      "event_kinds": {
+        "enemy_hp": 41
+      }
+    }
+  ],
+  "provenance": {
+    "source": "a12ded6^",
+    "binary_sha256": "10cf03ebe8ec192c19c78d161a3ef682211ea11dd01dd2c8b402e4aab8c305ab",
+    "script_sha256": "cccf14726d802c5be47806078fb6ccac1b6c3a2b2861ab63e1d40f146235aceb"
+  }
+}

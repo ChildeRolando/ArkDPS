@@ -1,11 +1,21 @@
 #include "engine.h"
+#include "engine_worker.h"
+#include "engine_capture_lane.h"
+#include "engine_capture_plan.h"
+#include "engine_capture_config.h"
+#include "engine_capture_pipeline.h"
+#include "engine_terminal_fence.h"
+#include "engine_capture_timing.h"
 #include <windows.h>
 #include <psapi.h>
 #include <MinHook.h>
 extern "C" {
 #include <quickjs.h>
 }
+#include "owned_replay_js.h"
 #include "bridge_source.h"
+#include "publication_source.h"
+#include "cold_plan_source.h"
 #include "json.hpp"
 #include <algorithm>
 #include <array>
@@ -29,19 +39,58 @@ namespace {
 constexpr std::size_t max_read = 1024 * 1024;
 constexpr std::size_t max_allocated = 64 * 1024 * 1024;
 struct Hook {
+    unsigned timing_id = 0;
+    std::string timing_name;
     void* address = nullptr;
     void* original = nullptr;
     void* thunk = nullptr;
     JSValue callbacks = JS_UNDEFINED;
+    JSValue direct_entry = JS_UNDEFINED, direct_leave = JS_UNDEFINED;
+    JSValue direct_contract = JS_UNDEFINED;
     bool detached = false;
+    arkdps::capture::CompiledPlan capture_plan;
 };
 struct Allocation { std::uintptr_t base; std::size_t size; };
 struct Runtime {
-    std::recursive_mutex mutex;
+    arkdps::EngineWorker worker;
+    std::unique_ptr<arkdps::capture::CaptureLanes> lanes;
+    std::atomic<arkdps::capture::CaptureLanes*> ingress{nullptr};
+    arkdps::capture::CaptureConfigurations configurations;
+    std::uint64_t processed_ticket = 0, closed_ticket = 0, delivered_sequence = 0, published_sequence = 0;
+    bool replay_active = false;
+    arkdps::capture::TerminalFence terminal_fence;
+    arkdps::capture::CallbackTimingRegistry callback_timings;
+    JSValue prefix_projection = JS_UNDEFINED;
+    JSValue publication_publish = JS_UNDEFINED, publication_request = JS_UNDEFINED;
+    JSValue mode_state = JS_UNDEFINED, mode_install = JS_UNDEFINED, graph_retire = JS_UNDEFINED;
+    std::atomic<std::uint64_t> capture_mode_epoch{0};
+    std::atomic<std::uint64_t> cold_publication_request{0};
+    std::uint64_t published_mode_epoch = 0;
+    int desired_mode = -1;
+    bool publication_ready=false;
+    std::unique_ptr<arkdps::capture::CompiledPlan> sampling_plan;
+    std::unique_ptr<arkdps::capture::Snapshot> sampling_snapshot;
+    JSValue sampling_dispatch=JS_UNDEFINED, sampling_record=JS_UNDEFINED;
+    std::uint64_t sampling_serial=0, sampling_attempts=0, sample_request=0, completed_sample_request=0, sample_mode_epoch=0;
+    std::string sampling_retry_reason;
+    std::string completed_sample_token, published_token, sample_kind, sample_opening_token;
+
+    std::uint64_t published_ticket = 0;
+    arkdps::capture::RecordHeader replay_header;
+    JSValue replay_dispatch = JS_UNDEFINED, replay_batch = JS_UNDEFINED, batch_advance = JS_UNDEFINED;
+    std::size_t deferred_record_size=0;
+    std::uint64_t batch_calls=0,batch_issued=0,batch_finalized=0,batch_barriers=0,single_replayed=0;
+    unsigned maximum_batch_edges=0;
+    std::uint64_t replay_health_calls=0,controlled_finish_checks=0;
+    std::array<std::uint64_t,8> replay_fallbacks{};
+    JSValue materialization_count=JS_UNDEFINED;
+    std::uint64_t planned_hp_edges=0;
+    struct WorkerInvocation { JSValue receiver = JS_UNDEFINED; std::uint64_t id = 0; Hook* hook = nullptr; bool planned_hp_omission=false; };
+    std::array<std::array<WorkerInvocation, 256>, 16> receivers{};
+    std::array<unsigned, 16> replay_depth{};
+    std::array<std::byte, arkdps::capture::record_capacity> consume_buffer{};
     JSRuntime* runtime = nullptr;
     JSContext* context = nullptr;
-    JSValue pointer = JS_UNDEFINED;
-    JSValue argument_view = JS_UNDEFINED;
     JSValue dispatch = JS_UNDEFINED;
     std::vector<std::unique_ptr<Hook>> hooks;
     std::vector<Allocation> allocations;
@@ -70,9 +119,180 @@ struct EntryFrame {
 };
 static_assert(offsetof(EntryFrame, return_target) == 0xa8);
 struct ReturnFrame { std::uint64_t rax, rdx; std::array<std::uint8_t, 32> xmm; };
-struct Invocation { Hook* hook; std::uintptr_t return_address; JSValue receiver; };
-struct ThreadInvocations { unsigned depth = 0; std::array<Invocation, 256> calls; };
-thread_local ThreadInvocations invocations;
+// Diagnostics have no ownership of the VM lock. Every thread writes only its
+// own fixed cells; snapshots use bounded seqlock reads outside the VM mutex.
+// There is no hot-path allocation, log, global RMW, division, or clock when off.
+constexpr unsigned timing_threads = 16, timing_cells = 1032;
+constexpr unsigned timing_request = 1024, timing_transport_base = 1028;
+struct TimingCell {
+    std::atomic<std::uint64_t> revision{0}, calls{0}, samples{0}, ticks{0}, exclusive{0}, maximum{0};
+    std::atomic<std::uint64_t> wait{0}, wait_max{0}, hold{0}, hold_max{0}, js{0}, reads{0}, bytes{0}, read_ticks{0}, read_spans{0};
+};
+struct TimingThread {
+    std::atomic<DWORD> owner{0};
+    std::array<TimingCell, timing_cells> cells;
+};
+struct TimingState {
+    std::atomic<bool> enabled{false}, thread_overflow{false};
+    std::array<TimingThread, timing_threads> threads;
+};
+TimingState timing_state;
+std::uint64_t ticks_now() noexcept {
+    LARGE_INTEGER value; QueryPerformanceCounter(&value); return value.QuadPart;
+}
+class CallbackTimer final {
+public:
+    explicit CallbackTimer(bool leave) noexcept : leave_(leave) {
+        auto& runtime=state();
+        if (!timing_state.enabled.load(std::memory_order_relaxed) || !runtime.lanes->enabled.load(std::memory_order_acquire)
+            || runtime.lanes->failure.load(std::memory_order_relaxed)) return;
+        const auto tid=GetCurrentThreadId();
+        for (unsigned i=0;i<arkdps::capture::lane_count;++i) {
+            if (runtime.lanes->lanes[i]->owner.load(std::memory_order_acquire)!=tid) continue;
+            if(runtime.callback_timings.select(i)){index_=i;start_=ticks_now();}
+            break;
+        }
+    }
+    void bind(arkdps::capture::Lane& lane,unsigned hook) noexcept {
+        if (!start_ || hook>=arkdps::capture::timing_hooks || state().lanes->lanes[index_].get()!=&lane) {start_=0;return;}
+        hook_=hook;generation_=lane.generation.load(std::memory_order_acquire);bound_=true;
+    }
+    void stack_read() noexcept {++extra_reads_;extra_bytes_+=8;}
+    void capture(const arkdps::capture::Snapshot& snapshot,unsigned parents,bool queued) noexcept {
+        reads_=snapshot.read_count;bytes_=snapshot.read_bytes;dropped_=!queued;
+        if(queued)enqueued_=sizeof(arkdps::capture::RecordHeader)+parents*sizeof(arkdps::capture::ParentCheckpoint)
+            +snapshot.segment_count*sizeof(arkdps::capture::Segment)+snapshot.field_count*sizeof(arkdps::capture::FieldState)+snapshot.byte_count;
+    }
+    ~CallbackTimer(){
+        if(!start_ || !bound_)return;
+        const auto end=ticks_now();
+        state().callback_timings.cell(index_,hook_,leave_).record(generation_,end>=start_?end-start_:0,
+            reads_+extra_reads_,bytes_+extra_bytes_,enqueued_,dropped_);
+    }
+private:
+    unsigned index_=0,hook_=0;bool leave_=false,bound_=false,dropped_=true;
+    std::uint64_t start_=0,generation_=0,reads_=0,bytes_=0,enqueued_=0,extra_reads_=0,extra_bytes_=0;
+};
+TimingThread* timing_slot() noexcept {
+    const auto id = GetCurrentThreadId();
+    for (auto& slot : timing_state.threads)
+        if (slot.owner.load(std::memory_order_relaxed)==id) return &slot;
+    for (auto& slot : timing_state.threads) {
+        DWORD empty=0;
+        if (slot.owner.compare_exchange_strong(empty,id,std::memory_order_relaxed)) return &slot;
+    }
+    timing_state.thread_overflow.store(true,std::memory_order_relaxed);
+    return nullptr;
+}
+std::uint32_t timing_random = 0x9e3779b9u; // Worker-only sampler.
+void timing_add(std::atomic<std::uint64_t>& value, std::uint64_t delta) noexcept {
+    value.store(value.load(std::memory_order_relaxed) + delta, std::memory_order_relaxed);
+}
+struct TimingSpan;
+TimingSpan* timing_active = nullptr;
+struct TimingSpan {
+    TimingCell* cell = nullptr;
+    TimingSpan* parent = nullptr;
+    std::uint64_t start = 0, child = 0, wait = 0, hold = 0, js = 0;
+    std::uint64_t reads = 0, bytes = 0, read_ticks = 0;
+    bool sampled = false, detail_sampled = false;
+    explicit TimingSpan(unsigned id, bool full = false) noexcept {
+        if (!timing_state.enabled.load(std::memory_order_relaxed)) return;
+        auto* slot = timing_slot();
+        if (!slot || id >= timing_cells) return;
+        cell = &slot->cells[id];
+        timing_add(cell->calls, 1);
+        timing_random ^= timing_random << 13;
+        timing_random ^= timing_random >> 17;
+        timing_random ^= timing_random << 5;
+        const bool selected = (timing_random & 127u) == 0;
+        sampled = full || timing_active || selected;
+        if (sampled) {
+            parent = timing_active;
+            detail_sampled = selected || (parent && parent->detail_sampled);
+            timing_active = this; start = ticks_now();
+        }
+    }
+    ~TimingSpan() noexcept {
+        if (!sampled) return;
+        const auto elapsed = ticks_now() - start;
+        timing_active = parent;
+        if (parent) parent->child += elapsed;
+        cell->revision.fetch_add(1, std::memory_order_acq_rel);
+        timing_add(cell->samples, 1); timing_add(cell->ticks, elapsed);
+        timing_add(cell->exclusive, elapsed > child ? elapsed-child : 0);
+        cell->maximum.store((std::max)(cell->maximum.load(std::memory_order_relaxed), elapsed), std::memory_order_relaxed);
+        timing_add(cell->wait, wait); timing_add(cell->hold, hold); timing_add(cell->js, js);
+        cell->wait_max.store((std::max)(cell->wait_max.load(std::memory_order_relaxed), wait), std::memory_order_relaxed);
+        cell->hold_max.store((std::max)(cell->hold_max.load(std::memory_order_relaxed), hold), std::memory_order_relaxed);
+        timing_add(cell->reads, reads); timing_add(cell->bytes, bytes); timing_add(cell->read_ticks, read_ticks);
+        timing_add(cell->read_spans, detail_sampled ? 1 : 0);
+        cell->revision.fetch_add(1, std::memory_order_acq_rel);
+    }
+};
+struct ReadTiming {
+    TimingSpan* span = timing_active && timing_active->detail_sampled ? timing_active : nullptr;
+    std::uint64_t start = span ? ticks_now() : 0;
+    explicit ReadTiming(std::size_t bytes) noexcept { if (span) { ++span->reads; span->bytes += bytes; } }
+    ~ReadTiming() { if (span) span->read_ticks += ticks_now()-start; }
+};
+nlohmann::json timing_snapshot() {
+    const auto summary_started = ticks_now();
+    using Json = nlohmann::json;
+    LARGE_INTEGER frequency; QueryPerformanceFrequency(&frequency);
+    Json rows = Json::array();
+    unsigned skipped = 0, omitted = 0;
+    for (const auto& thread : timing_state.threads) {
+        const auto owner = thread.owner.load(std::memory_order_relaxed);
+        if (!owner) continue;
+        for (unsigned id=0; id<timing_cells; ++id) {
+            const auto& c = thread.cells[id];
+            if (!c.calls.load(std::memory_order_relaxed)) continue;
+            if (rows.size() >= 128) { ++omitted; continue; }
+            Json row;
+            bool consistent = false;
+            for (unsigned attempt=0; attempt<2 && !consistent; ++attempt) {
+                const auto revision = c.revision.load(std::memory_order_acquire);
+                if (revision & 1) continue;
+                row = {{"thread_id", owner}, {"cell", id}, {"calls", c.calls.load(std::memory_order_relaxed)},
+                    {"samples", c.samples.load(std::memory_order_relaxed)}, {"ticks", c.ticks.load(std::memory_order_relaxed)},
+                    {"exclusive_ticks", c.exclusive.load(std::memory_order_relaxed)}, {"max_ticks", c.maximum.load(std::memory_order_relaxed)},
+                    {"vm_wait_ticks", c.wait.load(std::memory_order_relaxed)}, {"vm_wait_max_ticks", c.wait_max.load(std::memory_order_relaxed)},
+                    {"vm_hold_max_ticks", c.hold_max.load(std::memory_order_relaxed)},
+                    {"vm_hold_ticks", c.hold.load(std::memory_order_relaxed)}, {"js_ticks", c.js.load(std::memory_order_relaxed)},
+                    {"read_calls", c.reads.load(std::memory_order_relaxed)}, {"read_bytes", c.bytes.load(std::memory_order_relaxed)},
+                    {"read_detail_spans", c.read_spans.load(std::memory_order_relaxed)},
+                    {"read_ticks", c.read_ticks.load(std::memory_order_relaxed)}};
+                std::atomic_thread_fence(std::memory_order_acquire);
+                consistent = c.revision.load(std::memory_order_relaxed) == revision;
+            }
+            if (!consistent) { ++skipped; continue; }
+            if (id < timing_request) {
+                const auto index = id/2;
+                row["kind"] = id%2 ? "hook_leave" : "hook_enter";
+                if (index < state().hooks.size()) {
+                    const auto& hook = state().hooks[index];
+                    row["hook"] = hook->timing_name;
+                    row["address"] = reinterpret_cast<std::uintptr_t>(hook->address);
+                }
+            } else {
+                static const char* names[] = {"request_mark", "request_read", "request_ack", "request_other",
+                    "transport_parse", "transport_encode", "transport_write", "transport_other"};
+                row["kind"] = names[id-timing_request];
+            }
+            rows.push_back(std::move(row));
+        }
+    }
+    FILETIME created{}, exited{}, kernel{}, user{};
+    GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+    return {{"schema", 1}, {"enabled", timing_state.enabled.load(std::memory_order_relaxed)},
+        {"pid", GetCurrentProcessId()}, {"qpc", ticks_now()}, {"qpc_frequency", frequency.QuadPart},
+        {"process_created_filetime", (static_cast<std::uint64_t>(created.dwHighDateTime)<<32)|created.dwLowDateTime},
+        {"summary_build_ticks", ticks_now()-summary_started},
+        {"sampling", "hooks_random_1_in_128_nested_inherited_requests_all_reads_detail_1_in_128"}, {"cumulative", true},
+        {"thread_capacity", timing_threads}, {"thread_overflow", timing_state.thread_overflow.load(std::memory_order_relaxed)},
+        {"skipped_busy_cells", skipped}, {"omitted_cells", omitted}, {"rows", std::move(rows)}};
+}
 
 std::string string(JSContext* context, JSValueConst value) {
     const char* text = JS_ToCString(context, value);
@@ -119,17 +339,17 @@ std::size_t size(JSContext* context, JSValueConst value, std::size_t limit = max
     return static_cast<std::size_t>(result);
 }
 void read(std::uintptr_t address, void* destination, std::size_t count) {
+    if (state().replay_active) {
+        state().lanes->poison(arkdps::capture::LaneFault::live_replay_access);
+        throw std::runtime_error("live native read forbidden during captured replay");
+    }
+    ReadTiming timing(count);
     if (count > max_read || address + count < address) throw std::runtime_error("invalid read range");
     SIZE_T actual = 0;
     if (count && (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(address), destination, count, &actual) || actual != count))
         throw std::runtime_error("unreadable native memory");
 }
-JSValue pointer(JSContext* context, std::uintptr_t address) {
-    auto argument = JS_NewBigUint64(context, address);
-    auto value = JS_Call(context, state().pointer, JS_UNDEFINED, 1, &argument);
-    JS_FreeValue(context, argument);
-    return value;
-}
+
 template <typename Operation>
 JSValue guarded(JSContext* context, Operation&& operation) {
     try { return operation(); }
@@ -146,6 +366,7 @@ JSValue js_read(JSContext* c, JSValueConst, int count, JSValueConst* args) {
 }
 JSValue js_write(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] {
+        if (state().replay_active) { state().lanes->poison(arkdps::capture::LaneFault::live_replay_access); throw std::runtime_error("live native operation forbidden during captured replay"); }
         if (count != 2) throw std::runtime_error("write requires address and bytes");
         const auto address = integer(c, args[0]);
         std::size_t bytes = 0;
@@ -161,6 +382,7 @@ JSValue js_write(JSContext* c, JSValueConst, int count, JSValueConst* args) {
 }
 JSValue js_allocate(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] {
+        if (state().replay_active) { state().lanes->poison(arkdps::capture::LaneFault::live_replay_access); throw std::runtime_error("live native operation forbidden during captured replay"); }
         if (count != 1) throw std::runtime_error("alloc requires length");
         const auto bytes = size(c, args[0]);
         auto& runtime = state();
@@ -251,6 +473,7 @@ JSValue js_export(JSContext* c, JSValueConst, int count, JSValueConst* args) {
 }
 JSValue js_native_call(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] {
+        if (state().replay_active) { state().lanes->poison(arkdps::capture::LaneFault::live_replay_access); throw std::runtime_error("live native operation forbidden during captured replay"); }
         if (count != 2) throw std::runtime_error("native call requires function and arguments");
         const auto address = integer(c, args[0]);
         if (!state().exports.count(address)) throw std::runtime_error("unregistered IL2CPP export");
@@ -270,15 +493,75 @@ JSValue js_native_call(JSContext* c, JSValueConst, int count, JSValueConst* args
         return JS_NewBigUint64(c, result);
     });
 }
+// Deliberately held closed while sustained worker throughput is under review.
+// Compiler support and source contracts are tested separately from readiness.
+JSValue js_capture_capabilities(JSContext* c, JSValueConst, int, JSValueConst*) {
+    const auto text=arkdps::capture::capture_capabilities(true).dump();
+    return JS_ParseJSON(c,text.data(),text.size(),"native-capture-capabilities.json");
+}
+JSValue js_publish_scope(JSContext* c, JSValueConst, int count, JSValueConst* args) {
+    return guarded(c,[&] {
+        if (count!=1) throw std::runtime_error("capture scope publication requires one graph");
+        auto encoded=JS_JSONStringify(c,args[0],JS_UNDEFINED,JS_UNDEFINED);
+        if (JS_IsException(encoded)) throw std::runtime_error(exception(c));
+        std::string text;
+        try { text=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); throw; }
+        JS_FreeValue(c,encoded);
+        state().configurations.publish(nlohmann::json::parse(text),false);
+        return JS_UNDEFINED;
+    });
+}
+JSValue js_publish_publication(JSContext* c, JSValueConst, int count, JSValueConst* args) {
+    return guarded(c,[&] {
+        if (count!=1) throw std::runtime_error("capture publication requires one graph");
+        auto encoded=JS_JSONStringify(c,args[0],JS_UNDEFINED,JS_UNDEFINED);
+        if (JS_IsException(encoded)) throw std::runtime_error(exception(c));
+        std::string text;
+        try { text=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); throw; }
+        JS_FreeValue(c,encoded);
+        state().configurations.publish(nlohmann::json::parse(text),true);
+        return JS_UNDEFINED;
+    });
+}
 JSValue js_attach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] {
         if (count != 2 || !JS_IsObject(args[1])) throw std::runtime_error("hook requires address and callbacks");
         auto& runtime = state();
-        if (runtime.hooks.size() >= 512 || runtime.stopping.load() || !runtime.fatal.empty())
+        if (runtime.hooks.size() >= 512 || runtime.initialized || runtime.stopping.load() || !runtime.fatal.empty())
             throw std::runtime_error("native hook registration is unavailable");
         auto hook = std::make_unique<Hook>();
+        hook->timing_id = static_cast<unsigned>(runtime.hooks.size());
+        auto label = JS_GetPropertyStr(c, args[1], "arkdpsName");
+        if (JS_IsString(label)) hook->timing_name = string(c, label).substr(0, 96);
+        JS_FreeValue(c, label);
         hook->address = reinterpret_cast<void*>(integer(c, args[0]));
+        auto contract=JS_GetPropertyStr(c,args[1],"arkdpsCaptureContract");
+        auto encoded=JS_JSONStringify(c,contract,JS_UNDEFINED,JS_UNDEFINED);
+        JS_FreeValue(c,contract);
+        if (JS_IsException(encoded) || JS_IsUndefined(encoded)) {
+            JS_FreeValue(c,encoded);
+            throw std::runtime_error("native hook requires a complete capture contract");
+        }
+        std::string capture_json;
+        try { capture_json=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); throw; }
+        JS_FreeValue(c,encoded);
+        hook->capture_plan=arkdps::capture::compile_plan(nlohmann::json::parse(capture_json), reinterpret_cast<std::uintptr_t>(hook->address));
+        for (unsigned i=0;i<hook->capture_plan.plan->field_count;++i)
+            if (hook->capture_plan.plan->fields[i].id>=arkdps::capture::scope_field_base
+                || hook->capture_plan.plan->fields[i].guard_id>=arkdps::capture::scope_guard_base)
+                throw std::runtime_error("base capture fields overlap graph namespaces");
+        runtime.configurations.intern(hook->capture_plan);
+
         hook->callbacks = JS_DupValue(c, args[1]);
+        // Setup-only immutable references: no mutable member lookup per raw edge.
+        if (hook->capture_plan.hp_normal && hook->capture_plan.hp_observations_ready) {
+            auto entry=JS_GetPropertyStr(c,args[1],"arkdpsDirectHpEntry");
+            auto leave=JS_GetPropertyStr(c,args[1],"arkdpsDirectHpLeave");
+            if (JS_IsFunction(c,entry) && JS_IsFunction(c,leave)) {
+                hook->direct_entry=entry;hook->direct_leave=leave;
+                hook->direct_contract=JS_GetPropertyStr(c,args[1],"arkdpsCaptureContract");
+            } else {JS_FreeValue(c,entry);JS_FreeValue(c,leave);}
+        }
         // A leaf thunk: movabs volatile r11,Hook*; jmp [rip+0]; .quad entry.
         // It changes no stack slots, so ordinary Windows leaf unwind remains valid.
         std::array<std::uint8_t, 24> code{{0x49,0xbb}};
@@ -323,7 +606,22 @@ JSValue js_detach(JSContext* c, JSValueConst, int count, JSValueConst* args) {
 JSValue js_send(JSContext* c, JSValueConst, int count, JSValueConst* args) {
     return guarded(c, [&] { if (count != 1) throw std::runtime_error("send requires JSON"); state().ready = string(c, args[0]); return JS_UNDEFINED; });
 }
-JSValue js_active(JSContext* c, JSValueConst, int, JSValueConst*) { return JS_NewUint32(c, state().active.load()); }
+JSValue js_active(JSContext* c, JSValueConst, int, JSValueConst*) {
+    auto& runtime=state();
+    return JS_NewUint32(c, runtime.replay_active ? runtime.replay_header.active : runtime.active.load());
+}
+JSValue js_replay_healthy(JSContext* c, JSValueConst, int, JSValueConst*) {
+    auto& runtime=state();++runtime.replay_health_calls;
+    return JS_NewBool(c,runtime.replay_active && arkdps::owned_js::binding().active
+        && runtime.lanes->failure.load(std::memory_order_acquire)==0);
+}
+JSValue js_sampling_checkpoint(JSContext* c,JSValueConst,int count,JSValueConst* args) {
+    auto& r=state();const auto& owner=arkdps::owned_js::binding();
+    return JS_NewBool(c,count==1 && JS_IsObject(args[0]) && JS_IsObject(r.sampling_record)
+        && JS_VALUE_GET_PTR(args[0])==JS_VALUE_GET_PTR(r.sampling_record)
+        && r.replay_active && owner.active && owner.ticket==r.replay_header.ticket
+        && r.replay_header.phase==arkdps::capture::Phase::checkpoint);
+}
 JSValue js_pid(JSContext* c, JSValueConst, int, JSValueConst*) { return JS_NewUint32(c, GetCurrentProcessId()); }
 void function(JSContext* c, JSValueConst global, const char* name, JSCFunction* callback, int arguments) {
     JS_SetPropertyStr(c, global, name, JS_NewCFunction(c, callback, name, arguments));
@@ -333,17 +631,371 @@ void evaluate(JSContext* c, const std::string& source, const char* filename) {
     if (JS_IsException(value)) throw std::runtime_error(exception(c));
     JS_FreeValue(c, value);
 }
-void callback(JSContext* c, Hook* hook, const char* name, JSValueConst receiver, int arguments, JSValueConst* args) {
-    auto method = JS_GetPropertyStr(c, hook->callbacks, name);
-    if (JS_IsFunction(c, method)) {
-        auto result = JS_Call(c, method, receiver, arguments, args);
-        if (JS_IsException(result)) { JS_FreeValue(c, method); throw std::runtime_error(exception(c)); }
-        JS_FreeValue(c, result);
-    }
-    JS_FreeValue(c, method);
+
 }
 
-// The caller owns the JS lock. MinHook changes must be applied after releasing it.
+
+namespace {
+nlohmann::json json_value(JSContext* c, JSValueConst value) {
+    auto encoded=JS_JSONStringify(c,value,JS_UNDEFINED,JS_UNDEFINED);
+    if (JS_IsException(encoded)) throw std::runtime_error(exception(c));
+    std::string text;
+    try { text=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); throw; }
+    JS_FreeValue(c,encoded);
+    return nlohmann::json::parse(text);
+}
+void install_mode_state(const nlohmann::json& mode) {
+    auto& runtime=state();
+    if (arkdps::capture::plan_uint(mode.at("version"),1)!=1
+        || (mode.at("desired_mode")!="all" && mode.at("desired_mode")!="local"))
+        throw std::runtime_error("invalid native capture mode state");
+    const auto epoch=arkdps::capture::plan_uint(mode.at("mode_epoch"),9007199254740991ULL);
+    runtime.desired_mode=mode.at("desired_mode")=="all" ? 1 : 0;
+    // JS has already installed immutable history and graph configuration for
+    // this epoch. No game thread waits for the worker or changes an old epoch.
+    runtime.capture_mode_epoch.store(epoch,std::memory_order_release);
+}
+void configure_mode(const nlohmann::json& command) {
+    if (!command.contains("autochess_enabled")) return;
+    auto& runtime=state(); auto* c=runtime.context;
+    if (!command.at("autochess_enabled").is_boolean()) throw std::runtime_error("autochess_enabled must be boolean");
+    const int desired=command.at("autochess_enabled").get<bool>() ? 1 : 0;
+    if (runtime.desired_mode==desired) return;
+    if (!JS_IsFunction(c,runtime.mode_install) || runtime.desired_mode<0)
+        throw std::runtime_error("native immutable capture mode control unavailable");
+    const auto current=runtime.capture_mode_epoch.load(std::memory_order_acquire);
+    if (current+1>=arkdps::capture::capture_mode_slots)
+        throw std::runtime_error("native capture mode epoch budget exceeded");
+    if (current>=9007199254740991ULL) throw std::runtime_error("native capture mode epoch exhausted");
+    auto barrier=JS_NewObject(c);
+    JS_SetPropertyStr(c,barrier,"version",JS_NewInt32(c,1));
+    JS_SetPropertyStr(c,barrier,"mode_epoch",JS_NewInt64(c,current+1));
+    std::array<JSValue,2> arguments{{JS_NewBool(c,desired!=0),barrier}};
+    auto answer=JS_Call(c,runtime.mode_install,JS_UNDEFINED,arguments.size(),arguments.data());
+    for (auto argument : arguments) JS_FreeValue(c,argument);
+    if (JS_IsException(answer)) throw std::runtime_error(exception(c));
+    nlohmann::json state;
+    try { state=json_value(c,answer); } catch (...) { JS_FreeValue(c,answer); throw; }
+    JS_FreeValue(c,answer);
+    if (arkdps::capture::plan_uint(state.at("mode_epoch"),9007199254740991ULL)!=current+1
+        || state.at("desired_mode")!=(desired ? "all" : "local"))
+        throw std::runtime_error("native capture mode installation mismatch");
+    install_mode_state(state);
+}
+
+struct PreparedReplay {
+    const std::byte* bytes;arkdps::capture::RecordHeader header;Hook* hook;
+    std::size_t segment_start,field_start;const std::byte* payload;
+    std::array<JSValue,9> arguments;bool direct=false;
+};
+arkdps::capture::RecordHeader decode_replay_record_header(const std::byte* bytes,std::size_t length,std::uint64_t expected_ticket) {
+    using namespace arkdps::capture;auto& runtime=state();
+    RecordHeader header;
+    if (length<sizeof header) throw std::runtime_error("short native capture header");
+    std::memcpy(&header,bytes,sizeof header);
+    const auto required=sizeof header+header.parent_checkpoint_count*sizeof(ParentCheckpoint)+header.segment_count*sizeof(Segment)+header.field_count*sizeof(FieldState)+header.byte_count;
+    if (header.parent_checkpoint_count>invocation_depth || header.lane>=lane_count || !header.depth || header.depth>invocation_depth
+        || header.hook_id>=runtime.hooks.size() || header.segment_count>max_segments
+        || header.field_count>max_fields || header.byte_count>max_bytes || length!=required
+        || header.ticket!=expected_ticket || (header.phase!=Phase::entry && header.phase!=Phase::leave))
+        throw std::runtime_error("invalid native capture record");
+    if (structural_error(header.error)) throw std::runtime_error("native capture batch has a structural failure");
+    return header;
+}
+PreparedReplay prepare_replay_record(const std::byte* bytes,std::size_t length,JSValueConst batch_header=JS_UNDEFINED) {
+    using namespace arkdps::capture;
+    auto& runtime=state(); auto* c=runtime.context;
+    const auto header=decode_replay_record_header(bytes,length,runtime.processed_ticket+1);
+    auto* hook=runtime.hooks[header.hook_id].get();
+    auto& depth=runtime.replay_depth[header.lane];
+    auto& call=runtime.receivers[header.lane][header.depth-1];
+    if (header.phase==Phase::entry) {
+        if (header.depth!=depth+1 || call.id || header.parent!=(depth ? runtime.receivers[header.lane][depth-1].id : 0))
+            throw std::runtime_error("native capture parent/entry topology mismatch");
+        call.id=header.invocation; call.hook=hook; ++depth;
+    } else if (header.depth!=depth || call.id!=header.invocation || call.hook!=hook
+               || header.parent!=(depth>1 ? runtime.receivers[header.lane][depth-2].id : 0))
+        throw std::runtime_error("native capture leave topology mismatch");
+    if(header.phase==Phase::leave && call.planned_hp_omission && JS_IsUndefined(call.receiver))
+        call.receiver=JS_NewObject(c); // Only an actual publication needs JS.
+    // Copy a small worker-owned header once. The JS record decodes only the
+    // properties a real callback reads; it never consults a later native lease.
+    constexpr unsigned header_words=22;
+    std::array<std::uint64_t,header_words+2*invocation_depth> packed{};
+    const std::array<std::uint64_t,header_words> values{{header.ticket,header.invocation,header.parent,
+        header.activity_begin,header.activity,header.thread_birth,header.publication_request,
+        header.mode_epoch,header.scope_mode_epoch,header.scope_revision,
+        header.publication_captured ? header.publication_revision : 0,header.cold_revision,
+        header.hook_id,header.checkpoint,header.active,header.active_after,header.lane,header.thread_id,
+        header.phase==Phase::entry ? 0u : 1u,header.closed_after ? 1u : 0u,
+        (header.scope_unavailable ? 1u : 0u)|(header.capture_concurrent ? 2u : 0u),header.parent_checkpoint_count}};
+    std::copy(values.begin(),values.end(),packed.begin());
+    for (unsigned i=0;i<header.parent_checkpoint_count;++i) {
+        ParentCheckpoint parent;
+        std::memcpy(&parent,bytes+sizeof header+i*sizeof parent,sizeof parent);
+        if (!parent.invocation || parent.invocation==header.invocation || parent.checkpoint!=i+1 || parent.reserved)
+            throw std::runtime_error("invalid exact native parent checkpoint");
+    }
+    const auto parent_bytes=header.parent_checkpoint_count*sizeof(ParentCheckpoint);
+    std::memcpy(packed.data()+header_words,bytes+sizeof header,parent_bytes);
+    JSValue packed_bytes;
+    if(JS_IsUndefined(batch_header))packed_bytes=JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(packed.data()),header_words*8+parent_bytes);
+    else {
+        std::size_t capacity=0;auto* target=JS_GetArrayBuffer(c,&capacity,batch_header);
+        if(!target||capacity!=176||parent_bytes)throw std::runtime_error("invalid bounded batch header storage");
+        std::memcpy(target,packed.data(),176);packed_bytes=JS_DupValue(c,batch_header);
+    }
+    if (JS_IsException(packed_bytes)) throw std::runtime_error(exception(c));
+    const auto segment_start=sizeof header+header.parent_checkpoint_count*sizeof(ParentCheckpoint);
+    const auto field_start=segment_start+header.segment_count*sizeof(Segment);
+    const auto payload=bytes+field_start+header.field_count*sizeof(FieldState);
+    const auto view_error=arkdps::owned_js::begin(bytes+segment_start,header.segment_count,
+        bytes+field_start,header.field_count,payload,header.byte_count,
+        runtime.configurations.roles,header.ticket,header.error,header.capture_concurrent);
+    arkdps::owned_js::bind_hp_observation(&hook->capture_plan,header.phase,header.args[0],header.checkpoint,header.mode_epoch);
+    arkdps::owned_js::bind_graphs(runtime.configurations.find(header.configuration_id),header.scope_revision,header.publication_revision,header.mode_epoch,header.checkpoint);
+    if (view_error!=Error::ok) {JS_FreeValue(c,packed_bytes);throw std::runtime_error("native owned view rejected structural capture");}
+    runtime.replay_header=header; runtime.replay_active=true;
+    // Only the ordinary, non-nested HP path can bypass generic arguments.
+    // Publication/cold/parent/concurrent edges retain the complete old wrapper.
+    const bool direct=direct_hp_reason(hook->capture_plan,header,
+        JS_IsFunction(c,hook->direct_entry) && JS_IsFunction(c,hook->direct_leave))==DirectHpReason::eligible;
+    auto prepared=direct ? arkdps::owned_js::prepare_hp_observation(c) : JS_UNDEFINED;
+    auto method=direct ? JS_DupValue(c,header.phase==Phase::entry ? hook->direct_entry : hook->direct_leave)
+        : JS_GetPropertyStr(c,hook->callbacks,header.phase==Phase::entry ? "onEnter" : "onLeave");
+    auto callback_payload=direct ? JS_NewBigUint64(c,header.args[0]) : header.phase==Phase::entry
+        ? JS_NewArrayBufferCopy(c,reinterpret_cast<const uint8_t*>(header.args.data()),hook->capture_plan.plan->arg_count*8)
+        : JS_NewBigUint64(c,header.return_value);
+    auto raw_return_address=!direct && header.phase==Phase::entry ? JS_NewBigUint64(c,header.return_address) : JS_UNDEFINED;
+    std::array<JSValue,9> dispatch_args{{packed_bytes,method,call.receiver,callback_payload,
+        JS_NewUint32(c,header.arg_mask),header.projection_candidate && header.closed_after ? runtime.prefix_projection : JS_UNDEFINED,
+        raw_return_address,prepared,direct ? hook->direct_contract : JS_UNDEFINED}};
+    if(!JS_IsUndefined(batch_header)&&!direct)throw std::runtime_error("complex record crossed bounded batch barrier");
+    return PreparedReplay{bytes,header,hook,segment_start,field_start,payload,dispatch_args,direct};
+}
+bool replay_arguments_valid(const PreparedReplay& item) {
+    const auto& args=item.arguments;
+    return !JS_IsException(args[0])&&!JS_IsException(args[1])&&!JS_IsException(args[3])&&!JS_IsException(args[6])&&!JS_IsException(args[7])
+        &&(!item.direct||JS_IsObject(args[7]));
+}
+void release_replay_arguments(PreparedReplay& item) {
+    for(const unsigned index:{0u,1u,3u,6u,7u})JS_FreeValue(state().context,item.arguments[index]);
+}
+std::string replay_gap_diagnostic(const arkdps::capture::RecordHeader& header,JSValueConst answer,bool reducer_complete,bool receiver_valid) {
+    using namespace arkdps::capture;auto& runtime=state();auto* c=runtime.context;
+    std::string diagnostic="native_replay_gap:v1,h="+std::to_string(header.hook_id)
+            +",e="+std::to_string(header.phase==Phase::entry?0:1)+",t="+std::to_string(header.ticket);
+        const auto diagnostic_base=diagnostic;
+        const auto fallback_code=std::string(reducer_complete&&!receiver_valid?"31":"30");
+        auto failure_detail=JS_GetPropertyUint32(c,answer,4);
+        try {
+            const auto d=json_value(c,failure_detail);
+            const auto bounded=[&](const char* key,int maximum,int fallback) {
+                const auto it=d.find(key);if(it==d.end()||!it->is_number_integer())return fallback;
+                const auto value=it->get<std::int64_t>();return value>=0&&value<=maximum?static_cast<int>(value):fallback;
+            };
+            unsigned role=0;
+            if(d.contains("role")&&d["role"].is_string()) {
+                const auto name=d["role"].get<std::string>();
+                for(std::size_t i=0;i<runtime.configurations.roles.size();++i)
+                    if(runtime.configurations.roles[i]==name){role=static_cast<unsigned>(i+1);break;}
+            }
+            diagnostic+=",r="+std::to_string(role)+",p="+std::to_string(bounded("checkpoint",65535,0))
+                +",f="+std::to_string(bounded("field_id",65535,-1))+",g="+std::to_string(bounded("count",16,1))
+                +",m="+std::to_string(bounded("metadata_read_size",1048576,0))+",k=";
+            bool first=true;unsigned code_count=0;
+            if(d.contains("codes")&&d["codes"].is_array())for(const auto& code:d["codes"]){
+                if(!code.is_number_integer())continue;
+                const auto n=code.get<int>();if(n<0||n>30)continue;
+                if(!first)diagnostic+=".";
+                diagnostic+=std::to_string(n);first=false;
+                if(++code_count==16)break;
+            }
+            if(first)diagnostic+=fallback_code;
+            diagnostic+=",q=";first=true;unsigned frame_count=0;
+            if(d.contains("frames")&&d["frames"].is_array())for(const auto& frame:d["frames"]){
+                if(!frame.is_array()||frame.size()!=2||!frame[0].is_number_integer()||!frame[1].is_number_integer())continue;
+                const auto file=frame[0].get<int>(),line=frame[1].get<int>();
+                if(file<1||file>2||line<1||line>999999)continue;
+                if(!first)diagnostic+=".";
+                diagnostic+=std::to_string(file)+":"+std::to_string(line);first=false;
+                if(++frame_count==3)break;
+            }
+            if(first)diagnostic+="0";
+        } catch(...) {diagnostic=diagnostic_base+",r=0,p=0,f=-1,g=1,m=0,k="+fallback_code+",q=0";}
+    JS_FreeValue(c,failure_detail);return diagnostic;
+}
+void finish_replay_record(const PreparedReplay& item,JSValue answer,bool controlled=false) {
+    using namespace arkdps::capture;
+    auto& runtime=state();auto* c=runtime.context;const auto& header=item.header;auto* hook=item.hook;
+    auto& depth=runtime.replay_depth[header.lane];auto& call=runtime.receivers[header.lane][header.depth-1];
+    const auto* bytes=item.bytes;const auto segment_start=item.segment_start,field_start=item.field_start;const auto* payload=item.payload;
+    if(controlled){
+        ++runtime.controlled_finish_checks;
+        const auto& owner=arkdps::owned_js::binding();
+        const auto status=static_cast<unsigned>(owner.error);
+        // Deferred, unused HP slot errors are not committed here. Only the
+        // current binding status and persistent native poison are authoritative.
+        const bool valid=runtime.replay_active && owner.active && owner.ticket==header.ticket
+            && owner.roles==&runtime.configurations.roles && owner.hp_plan==&hook->capture_plan
+            && owner.hp_phase==header.phase && owner.hp_root==header.args[0]
+            && owner.hp_checkpoint==header.checkpoint && owner.hp_mode==header.mode_epoch
+            && owner.hp_issued && owner.hp_packet_context==c
+            && owner.configuration==runtime.configurations.find(header.configuration_id)
+            && (!(header.configuration_id||header.scope_revision||header.publication_revision)||owner.configuration!=nullptr)
+            && (!owner.configuration||owner.configuration->mode_epoch==header.mode_epoch)
+            && owner.scope_revision==header.scope_revision && owner.publication_revision==header.publication_revision
+            && owner.graph_mode==header.mode_epoch && owner.graph_checkpoint==header.checkpoint
+            && owner.concurrent==header.capture_concurrent && status<=10
+            && !OwnedReplayView::structural(owner.error)
+            && runtime.replay_header.ticket==header.ticket && runtime.replay_header.hook_id==header.hook_id
+            && runtime.replay_header.phase==header.phase;
+        if(!valid)runtime.lanes->poison(LaneFault::replay_structure);
+    }
+    runtime.replay_active=false;
+    if (const auto failure=runtime.lanes->failure.load(std::memory_order_acquire)) {
+        std::string failure_message="native capture failed: code="+std::to_string(failure);
+        // A native structural fault remains fatal. Preserve the same bounded
+        // source ledger when it explains that fault, rather than replacing it
+        // with a generic wrapper. No prefix/watermark advances on this branch.
+        if(!JS_IsException(answer)&&JS_IsArray(c,answer)==1){
+            auto complete=JS_GetPropertyUint32(c,answer,2);
+            if(JS_IsBool(complete)&&JS_ToBool(c,complete)==0)
+                failure_message+="; "+replay_gap_diagnostic(header,answer,false,true);
+            JS_FreeValue(c,complete);
+        }
+        auto pending=JS_GetException(c);JS_FreeValue(c,pending);
+        JS_FreeValue(c,answer);
+        throw std::runtime_error(failure_message);
+    }
+    if (JS_IsException(answer)) throw std::runtime_error(exception(c));
+    if (JS_IsArray(c,answer)!=1) {JS_FreeValue(c,answer);throw std::runtime_error("invalid native replay dispatch result");}
+    auto record=JS_GetPropertyUint32(c,answer,0);
+    auto projection=JS_GetPropertyUint32(c,answer,1);
+    auto complete=JS_GetPropertyUint32(c,answer,2);
+    auto receiver=JS_GetPropertyUint32(c,answer,3);
+    const bool reducer_complete=JS_IsBool(complete) && JS_ToBool(c,complete)==1;
+    const bool receiver_valid=JS_IsObject(receiver)
+        && (header.phase==Phase::entry || JS_VALUE_GET_PTR(receiver)==JS_VALUE_GET_PTR(call.receiver));
+    const bool valid=reducer_complete && receiver_valid;
+    JS_FreeValue(c,complete);
+    if (!valid || JS_IsException(record) || JS_IsException(projection)) {
+        const auto diagnostic=replay_gap_diagnostic(header,answer,reducer_complete,receiver_valid);
+        JS_FreeValue(c,answer);
+        JS_FreeValue(c,record);JS_FreeValue(c,projection);JS_FreeValue(c,receiver);
+        throw std::runtime_error(diagnostic);
+    }
+    JS_FreeValue(c,answer);
+    if (header.phase==Phase::entry) call.receiver=receiver;
+    else JS_FreeValue(c,receiver);
+    if (header.phase==Phase::leave) {
+        JS_FreeValue(c,call.receiver); call={}; --depth;
+    }
+    runtime.processed_ticket=header.ticket;
+    if (header.closed_after) {
+        runtime.closed_ticket=header.ticket;
+        if (!JS_IsUndefined(projection) && !JS_IsNull(projection)) {
+            std::array<JSValue,3> arguments{{record,projection,JS_TRUE}};
+            // The journal is pure even though ReplayEnd already cleared the JS
+            // read view. Native primitives remain forbidden throughout publish.
+            runtime.replay_active=true;
+            auto published=JS_Call(c,runtime.publication_publish,JS_UNDEFINED,arguments.size(),arguments.data());
+            runtime.replay_active=false;
+            if (JS_IsException(published) || runtime.lanes->failure.load(std::memory_order_acquire)) {
+                JS_FreeValue(c,published); JS_FreeValue(c,record); JS_FreeValue(c,projection);
+                throw std::runtime_error("native publication failed its owned boundary");
+            }
+            auto encoded=JS_JSONStringify(c,published,JS_UNDEFINED,JS_UNDEFINED);
+            JS_FreeValue(c,published);
+            if (JS_IsException(encoded)) { JS_FreeValue(c,record); JS_FreeValue(c,projection); throw std::runtime_error(exception(c)); }
+            std::string text;
+            try { text=string(c,encoded); } catch (...) { JS_FreeValue(c,encoded); JS_FreeValue(c,record); JS_FreeValue(c,projection); throw; }
+            JS_FreeValue(c,encoded);
+            const auto parsed=nlohmann::json::parse(text);
+            if (!parsed.is_object() || parsed.value("native_publication_failure",false)
+                || !parsed.value("error",nlohmann::json()).is_null()) {
+                runtime.lanes->poison(LaneFault::publication_failure);
+                throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
+            }
+
+            if (parsed.is_object() && !parsed.value("retry",false) && parsed.value("error",nlohmann::json()).is_null()) {
+                const auto& fence=parsed.at("native_publication");
+                if (arkdps::capture::plan_uint(fence.at("version"),1)!=1
+                    || fence.at("closed_ticket")!=std::to_string(header.ticket)
+                    || !fence.at("token").is_string() || fence.at("token").get<std::string>().empty())
+                    throw std::runtime_error("published mark does not bind native closed record");
+                runtime.terminal_fence.clear();
+                if (fence.value("terminal_verified",false) && hook->capture_plan.terminal_destroy
+                    && header.phase==Phase::leave && header.closed_after && header.active_after==0) {
+                    bool complete=true;
+                    for (const auto id : hook->capture_plan.terminal_guard_fields) {
+                        bool found=terminal_field_witnesses(runtime.terminal_fence,bytes+segment_start,header.segment_count,
+                            bytes+field_start,header.field_count,payload,header.byte_count,id);
+                        if(found&&id==hook->capture_plan.terminal_guard_fields[0]) {
+                            FieldState field;found=terminal_field_state(bytes+field_start,header.field_count,id,field);
+                            if(found&&field.final_segment<header.segment_count) {
+                                Segment singleton;std::memcpy(&singleton,bytes+segment_start+field.final_segment*sizeof singleton,sizeof singleton);
+                                found=runtime.terminal_fence.certify_singleton(payload+singleton.offset,singleton.size);
+                            }else found=false;
+                        }
+                        complete=complete&&found;
+                    }
+                    if(complete&&!runtime.terminal_fence.singleton_null) {
+                        bool retained=true;
+                        for(unsigned i=0;i<hook->capture_plan.terminal_retained_fields.size();++i) {
+                            const auto slice=i==0?TerminalFieldSlice::controller:i==8?TerminalFieldSlice::logger:TerminalFieldSlice::all;
+                            retained=terminal_field_witnesses(runtime.terminal_fence,bytes+segment_start,header.segment_count,
+                                bytes+field_start,header.field_count,payload,header.byte_count,
+                                hook->capture_plan.terminal_retained_fields[i],slice)&&retained;
+                        }
+                        runtime.terminal_fence.retained_complete=retained;complete=retained;
+                    }
+                    runtime.terminal_fence.ticket=header.ticket;runtime.terminal_fence.activity=header.activity;
+                    runtime.terminal_fence.verified=complete;
+                }
+                runtime.publication_ready=true;
+                runtime.published_ticket=header.ticket;
+                if (arkdps::capture::plan_uint(parsed.at("native_capture_scope_mode_epoch"),9007199254740991ULL)!=header.scope_mode_epoch)
+                    throw std::runtime_error("published configuration epoch does not bind captured scope point");
+                runtime.published_mode_epoch=header.scope_mode_epoch;
+                runtime.published_sequence=arkdps::capture::plan_uint(fence.at("sequence"),9007199254740991ULL);
+                runtime.published_token=fence.at("token").get<std::string>();
+                if(header.publication_request && header.publication_request==runtime.sample_request
+                        && runtime.published_mode_epoch==runtime.capture_mode_epoch.load(std::memory_order_acquire)) {
+                    runtime.completed_sample_request=header.publication_request;
+                    runtime.completed_sample_token=fence.at("token").get<std::string>();
+                }
+
+                clear_cold_publication(runtime.cold_publication_request,header.publication_request,header.ticket,
+                    runtime.lanes->minimum_publication_ticket.load(std::memory_order_acquire),header.scope_mode_epoch,
+                    runtime.capture_mode_epoch.load(std::memory_order_acquire),header.closed_after && header.active_after==0);
+                auto pending=header.publication_request;
+                if (pending && header.ticket>=runtime.lanes->minimum_publication_ticket.load(std::memory_order_acquire))
+                    runtime.lanes->pending_publication.compare_exchange_strong(pending,0,std::memory_order_acq_rel);
+            }
+        }
+    }
+    if (header.publication_request) {
+        // A stable but stale expected graph can fail only in JS, after native
+        // guards succeeded. The next bounded candidate must capture actual
+        // cold facts; never mutate old expected roots or retry every callback.
+        if (runtime.published_ticket!=header.ticket)
+            require_cold_publication(runtime.cold_publication_request,header.publication_request);
+        auto claimed=header.publication_request;
+        runtime.lanes->publication_claim.compare_exchange_strong(claimed,0,std::memory_order_acq_rel);
+    }
+    JS_FreeValue(c,record); JS_FreeValue(c,projection);
+}
+void replay_record(const std::byte* bytes,std::size_t length) {
+    auto& runtime=state();auto* c=runtime.context;
+    arkdps::owned_js::Lease view_lease;auto item=prepare_replay_record(bytes,length);
+    auto& args=item.arguments;JSValue answer=JS_EXCEPTION;
+    if(replay_arguments_valid(item))
+        answer=JS_Call(c,runtime.replay_dispatch,JS_UNDEFINED,args.size(),args.data());
+    release_replay_arguments(item);finish_replay_record(item,answer);
+}
+
+// Called only on the single consumer worker, after native captures are drained.
 std::string dispatch_request(Runtime& runtime, const std::string& json) {
     if (!runtime.context) throw std::runtime_error("native runtime has no JavaScript context");
     JS_UpdateStackTop(runtime.runtime);
@@ -377,10 +1029,11 @@ bool capture_quiet(Runtime& runtime, std::uint64_t& generation) {
         if (active || current != generation) { quiet_since = now; generation = current; }
         if (!active && now - quiet_since >= std::chrono::milliseconds(25)) return true;
         if (now >= deadline) return false;
-        Sleep(1); // In-flight onLeave must retain access to the JS mutex.
+        Sleep(1); // Native onLeave remains independent of the consumer VM.
     }
 }
 
+bool drain_captures() noexcept;
 std::string capture_control(Runtime& runtime, const nlohmann::json& command) {
     using Json = nlohmann::json;
     const bool valid = command.contains("paused") && command["paused"].is_boolean()
@@ -391,7 +1044,6 @@ std::string capture_control(Runtime& runtime, const nlohmann::json& command) {
     const bool target = valid && command["paused"].get<bool>();
     Json status;
     auto snapshot = [&] {
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
         if (!runtime.initialized || !runtime.fatal.empty() || runtime.stopping.load())
             throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
         return Json::parse(dispatch_request(runtime, "{\"operation\":\"capture_status\"}"));
@@ -420,8 +1072,8 @@ std::string capture_control(Runtime& runtime, const nlohmann::json& command) {
         runtime.capture_revision = revision;
         runtime.capture_target_paused = target;
         if (target) {
-            // Gate entrants before waiting for the VM lock. Existing onLeave
-            // work is still admitted and must drain before the JS transition.
+            // Gate new captures. Existing native onLeave records remain
+            // admitted and must drain before the JS lifecycle transition.
             runtime.capture_paused.store(true);
             runtime.pending_pause_revision = revision;
         }
@@ -433,10 +1085,7 @@ std::string capture_control(Runtime& runtime, const nlohmann::json& command) {
             return reply(false, false);
         }
         runtime.capture_paused.store(true);
-        {
-            std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-            queue_capture_hooks(runtime, true);
-        }
+        queue_capture_hooks(runtime, true);
         if (MH_ApplyQueued() != MH_OK) throw std::runtime_error("could not disable native capture hooks");
         runtime.capture_hooks_disabled = true;
         std::uint64_t generation = 0;
@@ -445,11 +1094,16 @@ std::string capture_control(Runtime& runtime, const nlohmann::json& command) {
             return reply(false, true);
         }
         {
-            std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
             if (runtime.active.load() || runtime.activity_generation.load() != generation) {
                 status = Json::parse(dispatch_request(runtime, "{\"operation\":\"capture_status\"}"));
                 return reply(false, true);
             }
+            const auto drain_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(250);
+            while (runtime.processed_ticket<runtime.lanes->reserved.load(std::memory_order_acquire)
+                    && std::chrono::steady_clock::now()<drain_deadline) drain_captures();
+            if (!runtime.fatal.empty()) throw std::runtime_error(runtime.fatal);
+            if (runtime.processed_ticket!=runtime.lanes->reserved.load(std::memory_order_acquire)
+                    || runtime.closed_ticket!=runtime.processed_ticket) return reply(false,true);
             auto transition = [&](bool paused, std::uint64_t applied_revision) {
                 return Json::parse(dispatch_request(runtime, Json{{"operation", "capture_control"},
                     {"paused", paused}, {"revision", applied_revision}}.dump()));
@@ -466,7 +1120,7 @@ std::string capture_control(Runtime& runtime, const nlohmann::json& command) {
             if (!target) queue_capture_hooks(runtime, false);
         }
         if (!target) {
-            // Never enable while holding the JS lock: MinHook suspends threads.
+            // MinHook applies on the consumer worker; callbacks never enter its VM.
             if (MH_ApplyQueued() != MH_OK) throw std::runtime_error("could not enable native capture hooks");
             runtime.capture_hooks_disabled = false;
             runtime.capture_paused.store(false);
@@ -478,92 +1132,352 @@ std::string capture_control(Runtime& runtime, const nlohmann::json& command) {
         return reply(false, false, error.what());
     }
 }
+
+bool pop_replay_record(std::size_t& size) {
+    using namespace arkdps::capture;auto& runtime=state();
+            const auto ready=runtime.lanes->next_ready(runtime.processed_ticket+1);
+            if (!ready) return false; // A reserved but unpublished ticket is not skippable.
+            Lane* found=nullptr;
+            std::uint64_t ticket=0;
+            if (runtime.lanes->try_pop(*ready,ticket,runtime.consume_buffer.data(),runtime.consume_buffer.size(),size,found)!=CaptureQueue::PopResult::popped
+                || !found || runtime.lanes->failure.load(std::memory_order_acquire))
+                throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load(std::memory_order_acquire)));
+            observe_pending_head(*found,std::nullopt,0);
+            found->consumed.records.store(found->consumed.records.load(std::memory_order_relaxed)+1,std::memory_order_release);
+            found->consumed.bytes.store(found->consumed.bytes.load(std::memory_order_relaxed)+size,std::memory_order_release);
+            RecordHeader timing_header;
+            std::memcpy(&timing_header,runtime.consume_buffer.data(),sizeof timing_header);
+            if (timing_header.captured_qpc) {
+                const auto now=ticks_now();
+                found->consumed.last_age=now>=timing_header.captured_qpc ? now-timing_header.captured_qpc : 0;
+                found->consumed.maximum_age=(std::max)(found->consumed.maximum_age,found->consumed.last_age);
+                ++found->consumed.age_samples;
+            }
+    return true;
+}
+struct BoundedReplayBatch {
+    bool active=false;unsigned issued=0,finalized=0,limit=32;
+    std::size_t first_size=0;
+    std::chrono::steady_clock::time_point deadline;
+    JSValue controller=JS_UNDEFINED,header=JS_UNDEFINED;
+    std::unique_ptr<PreparedReplay> pending;
+    std::exception_ptr native_failure;
+};
+BoundedReplayBatch& replay_batch_state(){static auto* value=new BoundedReplayBatch;return *value;}
+arkdps::capture::DirectHpReason direct_record_reason(const arkdps::capture::RecordHeader& header) {
+    using namespace arkdps::capture;auto& runtime=state();
+    if(header.planned_hp_omission||header.hook_id>=runtime.hooks.size())return DirectHpReason::unsupported_plan;
+    auto* hook=runtime.hooks[header.hook_id].get();
+    return direct_hp_reason(hook->capture_plan,header,
+        JS_IsFunction(runtime.context,hook->direct_entry)&&JS_IsFunction(runtime.context,hook->direct_leave));
+}
+bool direct_record(const arkdps::capture::RecordHeader& header){return direct_record_reason(header)==arkdps::capture::DirectHpReason::eligible;}
+
+JSValue js_batch_advance(JSContext* c,JSValueConst,int count,JSValueConst* args) {
+    return guarded(c,[&]{
+        auto& batch=replay_batch_state();auto& runtime=state();
+        const auto reject=[&]{if(runtime.lanes)runtime.lanes->poison(arkdps::capture::LaneFault::replay_structure);throw std::runtime_error("invalid bounded replay controller");};
+        if(count!=2||!batch.active||!JS_IsObject(args[0])||JS_VALUE_GET_PTR(args[0])!=JS_VALUE_GET_PTR(batch.controller))reject();
+        if(batch.pending){
+            if(JS_IsArray(c,args[1])!=1)reject();
+            auto previous=std::move(batch.pending);release_replay_arguments(*previous);
+            try{finish_replay_record(*previous,JS_DupValue(c,args[1]),true);}
+            catch(...){batch.native_failure=std::current_exception();arkdps::owned_js::end();throw;}
+            arkdps::owned_js::end();++batch.finalized;++runtime.batch_finalized;
+        }else if(!JS_IsUndefined(args[1])||batch.issued)reject();
+        if(batch.issued>=batch.limit||(batch.issued&&std::chrono::steady_clock::now()>=batch.deadline))return JS_NULL;
+        std::size_t size=batch.first_size;batch.first_size=0;
+        if(!size&&!pop_replay_record(size))return JS_NULL;
+        arkdps::capture::RecordHeader header;
+        if(size<sizeof header)throw std::runtime_error("short bounded replay record");
+        std::memcpy(&header,runtime.consume_buffer.data(),sizeof header);
+        if(!direct_record(header)){runtime.deferred_record_size=size;++runtime.batch_barriers;return JS_NULL;}
+        batch.pending=std::make_unique<PreparedReplay>(prepare_replay_record(runtime.consume_buffer.data(),size,batch.header));
+        if(!replay_arguments_valid(*batch.pending)){
+            runtime.lanes->poison(arkdps::capture::LaneFault::replay_structure);
+            bool pending_exception=false;for(const auto value:batch.pending->arguments)pending_exception=pending_exception||JS_IsException(value);
+            return pending_exception?JS_EXCEPTION:JS_ThrowInternalError(c,"invalid prepared bounded replay item");
+        }
+        ++batch.issued;++runtime.batch_issued;runtime.maximum_batch_edges=(std::max)(runtime.maximum_batch_edges,batch.issued);
+        auto packet=JS_NewArray(c);
+        if(JS_IsException(packet))return packet;
+        for(unsigned i=0;i<batch.pending->arguments.size();++i)
+            if(JS_DefinePropertyValueUint32(c,packet,i,JS_DupValue(c,batch.pending->arguments[i]),JS_PROP_C_W_E)<0){JS_FreeValue(c,packet);return JS_EXCEPTION;}
+        return packet;
+    });
+}
+// A version gate for bootstrap/source compatibility, never a substitute for
+// the native-held controller and finish validation below.
+JSValue controlled_advance_function(JSContext* c) {
+    auto fn=JS_NewCFunction(c,js_batch_advance,"__nativeBoundedReplayAdvance",2);
+    if(JS_IsException(fn))return fn;
+    if(JS_DefinePropertyValueStr(c,fn,"arkdpsControlledFinish",JS_NewInt32(c,1),0)<0){JS_FreeValue(c,fn);return JS_EXCEPTION;}
+    return fn;
+}
+void install_controlled_advance(JSContext* c,JSValueConst global) {
+    auto fn=controlled_advance_function(c);
+    if(JS_IsException(fn))throw std::runtime_error(exception(c));
+    if(JS_SetPropertyStr(c,global,"__nativeBoundedReplayAdvance",fn)<0)throw std::runtime_error(exception(c));
+}
+unsigned replay_bounded_batch(std::size_t first_size,std::chrono::steady_clock::time_point deadline,unsigned remaining) {
+    auto& runtime=state();auto* c=runtime.context;auto& batch=replay_batch_state();
+    if(batch.active)throw std::runtime_error("nested bounded replay batch");
+    ++runtime.batch_calls;batch.active=true;batch.issued=0;batch.finalized=0;batch.limit=(std::min)(32u,remaining);batch.first_size=first_size;batch.deadline=deadline;batch.native_failure=nullptr;
+    batch.controller=JS_NewObject(c);
+    const bool allocation_failed=JS_IsException(batch.controller)||JS_PreventExtensions(c,batch.controller)<0;
+    std::array<std::uint8_t,176> zero{};batch.header=allocation_failed?JS_UNDEFINED:JS_NewArrayBufferCopy(c,zero.data(),zero.size());
+    std::array<JSValue,4> args{{runtime.batch_advance,batch.controller,batch.header,runtime.replay_dispatch}};
+    auto result=allocation_failed||JS_IsException(batch.header)?JS_EXCEPTION:JS_Call(c,runtime.replay_batch,JS_UNDEFINED,args.size(),args.data());
+    batch.active=false;
+    const bool incomplete=batch.pending||batch.first_size||!batch.issued||batch.issued!=batch.finalized;
+    std::uint32_t returned=0;bool valid_count=false;
+    if(!JS_IsException(result)&&JS_IsNumber(result)){
+        double numeric=0;if(JS_ToFloat64(c,&numeric,result)==0&&std::isfinite(numeric)&&numeric>=1&&numeric<=32&&std::floor(numeric)==numeric){returned=static_cast<std::uint32_t>(numeric);valid_count=returned==batch.issued&&returned==batch.finalized;}
+    }
+    if(!JS_IsException(result)&&(incomplete||!valid_count))runtime.lanes->poison(arkdps::capture::LaneFault::replay_structure);
+    if(batch.pending){release_replay_arguments(*batch.pending);batch.pending.reset();arkdps::owned_js::end();runtime.replay_active=false;}
+    arkdps::owned_js::end();
+    JS_FreeValue(c,batch.controller);JS_FreeValue(c,batch.header);batch.controller=JS_UNDEFINED;batch.header=JS_UNDEFINED;
+    const auto native_failure=std::move(batch.native_failure);
+    if(JS_IsException(result)){
+        const auto message=exception(c); // Always consume the VM exception.
+        // Advance crosses a JS call only for dispatch. Preserve the original
+        // native proof failure instead of wrapping its bounded audit as an
+        // InternalError string that the transport cannot classify.
+        if(native_failure)std::rethrow_exception(native_failure);
+        throw std::runtime_error(message);
+    }
+    JS_FreeValue(c,result);
+    if(incomplete||!valid_count)throw std::runtime_error("incomplete bounded replay result");
+    return batch.issued;
+}
+bool consume_planned_hp_boundary(const std::byte* bytes,std::size_t size) {
+    using namespace arkdps::capture;auto& r=state();
+    const auto h=decode_replay_record_header(bytes,size,r.processed_ticket+1);
+    if(!h.planned_hp_omission)return false;
+    auto* hook=r.hooks[h.hook_id].get();const auto& plan=hook->capture_plan;
+    if(!plan.snapshot_hp||!plan.hp_profile||plan.hp_dirty||h.depth!=1||h.parent||h.parent_checkpoint_count)
+        throw std::runtime_error("invalid planned HP omission contract");
+    auto& depth=r.replay_depth[h.lane];auto& call=r.receivers[h.lane][h.depth-1];
+    if(h.phase==Phase::entry) {
+        if(h.active!=1||depth||call.id||h.invocation!=h.ticket)
+            throw std::runtime_error("invalid planned HP opening boundary");
+    } else if(depth!=1||call.id!=h.invocation||call.hook!=hook||!call.planned_hp_omission)
+        throw std::runtime_error("invalid planned HP closing boundary");
+    // A host publication still executes the existing source/journal path from
+    // its fresh captured tree. Never manufacture a mark or advance ACK here.
+    if(h.publication_request||h.projection_candidate||h.publication_captured||h.cold_revision)return false;
+    if(h.field_count||h.segment_count||h.byte_count||h.error!=Error::ok||h.scope_revision||h.publication_revision)
+        throw std::runtime_error("planned HP boundary contains unexplained facts");
+    if(h.phase==Phase::entry){call.id=h.invocation;call.hook=hook;call.planned_hp_omission=true;++depth;}
+    else {JS_FreeValue(r.context,call.receiver);call={};--depth;}
+    ++r.planned_hp_edges;r.processed_ticket=h.ticket;
+    if(h.closed_after)r.closed_ticket=h.ticket;
+    return true;
+}
+bool drain_captures_with_batch(bool allow_batch) noexcept {
+    using namespace arkdps::capture;
+    auto& runtime=state();
+    if (!runtime.initialized || !runtime.fatal.empty()) return false;
+    try {
+        if (runtime.lanes->failure.load(std::memory_order_acquire))
+            throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
+        // Bounded poll work keeps host jobs responsive under sustained producers.
+        const auto poll_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(2);
+        for (unsigned budget=0;budget<512;++budget) {
+            std::size_t size=runtime.deferred_record_size;
+            if(size)runtime.deferred_record_size=0;
+            else if(!pop_replay_record(size))break;
+            JS_UpdateStackTop(runtime.runtime);
+            arkdps::capture::RecordHeader selected;std::memcpy(&selected,runtime.consume_buffer.data(),sizeof selected);
+            if(selected.planned_hp_omission&&consume_planned_hp_boundary(runtime.consume_buffer.data(),size)){}
+            else if(allow_batch&&direct_record(selected))budget+=replay_bounded_batch(size,poll_deadline,512-budget)-1;
+            else {++runtime.single_replayed;++runtime.replay_fallbacks[static_cast<unsigned>(direct_record_reason(selected))];replay_record(runtime.consume_buffer.data(),size);}
+            if (runtime.lanes->failure.load(std::memory_order_acquire))
+                throw std::runtime_error("native capture failed during replay");
+            if (std::chrono::steady_clock::now()>=poll_deadline) break;
+        }
+        for (unsigned index=0;index<lane_count;++index)
+            runtime.lanes->reclaim_terminated(index,runtime.replay_depth[index]==0);
+        if (runtime.deferred_record_size || runtime.lanes->next_ready(runtime.processed_ticket+1)) return true;
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (!runtime.replay_active && runtime.active.load(std::memory_order_acquire)==0
+            && runtime.processed_ticket==runtime.lanes->reserved.load(std::memory_order_acquire)) {
+            const auto bounds=runtime.configurations.collect_quiescent(runtime.capture_mode_epoch.load(std::memory_order_acquire));
+            if (!bounds.is_null()) {
+                if (!JS_IsFunction(runtime.context,runtime.graph_retire)) throw std::runtime_error("capture graph retirement unavailable");
+                const auto text=bounds.dump();
+                auto argument=JS_ParseJSON(runtime.context,text.data(),text.size(),"capture-retirement.json");
+                runtime.replay_active=true;
+                auto result=JS_Call(runtime.context,runtime.graph_retire,JS_UNDEFINED,1,&argument);
+                runtime.replay_active=false;
+                JS_FreeValue(runtime.context,argument);
+                const bool failed=JS_IsException(result);JS_FreeValue(runtime.context,result);
+                if (failed || runtime.lanes->failure.load(std::memory_order_acquire))
+                    throw std::runtime_error("capture graph retirement violated its owned boundary");
+            }
+        }
+        return false;
+    } catch (const std::exception& error) {
+        runtime.publication_ready=false; runtime.published_ticket=0;
+        runtime.lanes->poison(LaneFault::replay_structure);
+        runtime.lanes->enabled.store(false,std::memory_order_release);
+        fail(error.what());
+    } catch (...) {
+        runtime.publication_ready=false; runtime.published_ticket=0;
+        runtime.lanes->poison(LaneFault::replay_structure);
+        runtime.lanes->enabled.store(false,std::memory_order_release);
+        fail("native capture replay failed");
+    }
+    return false;
+}
+bool drain_captures() noexcept {return drain_captures_with_batch(true);}
+
 }
 
+// Callback paths never enter QuickJS or touch the host mailbox.
 extern "C" void* arkdps_on_enter(Hook* hook, EntryFrame* frame) noexcept {
-    auto& runtime = state();
-    runtime.active.fetch_add(1);
-    runtime.activity_generation.fetch_add(1);
-    std::uintptr_t original_return = 0;
-    // The caller stack is necessarily readable for a valid function invocation.
-    std::memcpy(&original_return, reinterpret_cast<void*>(frame->stack), sizeof(original_return));
-    frame->return_target = 2; // active-only scope if the bounded TLS stack is full
-    if (invocations.depth >= invocations.calls.size()) {
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-        fail("native hook nesting limit exceeded");
-        return hook->original;
-    }
-    auto& invocation = invocations.calls[invocations.depth++];
-    invocation = {hook, original_return, JS_UNDEFINED};
-    frame->return_target = 1;
-    try {
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-        if (!runtime.fatal.empty() || runtime.stopping.load() || runtime.capture_paused.load()) return hook->original;
-        auto* c = runtime.context;
-        JS_UpdateStackTop(runtime.runtime);
-        invocation.receiver = JS_NewObject(c);
-        JS_SetPropertyStr(c, invocation.receiver, "threadId", JS_NewUint32(c, GetCurrentThreadId()));
-        JS_SetPropertyStr(c, invocation.receiver, "returnAddress", pointer(c, original_return));
-        std::array<std::uint64_t, 16> values{{frame->rcx, frame->rdx, frame->r8, frame->r9}};
-        constexpr std::size_t stack_first = 4;
-        constexpr std::size_t slot_size = sizeof(values[0]);
-        const auto stack_arguments = frame->stack + 40;
-        try {
-            read(stack_arguments, values.data() + stack_first, (values.size() - stack_first) * slot_size);
-        } catch (const std::runtime_error&) {
-            // Keep the original per-slot validation when a bulk read fails.
-            for (std::size_t slot = stack_first; slot < values.size(); ++slot)
-                read(stack_arguments + (slot - stack_first) * slot_size, &values[slot], slot_size);
+    using namespace arkdps::capture;
+    auto& runtime=state();
+    const auto pinned_mode=pin_mode_entry(runtime.active,runtime.activity_generation,runtime.capture_mode_epoch);
+    const auto scope_mode=runtime.capture_mode_epoch.load(std::memory_order_acquire);
+    frame->return_target=2;
+    CallbackTimer callback_timer(false);
+    auto& lanes=*runtime.lanes;
+    if (runtime.capture_paused.load(std::memory_order_acquire) || !lanes.enabled.load(std::memory_order_acquire) || lanes.failure.load(std::memory_order_relaxed)) return hook->original;
+    auto* lane=lanes.current();
+    if (!lane) return hook->original;
+    callback_timer.bind(*lane,hook->timing_id);
+    if (lane->depth>=invocation_depth) { lanes.poison(LaneFault::depth_full); return hook->original; }
+    auto& call=lane->calls[lane->depth];
+    call.hook=hook; call.mode_epoch=pinned_mode;
+    call.apply_modifier=hook->capture_plan.apply_modifier; call.buff_damage=hook->capture_plan.buff_damage;
+    call.configuration=runtime.configurations.pin(pinned_mode);
+    callback_timer.stack_read();
+    if (!capture_read(nullptr,frame->stack,&call.return_address,sizeof call.return_address)) { lanes.poison(LaneFault::invalid_stack); return hook->original; }
+    const auto activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
+    call.id=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
+    call.parent=lane->depth ? lane->calls[lane->depth-1].id : 0;
+    auto& context=call.context;
+    context={}; context.invocation_id=call.id; context.parent_invocation_id=call.parent;
+    context.globals=hook->capture_plan.globals; context.globals_valid=hook->capture_plan.globals_valid;
+    const std::array<std::uint64_t,4> gp{{frame->rcx,frame->rdx,frame->r8,frame->r9}};
+    for (unsigned index=0;index<hook->capture_plan.plan->arg_count;++index) {
+        if (!(hook->capture_plan.plan->arg_mask&(1u<<index))) continue;
+        if (index<4) context.args[index]=gp[index];
+        else {
+            callback_timer.stack_read();
+            if (!capture_read(nullptr,frame->stack+40+(index-4)*8,&context.args[index],8)) {
+                lanes.poison(LaneFault::invalid_stack); return hook->original;
+            }
         }
-        auto bytes = JS_NewArrayBufferCopy(c, reinterpret_cast<const std::uint8_t*>(values.data()),
-                                          values.size() * slot_size);
-        if (JS_IsException(bytes)) throw std::runtime_error(exception(c));
-        auto args = JS_Call(c, runtime.argument_view, JS_UNDEFINED, 1, &bytes);
-        JS_FreeValue(c, bytes);
-        if (JS_IsException(args)) throw std::runtime_error(exception(c));
-        try { callback(c, hook, "onEnter", invocation.receiver, 1, &args); }
-        catch (...) { JS_FreeValue(c, args); throw; }
-        JS_FreeValue(c, args);
-    } catch (const std::exception& error) { std::lock_guard<std::recursive_mutex> lock(runtime.mutex); fail(error.what()); }
-    catch (...) { std::lock_guard<std::recursive_mutex> lock(runtime.mutex); fail("native onEnter failed"); }
+        context.args_valid|=1u<<index;
+    }
+    context.entry_refs=context.args; context.entry_valid=context.args_valid;
+    for (unsigned i=lane->depth;i>0;--i) {
+        const auto& parent=lane->calls[i-1];
+        if (parent.buff_damage && (parent.context.args_valid&1u)) {
+            context.parent_refs[0]=parent.context.args[0]; context.parent_valid|=1u; break;
+        }
+    }
+    ++lane->depth; frame->return_target=1;
+    RecordHeader header{};
+    header.ticket=call.id; header.invocation=call.id; header.parent=call.parent; header.mode_epoch=call.mode_epoch;
+    header.captured_qpc=timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
+    header.activity_begin=activity_begin;
+    header.active=runtime.active.load(std::memory_order_acquire);
+    header.activity=header.activity_begin; header.args=context.args; header.return_address=call.return_address; header.scope_mode_epoch=scope_mode;
+    header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId(); header.thread_birth=lane->birth;
+    for (unsigned i=0;i<lane_count;++i) if (lanes.lanes[i].get()==lane) header.lane=i;
+    header.depth=lane->depth; header.phase=Phase::entry; header.arg_mask=context.args_valid;
+    capture_scope_point(hook->capture_plan,Phase::entry,context,call.configuration,
+                        capture_read,nullptr,lane->snapshot,header,lane,
+                        header.publication_request && cold_publication_required(header.publication_request,runtime.cold_publication_request.load(std::memory_order_acquire)));
+    save_entry_roots(hook->capture_plan,lane->snapshot,context);
+    header.activity=runtime.activity_generation.load(std::memory_order_acquire);
+    header.capture_concurrent=entry_capture_concurrent(header.active,header.depth,header.activity_begin,header.activity,
+        runtime.active.load(std::memory_order_acquire));
+    const bool queued=lanes.publish(*lane,header);
+    callback_timer.capture(lane->snapshot,header.parent_checkpoint_count,queued);
     return hook->original;
 }
-
 extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcept {
-    auto& runtime = state();
-    if (mode == 2) {
-        runtime.active.fetch_sub(1);
-        runtime.activity_generation.fetch_add(1);
+    using namespace arkdps::capture;
+    auto& runtime=state();
+    CallbackTimer callback_timer(true);
+    auto& lanes=*runtime.lanes;
+    if (mode==2) {
+        runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel);
+        runtime.active.fetch_sub(1,std::memory_order_acq_rel);
         return nullptr;
     }
-    if (!invocations.depth) return nullptr;
-    // Keep the slot on the stack until after JS: native calls made by an onLeave
-    // can themselves enter instrumented functions and need a distinct TLS slot.
-    auto& invocation = invocations.calls[invocations.depth - 1];
-    const auto target = invocation.return_address;
-    try {
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-        JS_UpdateStackTop(runtime.runtime);
-        if (runtime.fatal.empty() && !JS_IsUndefined(invocation.receiver)) {
-            auto value = pointer(runtime.context, frame->rax);
-            try { callback(runtime.context, invocation.hook, "onLeave", invocation.receiver, 1, &value); }
-            catch (...) { JS_FreeValue(runtime.context, value); throw; }
-            JS_FreeValue(runtime.context, value);
-        }
-        JS_FreeValue(runtime.context, invocation.receiver);
-        invocation.receiver = JS_UNDEFINED;
-    } catch (const std::exception& error) { std::lock_guard<std::recursive_mutex> lock(runtime.mutex); fail(error.what()); }
-    catch (...) { std::lock_guard<std::recursive_mutex> lock(runtime.mutex); fail("native onLeave failed"); }
-    --invocations.depth;
-    runtime.active.fetch_sub(1);
-    runtime.activity_generation.fetch_add(1);
-    return reinterpret_cast<void*>(target);
+    auto* lane=lanes.current();
+    if (!lane || !lane->depth) {
+        lanes.poison(LaneFault::invalid_stack);
+        runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel);
+        runtime.active.fetch_sub(1,std::memory_order_acq_rel);
+        return nullptr;
+    }
+    auto& call=lane->calls[lane->depth-1];
+    auto* hook=static_cast<Hook*>(call.hook);
+    callback_timer.bind(*lane,hook->timing_id);
+    RecordHeader header{};
+    header.activity_begin=runtime.activity_generation.load(std::memory_order_acquire);
+    header.ticket=lanes.reserved.fetch_add(1,std::memory_order_acq_rel)+1;
+    header.invocation=call.id; header.parent=call.parent; header.mode_epoch=call.mode_epoch;
+    header.hook_id=hook->timing_id; header.thread_id=GetCurrentThreadId(); header.thread_birth=lane->birth;
+    for (unsigned i=0;i<lane_count;++i) if (lanes.lanes[i].get()==lane) header.lane=i;
+    header.depth=lane->depth; header.phase=Phase::leave;
+    header.args=call.context.args; header.arg_mask=call.context.args_valid;
+    header.return_value=frame->rax; header.return_address=call.return_address;
+    header.scope_mode_epoch=runtime.capture_mode_epoch.load(std::memory_order_acquire);
+    const auto requested=lanes.pending_publication.load(std::memory_order_acquire);
+    std::uint64_t unclaimed=0;
+    if (publication_claimable(requested,lanes.publication_attempts.load(std::memory_order_acquire),
+            runtime.active.load(std::memory_order_acquire))
+        && lanes.publication_claim.compare_exchange_strong(unclaimed,requested,std::memory_order_acq_rel)) {
+        lanes.publication_attempts.fetch_add(1,std::memory_order_relaxed);
+        header.publication_request=requested;
+    }
+    header.captured_qpc=timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
+    header.active=runtime.active.load(std::memory_order_acquire);
+    call.context.return_value=frame->rax; call.context.return_valid=true;
+    capture_scope_point(hook->capture_plan,Phase::leave,call.context,call.configuration,
+                        capture_read,nullptr,lane->snapshot,header,lane,
+                        header.publication_request && cold_publication_required(header.publication_request,runtime.cold_publication_request.load(std::memory_order_acquire)));
+    header.activity=runtime.activity_generation.fetch_add(1,std::memory_order_acq_rel)+1;
+    header.active_after=runtime.active.fetch_sub(1,std::memory_order_acq_rel)-1;
+    header.closed_after=header.active_after==0 && header.activity==header.activity_begin+1;
+    header.capture_concurrent=leave_capture_concurrent(header.active,header.depth,header.activity_begin,header.activity,header.active_after);
+    const bool queued=lanes.publish(*lane,header);
+    callback_timer.capture(lane->snapshot,header.parent_checkpoint_count,queued);
+    --lane->depth;
+    return nullptr;
 }
 
 namespace arkdps {
-void initialize(const std::string& source) {
+// Shared production/test installer: a capture-only clock bracket cannot become
+// an executable hook or read argument/entry state.
+void install_sampling_plan(Runtime& runtime,const nlohmann::json& source) {
+    auto plan=arkdps::capture::compile_plan(source,0);
+    if(source.value("profile",std::string())!="sampling_checkpoint"
+            || plan.plan->arg_count||plan.plan->arg_mask||!plan.cold||plan.plan->field_count!=2
+            ||plan.globals_valid!=1||plan.entry_root_count)
+        throw std::runtime_error("sampling plan requires independent clock roots and cold fallback");
+    for(unsigned i=0;i<2;++i) {
+        const auto& field=plan.plan->fields[i];
+        if(field.phase!=arkdps::capture::Phase::checkpoint||field.root!=arkdps::capture::Root::global_slot
+                ||field.root_index||field.offset||field.depth||field.kind!=arkdps::capture::Kind::bytes
+                ||field.bytes!=12||plan.roles.at(field.role-1)!=(i?"clock_close":"clock_open")
+                ||!field.guard_id||field.guard_id!=plan.plan->fields[0].guard_id
+                ||field.guard!=(i?arkdps::capture::Guard::after:arkdps::capture::Guard::before))
+            throw std::runtime_error("sampling clock bracket is not independent and paired");
+    }
+    runtime.configurations.intern(plan);
+    runtime.sampling_plan=std::make_unique<arkdps::capture::CompiledPlan>(std::move(plan));
+}
+void initialize_on_worker(const std::string& source) {
     auto& runtime = state();
-    std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
     if (runtime.runtime) throw std::runtime_error("native runtime can only initialize once per process");
     if (source.empty() || source.size() > 2 * max_read) throw std::runtime_error("invalid probe source size");
     const auto status = MH_Initialize();
@@ -580,13 +1494,53 @@ void initialize(const std::string& source) {
     function(c,global,"__cstring",js_cstring,1);function(c,global,"__utf16",js_utf16,2);
     function(c,global,"__moduleInfo",js_module,1);function(c,global,"__findModule",js_find_module,1);function(c,global,"__export",js_export,2);
     function(c,global,"__nativeCall",js_native_call,2);function(c,global,"__attach",js_attach,2);function(c,global,"__detach",js_detach,1);
+    function(c,global,"__nativeCaptureCapabilities",js_capture_capabilities,0);
+    function(c,global,"__publishCaptureScope",js_publish_scope,1);
+    function(c,global,"__publishCapturePublication",js_publish_publication,1);
+    function(c,global,"__nativeReplayHealthy",js_replay_healthy,0);
+    function(c,global,"__nativeSamplingCheckpoint",js_sampling_checkpoint,1);
+    install_controlled_advance(c,global);
+    runtime.batch_advance=JS_GetPropertyStr(c,global,"__nativeBoundedReplayAdvance");
     function(c,global,"__send",js_send,1);function(c,global,"__nativeActive",js_active,0);function(c,global,"__pid",js_pid,0);
     try {
+        arkdps::owned_js::install(c,[]() noexcept {
+            state().lanes->poison(arkdps::capture::LaneFault::replay_structure);
+        });
         evaluate(c, arkdps_bridge_source, "native-bridge.js");
-        runtime.pointer = JS_GetPropertyStr(c, global, "__arkdpsPointer");
-        runtime.argument_view = JS_GetPropertyStr(c, global, "__arkdpsArguments");
+        evaluate(c, arkdps_publication_source, "native-publication.js");
+        evaluate(c, arkdps_cold_plan_source, "native-cold-plan.js");
+        evaluate(c, "globalThis.arkdpsNativeAsyncCapture=true;", "native-async.js");
+        runtime.replay_dispatch=JS_GetPropertyStr(c,global,"__arkdpsReplayDispatch");
+        runtime.replay_batch=JS_GetPropertyStr(c,global,"__arkdpsReplayBatch");
+        runtime.materialization_count=JS_GetPropertyStr(c,global,"__arkdpsReplayMaterializationCount");
+        if(!JS_IsFunction(c,runtime.replay_batch))throw std::runtime_error("bounded replay dispatch unavailable");
+        if (!JS_IsFunction(c,runtime.replay_dispatch)) throw std::runtime_error("native replay dispatch unavailable");
         runtime.dispatch = JS_GetPropertyStr(c, global, "__arkdpsRequest");
         evaluate(c, source, "event-probe.js");
+        runtime.prefix_projection=JS_GetPropertyStr(c,global,"__arkdpsOnClosedRecord");
+        runtime.sampling_dispatch=JS_GetPropertyStr(c,global,"__arkdpsSamplingDispatch");
+        auto sampling=JS_GetPropertyStr(c,global,"__arkdpsSamplingCapturePlan");
+        if(!JS_IsUndefined(sampling) && !JS_IsNull(sampling)) {
+            auto encoded=JS_JSONStringify(c,sampling,JS_UNDEFINED,JS_UNDEFINED);
+            if(JS_IsException(encoded)){JS_FreeValue(c,sampling);throw std::runtime_error("invalid sampling capture plan");}
+            const auto wire=string(c,encoded);JS_FreeValue(c,encoded);
+            install_sampling_plan(runtime,nlohmann::json::parse(wire));
+        }
+        JS_FreeValue(c,sampling);
+
+        runtime.publication_publish=JS_GetPropertyStr(c,global,"__arkdpsPublishClosedRecord");
+        runtime.publication_request=JS_GetPropertyStr(c,global,"__arkdpsPublicationRequest");
+        runtime.mode_state=JS_GetPropertyStr(c,global,"__arkdpsCaptureModeState");
+        runtime.mode_install=JS_GetPropertyStr(c,global,"__arkdpsInstallCaptureMode");
+        runtime.graph_retire=JS_GetPropertyStr(c,global,"__arkdpsRetireCaptureGraphs");
+        if (JS_IsFunction(c,runtime.mode_state)) {
+            auto mode=JS_Call(c,runtime.mode_state,JS_UNDEFINED,0,nullptr);
+            if (JS_IsException(mode)) throw std::runtime_error(exception(c));
+            try { install_mode_state(json_value(c,mode)); } catch (...) { JS_FreeValue(c,mode); throw; }
+            JS_FreeValue(c,mode);
+        }
+        if (!JS_IsFunction(c,runtime.publication_publish) || !JS_IsFunction(c,runtime.publication_request))
+            throw std::runtime_error("native async publication journal unavailable");
         if (runtime.ready.empty()) throw std::runtime_error("probe did not publish readiness");
         for (const auto& hook : runtime.hooks) {
             if (hook->detached) continue;
@@ -595,6 +1549,7 @@ void initialize(const std::string& source) {
         // All JS definitions and retained function handles now exist before the
         // first target thread can execute one of the enabled callbacks.
         runtime.initialized = true;
+        runtime.lanes->enabled.store(true,std::memory_order_release);
         if (MH_ApplyQueued() != MH_OK) throw std::runtime_error("could not enable native hooks");
         JS_FreeValue(c, global);
     } catch (...) {
@@ -604,85 +1559,511 @@ void initialize(const std::string& source) {
         throw;
     }
 }
-std::string readiness() {
-    auto& runtime = state();
-    std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-    if (!runtime.initialized || !runtime.fatal.empty()) throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
-    return runtime.ready;
+// This is a new observation, independent of business hook traffic. It never
+// reserves a hook ticket, runs a game method, or changes a callback stack.
+bool sample_checkpoint_impl(Runtime& r,std::uint64_t request,arkdps::capture::ReadMemory reader,void* read_user,unsigned& stage) {
+    using namespace arkdps::capture;
+    ++r.sampling_attempts;
+    if(!r.sampling_plan){r.sampling_retry_reason="sampling_plan_unavailable";return false;}
+    if(!request || r.active.load(std::memory_order_acquire)){r.sampling_retry_reason="sampling_callback_active";return false;}
+    const auto raw=r.lanes->reserved.load(std::memory_order_acquire);
+    const auto activity=r.activity_generation.load(std::memory_order_acquire);
+    const auto mode=r.capture_mode_epoch.load(std::memory_order_acquire);
+    if(r.processed_ticket!=raw || r.closed_ticket!=raw){r.sampling_retry_reason="sampling_raw_prefix_open";return false;}
+    const auto* config=r.configurations.pin(mode);
+    if(!r.sampling_snapshot)r.sampling_snapshot=std::make_unique<Snapshot>();
+    auto& snapshot=*r.sampling_snapshot;
+    Context context{};context.checkpoint=0;context.globals=r.sampling_plan->globals;context.globals_valid=r.sampling_plan->globals_valid;
+    RecordHeader header{};header.ticket=raw;header.mode_epoch=mode;header.scope_mode_epoch=mode;
+    header.publication_request=request;header.phase=Phase::checkpoint;
+    const bool cold=cold_publication_required(request,r.cold_publication_request.load(std::memory_order_acquire));
+    capture_scope_point(*r.sampling_plan,Phase::checkpoint,context,config,reader,read_user,snapshot,header,nullptr,cold);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    // Any producer, even one whose body was intentionally omitted, invalidates
+    // the sampled quiet prefix. Discard these bytes; never publish old values.
+    if(r.active.load(std::memory_order_acquire) || r.activity_generation.load(std::memory_order_acquire)!=activity
+            || r.lanes->reserved.load(std::memory_order_acquire)!=raw || r.capture_mode_epoch.load(std::memory_order_acquire)!=mode){r.sampling_retry_reason="sampling_native_activity_changed";return false;}
+    if(snapshot.error!=Error::ok) {
+        r.sampling_retry_reason="sampling_capture_error_"+std::to_string(static_cast<unsigned>(snapshot.error));
+        if(OwnedReplayView::structural(snapshot.error)) {
+            r.lanes->poison(LaneFault::publication_failure);
+            throw std::runtime_error("sampling structural capture error: "+std::to_string(static_cast<unsigned>(snapshot.error)));
+        }
+        require_cold_publication(r.cold_publication_request,request);return false;
+    }
+    const bool terminal_verified=r.terminal_fence.verified&&r.terminal_fence.accepts(0,raw,activity,reader,read_user);
+    if(r.active.load(std::memory_order_acquire)||r.activity_generation.load(std::memory_order_acquire)!=activity
+            ||r.lanes->reserved.load(std::memory_order_acquire)!=raw||r.capture_mode_epoch.load(std::memory_order_acquire)!=mode){r.sampling_retry_reason="sampling_terminal_activity_changed";return false;}
+    if(r.sampling_serial==UINT64_MAX)throw std::runtime_error("sampling checkpoint serial exhausted");
+    const auto serial=++r.sampling_serial;
+    nlohmann::json record{{"version",1},{"native_view",true},{"kind","sampling_checkpoint"},{"edge","checkpoint"},
+        {"ticket",std::to_string(raw)},{"sampling_serial",std::to_string(serial)},{"publication_request",std::to_string(request)},
+        {"sampling_terminal_verified",terminal_verified},{"checkpoint",0},{"closed_after",true},{"active_after",0},{"activity_begin",std::to_string(activity)},
+        {"activity_end",std::to_string(activity)},
+        {"facts",{{"mode_epoch",mode},{"scope_mode_epoch",mode},{"scope_revision",header.scope_revision},
+            {"publication_revision",header.publication_revision},{"cold_revision",header.cold_revision},
+            {"scope_unavailable",header.scope_unavailable},{"capture_concurrent",false},{"parent_checkpoints",nlohmann::json::array()}}}};
+    for(const auto* name:{"scope_revision","publication_revision","cold_revision"})if(record["facts"][name]==0)record["facts"].erase(name);
+    stage=2; // Bind the exact owned snapshot, without live fallback.
+    auto* c=r.context;arkdps::owned_js::Lease lease;
+    if(arkdps::owned_js::begin(snapshot.segments.data(),snapshot.segment_count,snapshot.fields.data(),snapshot.field_count,
+            snapshot.bytes.data(),snapshot.byte_count,r.configurations.roles,raw,snapshot.error)!=Error::ok)
+        throw std::runtime_error("sampling owned view rejected structural capture");
+    arkdps::owned_js::bind_graphs(config,header.scope_revision,header.publication_revision,mode,0);
+    r.replay_header=header;r.replay_active=true;
+    const auto wire=record.dump();auto item=JS_ParseJSON(c,wire.data(),wire.size(),"sampling-checkpoint.json");
+    r.sampling_record=JS_DupValue(c,item);
+    std::array<JSValue,2> args{{item,r.prefix_projection}};
+    stage=3; // Shared projection and owned replay completion.
+    auto result=JS_Call(c,r.sampling_dispatch,JS_UNDEFINED,args.size(),args.data());
+    r.replay_active=false;
+    if(JS_IsException(result)){JS_FreeValue(c,item);JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;throw std::runtime_error(exception(c));}
+    auto projection=JS_GetPropertyUint32(c,result,0),complete=JS_GetPropertyUint32(c,result,1);
+    const bool healthy=JS_IsBool(complete)&&JS_ToBool(c,complete)==1;
+    std::string gap;
+    if(!healthy) {
+        gap=replay_gap_diagnostic(header,result,false,true);
+        const auto ticket=gap.find(",t=");
+        if(ticket!=std::string::npos)gap.replace(0,ticket+1,"native_sampling_gap:v1,");
+        else gap.clear();
+    }
+    JS_FreeValue(c,complete);JS_FreeValue(c,result);
+    if(!healthy || r.lanes->failure.load(std::memory_order_acquire)) {
+        JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;JS_FreeValue(c,item);JS_FreeValue(c,projection);
+        throw std::runtime_error(gap.empty()?"sampling checkpoint violated owned boundary":gap);
+    }
+    if(JS_IsUndefined(projection)||JS_IsNull(projection)) {
+        JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;
+        r.sampling_retry_reason="sampling_projection_not_ready";JS_FreeValue(c,item);JS_FreeValue(c,projection);require_cold_publication(r.cold_publication_request,request);return false;
+    }
+    auto terminal=JS_GetPropertyStr(c,projection,"terminal_read");
+    const bool terminal_projection=!JS_IsUndefined(terminal)&&!JS_IsNull(terminal);JS_FreeValue(c,terminal);
+    if(terminal_projection && (!r.terminal_fence.accepts(0,raw,activity,reader,read_user)
+            ||r.active.load(std::memory_order_acquire)||r.activity_generation.load(std::memory_order_acquire)!=activity
+            ||r.lanes->reserved.load(std::memory_order_acquire)!=raw||r.capture_mode_epoch.load(std::memory_order_acquire)!=mode)) {
+        JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;
+        r.sampling_retry_reason="sampling_terminal_not_current";JS_FreeValue(c,item);JS_FreeValue(c,projection);return false;
+    }
+    std::array<JSValue,3> publish_args{{item,projection,JS_TRUE}};
+    stage=4; // Native-authorized journal publication.
+    r.replay_active=true;auto published=JS_Call(c,r.publication_publish,JS_UNDEFINED,publish_args.size(),publish_args.data());r.replay_active=false;
+    JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;
+    JS_FreeValue(c,item);JS_FreeValue(c,projection);
+    if(JS_IsException(published))throw std::runtime_error(exception(c));
+    stage=5; // Receipt encoding and parsing, never the original exception text.
+    auto encoded=JS_JSONStringify(c,published,JS_UNDEFINED,JS_UNDEFINED);JS_FreeValue(c,published);
+    if(JS_IsException(encoded))throw std::runtime_error(exception(c));
+    const auto text=string(c,encoded);JS_FreeValue(c,encoded);const auto receipt=nlohmann::json::parse(text);
+    if(receipt.value("native_publication_failure",false)||!receipt.value("error",nlohmann::json()).is_null())
+        throw std::runtime_error("sampling publication failed");
+    if(receipt.value("retry",false)){r.sampling_retry_reason="sampling_journal_not_ready";return false;}
+    stage=6; // Exact publication certificate.
+    const auto& fence=receipt.at("native_publication");
+    if(fence.at("closed_ticket")!=std::to_string(raw)||fence.at("sampling_serial")!=std::to_string(serial)
+            ||fence.at("sample_request")!=std::to_string(request)
+            ||plan_uint(receipt.at("native_capture_scope_mode_epoch"),9007199254740991ULL)!=mode)
+        throw std::runtime_error("sampling publication certificate mismatch");
+    stage=7; // Commit only the independently verified publication.
+    r.publication_ready=true;r.published_ticket=raw;r.published_mode_epoch=mode;
+    r.published_sequence=plan_uint(fence.at("sequence"),9007199254740991ULL);
+    r.completed_sample_request=request;r.completed_sample_token=fence.at("token").get<std::string>();r.published_token=r.completed_sample_token;
+    auto pending=request;r.lanes->pending_publication.compare_exchange_strong(pending,0,std::memory_order_acq_rel);
+    auto required=r.cold_publication_request.load(std::memory_order_acquire);
+    if(cold_publication_required(request,required))r.cold_publication_request.compare_exchange_strong(required,0,std::memory_order_acq_rel);
+    r.sampling_retry_reason.clear();
+    // A sampling checkpoint cannot manufacture terminal-destruction evidence.
+    return true;
 }
-std::string request(const std::string& json) {
+
+bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMemory reader=arkdps::capture::capture_read,void* read_user=nullptr) {
+    unsigned stage=1;
+    const auto diagnostic=[&](unsigned json_id) {
+        return "native_sampling_failure:v1,s="+std::to_string(stage)
+            +",c="+std::to_string(r.lanes->failure.load(std::memory_order_acquire))+",j="+std::to_string(json_id);
+    };
+    try{return sample_checkpoint_impl(r,request,reader,read_user,stage);}
+    catch(const nlohmann::json::exception& error) {
+        throw std::runtime_error(diagnostic(error.id>=100&&error.id<=599?error.id:0));
+    } catch(const std::exception& error) {
+        // A native-generated owned-view ledger is already bounded. No arbitrary
+        // JS/C++ error message or values cross the runtime privacy boundary.
+        const std::string message=error.what();
+        throw std::runtime_error(diagnostic(0)+(message.rfind("native_sampling_gap:v1,",0)==0?"; "+message:""));
+    }
+}
+
+std::string readiness_on_worker() {
     auto& runtime = state();
-    if (json.size() > 8 * max_read) throw std::runtime_error("request is too large");
-    const auto command = nlohmann::json::parse(json, [](int depth, nlohmann::json::parse_event_t, nlohmann::json&) {
-        if (depth > 64) throw std::runtime_error("request nesting exceeds limit");
+    if (!runtime.initialized || !runtime.fatal.empty()) throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
+    auto ready=nlohmann::json::parse(runtime.ready);
+    ready.erase("native_mark_scheduler_version");ready.erase("mode_control_version");
+    if(runtime.sampling_plan){ready["native_mark_scheduler_version"]=1;ready["mode_control_version"]=1;}
+    return ready.dump();
+}
+bool terminal_fence_current(Runtime& runtime) noexcept {
+    if(runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire))return false;
+    const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
+    const auto activity=runtime.activity_generation.load(std::memory_order_acquire);
+    if(!runtime.terminal_fence.accepts(runtime.active.load(std::memory_order_acquire),reserved,activity,arkdps::capture::capture_read,nullptr))return false;
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    return !runtime.active.load(std::memory_order_acquire)&&runtime.lanes->reserved.load(std::memory_order_acquire)==reserved
+        &&runtime.activity_generation.load(std::memory_order_acquire)==activity;
+}
+std::string request_on_worker(const std::string& json,std::uint64_t legacy_minimum=0) {
+    auto& runtime=state();
+    if (json.size()>8*max_read) throw std::runtime_error("request too large");
+    auto command=nlohmann::json::parse(json,[](int depth,nlohmann::json::parse_event_t,nlohmann::json&) {
+        if (depth>64) throw std::runtime_error("request nesting exceeds limit");
         return true;
     });
-    if (command.is_object() && command.value("operation", nlohmann::json()) == "capture_control")
-        return capture_control(runtime, command);
-    std::string result;
-    std::exception_ptr failure;
-    bool stopping = false;
-    try {
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-        stopping = command.is_object() && command.value("operation", nlohmann::json()) == "stop";
-        if (stopping) {
-            // This path is available even after a fatal callback. Do not leave
-            // native detours enabled merely because JS can no longer run.
-            runtime.stopping.store(true);
-            for (const auto& hook : runtime.hooks) {
-                const auto status = MH_QueueDisableHook(hook->address);
-                if (status != MH_OK) throw std::runtime_error("could not queue every native hook for stop");
-                hook->detached = true;
-            }
+    const auto operation=command.value("operation",std::string());
+    if (operation=="capture_control") return capture_control(runtime,command);
+    const bool stopping=operation=="stop";
+    TimingSpan timing(timing_request,true);
+    bool diagnostic=false, diagnostic_snapshot=false;
+    if (operation=="mark" && command.contains("native_timing")) {
+        const auto& control=command.at("native_timing");
+        if (control.is_object() && control.value("version",nlohmann::json())==1
+            && control.contains("enabled") && control.at("enabled").is_boolean()) {
+            timing_state.enabled.store(control.at("enabled").get<bool>(),std::memory_order_relaxed);
+            diagnostic=true; diagnostic_snapshot=control.value("snapshot",false);
         }
-        if (!runtime.initialized || !runtime.fatal.empty()) {
-            if (!stopping) throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
-            result = "{\"active\":0}";
-        } else {
-            result = dispatch_request(runtime, json);
-        }
-    } catch (...) { failure = std::current_exception(); }
-    // No QuickJS lock while MinHook suspends threads: a game thread can be
-    // blocked acquiring that lock after entering our thunk.
-    if (MH_ApplyQueued() != MH_OK) throw std::runtime_error("could not apply native hook changes");
+    }
     if (stopping) {
-        using Clock = std::chrono::steady_clock;
-        const auto deadline = Clock::now() + std::chrono::seconds(2);
-        auto quiet_since = Clock::now();
-        auto generation = runtime.activity_generation.load();
+        runtime.stopping.store(true,std::memory_order_release);
+        runtime.lanes->enabled.store(false,std::memory_order_release);
+        for (auto& hook : runtime.hooks) {
+            if (MH_QueueDisableHook(hook->address)!=MH_OK) throw std::runtime_error("could not disable native hooks");
+            hook->detached=true;
+        }
+        if (MH_ApplyQueued()!=MH_OK) throw std::runtime_error("could not apply native stop");
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+        auto quiet_since=std::chrono::steady_clock::now();
+        auto previous=runtime.activity_generation.load(std::memory_order_acquire);
         for (;;) {
-            const auto current = runtime.activity_generation.load();
-            const auto active = runtime.active.load();
-            const auto now = Clock::now();
-            if (active || current != generation) { quiet_since = now; generation = current; }
-            if (!active && now - quiet_since >= std::chrono::milliseconds(25)) break;
-            if (now >= deadline) throw std::runtime_error("native hooks disabled but callbacks did not drain within 2 seconds; active=" + std::to_string(active));
-            // Original functions and their onLeave callbacks must be able to
-            // acquire the JS mutex while stop waits for their full lifetime.
+            drain_captures();
+            const auto generation=runtime.activity_generation.load(std::memory_order_acquire);
+            const auto active=runtime.active.load(std::memory_order_acquire);
+            const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
+            const auto now=std::chrono::steady_clock::now();
+            if (generation!=previous || active || runtime.processed_ticket!=reserved) quiet_since=now;
+            previous=generation;
+            if (!runtime.fatal.empty()) throw std::runtime_error("hooks disabled; capture drain failed: "+runtime.fatal);
+            if (!active && runtime.processed_ticket==reserved && now-quiet_since>=std::chrono::milliseconds(25)) break;
+            if (now>=deadline) throw std::runtime_error("hooks disabled; native calls/capture prefix did not drain");
+            Sleep(1); // Worker/host only; game original functions never wait here.
+        }
+    } else {
+        drain_captures();
+        if (!runtime.initialized || !runtime.fatal.empty()) throw std::runtime_error(runtime.fatal.empty() ? "native runtime not ready" : runtime.fatal);
+    }
+    if(runtime.sampling_plan&&operation!="configure_mode"&&command.contains("autochess_enabled"))
+        throw std::runtime_error("native preference requires mode control");
+    if (!stopping) configure_mode(command);
+    if(operation=="configure_mode") {
+        if(!command.contains("autochess_enabled"))throw std::runtime_error("mode control requires a preference");
+        return nlohmann::json{{"mode_control_version",1},{"applied",true},
+            {"mode_epoch",runtime.capture_mode_epoch.load(std::memory_order_acquire)},
+            {"desired_mode",runtime.desired_mode==1?"all":"local"}}.dump();
+    }
+    auto async_state=[&] {
+        const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
+        nlohmann::json state{{"version",1},{"reserved_ticket",reserved},
+            {"processed_ticket",runtime.processed_ticket},{"closed_ticket",runtime.closed_ticket},
+            {"replay_lease_calls",arkdps::owned_js::binding().lease_calls},{"replay_status_calls",arkdps::owned_js::binding().status_calls},
+            {"replay_health_calls",runtime.replay_health_calls},{"controlled_finish_checks",runtime.controlled_finish_checks},
+            {"planned_hp_boundary_edges",runtime.planned_hp_edges},
+            {"batch_calls",runtime.batch_calls},{"batch_issued",runtime.batch_issued},{"batch_finalized",runtime.batch_finalized},
+            {"batch_barriers",runtime.batch_barriers},{"single_replayed",runtime.single_replayed},{"maximum_batch_edges",runtime.maximum_batch_edges},
+            {"published_ticket",runtime.published_ticket},
+            {"desired_mode_epoch",runtime.capture_mode_epoch.load(std::memory_order_acquire)},
+            {"published_mode_epoch",runtime.published_mode_epoch},
+            {"publication_ready",runtime.publication_ready && runtime.published_mode_epoch==runtime.capture_mode_epoch.load(std::memory_order_acquire)},
+            {"activity_generation",runtime.activity_generation.load(std::memory_order_acquire)},
+            {"active",runtime.active.load(std::memory_order_acquire)},
+            {"failure_code",runtime.lanes->failure.load(std::memory_order_acquire)},
+            {"captured_prefix_lag_records",reserved-runtime.processed_ticket},
+            {"publication_lag_records",runtime.processed_ticket-runtime.published_ticket},
+            {"published_event_sequence",runtime.published_sequence},{"delivered_event_sequence",runtime.delivered_sequence},
+            {"read_prefix_lag_events",runtime.published_sequence>=runtime.delivered_sequence ? runtime.published_sequence-runtime.delivered_sequence : 0}};
+        state["sampling"]={{"version",1},{"plan_available",runtime.sampling_plan!=nullptr},
+            {"attempts",runtime.sampling_attempts},{"serial",std::to_string(runtime.sampling_serial)},
+            {"request",std::to_string(runtime.sample_request)},{"completed_request",std::to_string(runtime.completed_sample_request)},
+            {"retry_reason",runtime.sampling_retry_reason}};
+        state["batch_fallback_reasons"]={{"unsupported_plan",runtime.replay_fallbacks[1]},{"methods_unavailable",runtime.replay_fallbacks[2]},
+            {"argument_contract",runtime.replay_fallbacks[3]},{"missing_root",runtime.replay_fallbacks[4]},{"parent_or_nested",runtime.replay_fallbacks[5]},
+            {"concurrent",runtime.replay_fallbacks[6]},{"cold_or_publication",runtime.replay_fallbacks[7]}};
+        state["batch_public_record_materializations"]=nullptr;
+        if(JS_IsFunction(runtime.context,runtime.materialization_count)){
+            auto* c=runtime.context;auto count=JS_Call(c,runtime.materialization_count,JS_UNDEFINED,0,nullptr);double value=0;
+            if(!JS_IsException(count)&&JS_IsNumber(count)&&JS_ToFloat64(c,&value,count)==0&&std::isfinite(value)&&value>=0&&value<=9007199254740991.0&&std::floor(value)==value)state["batch_public_record_materializations"]=static_cast<std::uint64_t>(value);
+            else if(JS_IsException(count)){auto ignored=JS_GetException(c);JS_FreeValue(c,ignored);}
+            JS_FreeValue(c,count);
+        }
+        const bool age=timing_state.enabled.load(std::memory_order_relaxed);
+        LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
+        state["queue_age_available"]=age;
+        state["queue_age_qpc_frequency"]=frequency.QuadPart;
+        state["lane_metrics"]=nlohmann::json::array();
+        state["callback_timing"]={{"enabled",age},{"selection","xorshift_approximately_1_in_128"},
+            {"includes_first_touch",false},{"includes_original_function",false},
+            {"scope","after_sampling_decision_through_capture_enqueue"},
+            {"includes_identity_lookup",true},{"includes_metrics_recording",false},
+            {"sample_sums_are_not_extrapolated",true},{"qpc_frequency",frequency.QuadPart},
+            {"samples",nlohmann::json::array()}};
+        for (unsigned index=0;index<capture::lane_count;++index) {
+            auto& lane=*runtime.lanes->lanes[index];
+            const auto owner=lane.owner.load(std::memory_order_acquire);
+            if (!owner || owner==MAXDWORD) continue;
+            const auto snapshot=capture::lane_metric_snapshot(lane,age,age ? ticks_now() : 0);
+            auto optional=[](std::optional<std::uint64_t> value) { return value ? nlohmann::json(*value) : nlohmann::json(); };
+            nlohmann::json row{{"lane",index},{"captured_records",snapshot.submitted},{"consumed_records",snapshot.consumed},
+                {"captured_bytes",snapshot.submitted_bytes},{"consumed_bytes",snapshot.consumed_bytes},
+                {"counter_snapshot_consistent",snapshot.consistent},
+                {"resident_records_approx",optional(snapshot.resident_records)},
+                {"resident_bytes_approx",optional(snapshot.resident_bytes)},
+                {"thread_id",snapshot.thread_id},{"thread_birth",std::to_string(snapshot.thread_birth)},
+                {"lane_generation",snapshot.generation},{"capture_uncertain_records",snapshot.uncertain_records},{"peak_resident_records",snapshot.peak_records},{"peak_resident_bytes",snapshot.peak_bytes},
+                {"queue_age_available",snapshot.age_available},{"age_sample_count",snapshot.age_samples},
+                {"last_capture_to_replay_qpc",optional(snapshot.last_age)},
+                {"maximum_capture_to_replay_qpc",optional(snapshot.maximum_age)},
+                {"observed_pending_age_lower_bound_qpc",optional(snapshot.observed_pending_age)}};
+            for(unsigned hook=0;hook<runtime.hooks.size() && hook<capture::timing_hooks;++hook)
+                for(unsigned edge=0;edge<2;++edge) {
+                    const auto sample=runtime.callback_timings.cell(index,hook,edge!=0).snapshot(snapshot.generation);
+                    if(!sample)continue;
+                    state["callback_timing"]["samples"].push_back({{"lane",index},{"lane_generation",sample->generation},
+                        {"hook_id",hook},{"hook",runtime.hooks[hook]->timing_name},{"edge",edge?"leave":"entry"},
+                        {"sample_count",sample->samples},{"sample_sum_qpc",sample->ticks},{"sample_max_qpc",sample->maximum},
+                        {"sample_native_reads",sample->reads},{"sample_native_read_bytes",sample->read_bytes},
+                        {"sample_enqueued_bytes",sample->enqueued_bytes},{"sample_drops",sample->drops}});
+                }
+            state["lane_metrics"].push_back(std::move(row));
+        }
+        return state;
+    };
+    if (operation=="ack") {
+        const auto sequence=arkdps::capture::plan_uint(command.at("sequence"),UINT64_MAX);
+        if (sequence>runtime.delivered_sequence) throw std::runtime_error("native ACK exceeds delivered event prefix");
+    }
+    const bool publication_operation=operation=="mark" || operation=="read" || operation=="terminal_read" || operation=="ack";
+    if (operation=="mark" && !command.contains("sampling")) {
+        if(runtime.sampling_plan)throw std::runtime_error("native mark requires a sampling transaction");
+        // Providers without the sampling capability retain their original
+        // callback admission contract. A retry is a new request, including a
+        // new cold candidate; it cannot reuse an exhausted callback claim.
+        const auto terminal_ready=[&]() noexcept {return terminal_fence_current(runtime);};
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(100);
+        const auto waiting=[&]() {return !terminal_ready() && (runtime.published_ticket<legacy_minimum
+            ||runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire));};
+        while(waiting() && std::chrono::steady_clock::now()<deadline) {
+            const bool more=drain_captures();
+            if(!runtime.fatal.empty())throw std::runtime_error(runtime.fatal);
+            if(!more && waiting())Sleep(1);
+        }
+        if(waiting())return nlohmann::json{{"retry",true},{"error",nullptr},{"stopped",false},
+            {"events",nlohmann::json::array()},{"hp_context",nlohmann::json::array()},
+            {"mark_retry_reason","native_fresh_publication_not_ready"},{"native_async_capture",async_state()}}.dump();
+    } else if (operation=="mark") {
+        const auto sampling=command.at("sampling").get<std::string>();
+        if(sampling!="fresh" && sampling!="confirm" && sampling!="terminal")throw std::runtime_error("invalid sampling transaction operation");
+        auto retained=[&](const std::string& token) {
+            const auto query=nlohmann::json{{"operation","mark"},{"sampling","receipt"},{"publication_token",token}}.dump();
+            auto* c=runtime.context;auto arg=JS_ParseJSON(c,query.data(),query.size(),"sampling-token.json");
+            runtime.replay_active=true;auto answer=JS_Call(c,runtime.publication_request,JS_UNDEFINED,1,&arg);runtime.replay_active=false;JS_FreeValue(c,arg);
+            if(JS_IsException(answer))throw std::runtime_error(exception(c));
+            auto encoded=JS_JSONStringify(c,answer,JS_UNDEFINED,JS_UNDEFINED);JS_FreeValue(c,answer);
+            if(JS_IsException(encoded))throw std::runtime_error(exception(c));
+            const auto wire=string(c,encoded);JS_FreeValue(c,encoded);return nlohmann::json::parse(wire);
+        };
+        if(sampling=="confirm") {
+            if(!command.contains("publication_token") || !command.at("publication_token").is_string())throw std::runtime_error("confirmation requires publication token");
+            const auto opening=retained(command.at("publication_token").get<std::string>());
+            if(opening.value("retry",false))return opening.dump();
+        }
+        const auto terminal_point=[&](const std::string& token) {
+            if(token.empty()||!terminal_fence_current(runtime))return false;
+            const auto point=retained(token);
+            if(point.value("retry",false)||!point.contains("terminal_boundary")||!point.at("terminal_boundary").is_object()
+                    ||!point.contains("native_publication")||!point.at("native_publication").is_object())return false;
+            const auto& fence=point.at("native_publication");
+            // A valid current destroy fence cannot lend its authority to an
+            // older battle's retained terminal certificate in the same mode.
+            return fence.value("terminal_verified",false)&&fence.value("token",std::string())==token
+                &&fence.value("closed_ticket",std::string())==std::to_string(runtime.terminal_fence.ticket)
+                &&fence.value("activity_end",std::string())==std::to_string(runtime.terminal_fence.activity)
+                &&point.value("native_capture_scope_mode_epoch",UINT64_MAX)==runtime.capture_mode_epoch.load(std::memory_order_acquire)
+                &&terminal_fence_current(runtime);
+        };
+        std::uint64_t requested=0;
+        if(command.contains("sample_request")) {
+            const auto text=command.at("sample_request").get<std::string>();
+            if(text.empty()||text.size()>20||text.find_first_not_of("0123456789")!=std::string::npos || (text.size()>1&&text[0]=='0'))
+                throw std::runtime_error("invalid sample request identity");
+            requested=std::stoull(text);
+            if(!requested || requested!=runtime.sample_request)throw std::runtime_error("sample request no longer active");
+            if(runtime.sample_kind!=sampling || runtime.sample_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)
+                    || (sampling=="confirm" && runtime.sample_opening_token!=command.at("publication_token").get<std::string>()))
+                throw std::runtime_error("sample request transaction binding changed");
+        }
+        // Reuse only an independently verified terminal point. No new request,
+        // hook ticket, clock or terminal certificate is manufactured here.
+        const bool terminal_fast=sampling=="terminal"&&terminal_point(runtime.published_token);
+        if(terminal_fast) {
+            command["sampling"]="receipt";command["publication_token"]=runtime.published_token;
+        } else {
+        if(!requested) {
+            requested=runtime.lanes->request_serial.fetch_add(1,std::memory_order_acq_rel)+1;
+            if(!requested)throw std::runtime_error("sample request identity exhausted");
+            runtime.sample_request=requested;runtime.sample_kind=sampling;
+            runtime.sample_mode_epoch=runtime.capture_mode_epoch.load(std::memory_order_acquire);
+            runtime.sample_opening_token=sampling=="confirm"?command.at("publication_token").get<std::string>():std::string();
+            const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
+            if(reserved==UINT64_MAX)throw std::runtime_error("native capture ticket exhausted");
+            runtime.lanes->minimum_publication_ticket.store(reserved+1,std::memory_order_release);
+            runtime.lanes->publication_attempts.store(0,std::memory_order_release);
+            runtime.lanes->pending_publication.store(requested,std::memory_order_release);
+        }
+        const auto mode=runtime.capture_mode_epoch.load(std::memory_order_acquire);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(100);
+        const auto complete=[&] {return runtime.completed_sample_request==requested&&runtime.published_mode_epoch==mode
+            &&(sampling!="terminal"||terminal_point(runtime.completed_sample_token));};
+        while (!complete() && std::chrono::steady_clock::now()<deadline) {
+            drain_captures();
+            if(!runtime.fatal.empty())throw std::runtime_error(runtime.fatal);
+            if(sampling=="terminal"&&terminal_point(runtime.published_token)) {
+                runtime.completed_sample_request=requested;runtime.completed_sample_token=runtime.published_token;
+                auto pending=requested;runtime.lanes->pending_publication.compare_exchange_strong(pending,0,std::memory_order_acq_rel);
+                break;
+            }
+            if(complete())break;
+            // An open battle is not a terminal observation. Only the actual
+            // destroy fence can admit terminal capture, independently of hooks.
+            try {if((sampling!="terminal"||terminal_fence_current(runtime))&&sample_checkpoint(runtime,requested)&&complete())break;}
+            catch(const std::exception& error) {
+                runtime.lanes->poison(capture::LaneFault::publication_failure);fail(error.what());throw;
+            }
             Sleep(1);
         }
-        std::lock_guard<std::recursive_mutex> lock(runtime.mutex);
-        if (runtime.active.load() || runtime.activity_generation.load() != generation)
-            throw std::runtime_error("native stop lost its quiet fence; active=" + std::to_string(runtime.active.load()));
-        if (!runtime.fatal.empty()) throw std::runtime_error("native hooks disabled; active=" + std::to_string(runtime.active.load()) + "; fatal: " + runtime.fatal);
-        if (!failure) {
-            auto value = nlohmann::json::parse(result);
-            value["active"] = runtime.active.load();
-            value["native_quiet"] = true;
-            value["native_activity_generation"] = std::to_string(runtime.activity_generation.load());
-            result = value.dump();
+        if(!complete())
+            return nlohmann::json{{"retry",true},{"error",nullptr},{"stopped",false},
+                {"events",nlohmann::json::array()},{"hp_context",nlohmann::json::array()},
+                {"native_sample_request",std::to_string(requested)},
+                {"active",runtime.active.load(std::memory_order_acquire)},{"active_hooks",nlohmann::json::array()},
+                {"mark_retry_reason","native_fresh_publication_not_ready"},{"native_async_capture",async_state()}}.dump();
+        command["sampling"]="receipt";command["publication_token"]=runtime.completed_sample_token;
+        command["sample_request"]=std::to_string(requested);
         }
     }
-    if (failure) {
-        if (stopping) {
-            try { std::rethrow_exception(failure); }
-            catch (const std::exception& error) {
-                throw std::runtime_error("native hooks disabled; active=" + std::to_string(runtime.active.load()) + "; stop failed: " + error.what());
-            }
-        }
-        std::rethrow_exception(failure);
+    JS_UpdateStackTop(runtime.runtime);
+    const auto journal_command=command.dump();
+    JSValue argument=publication_operation ? JS_ParseJSON(runtime.context,journal_command.data(),journal_command.size(),"native-command.json")
+                                          : JS_NewStringLen(runtime.context,json.data(),json.size());
+    if (JS_IsException(argument)) throw std::runtime_error(exception(runtime.context));
+    // Publication requests are pure journal operations. C++ primitives must
+    // reject live access even when a script catches the resulting exception.
+    runtime.replay_active=publication_operation;
+    auto value=JS_Call(runtime.context,publication_operation ? runtime.publication_request : runtime.dispatch,JS_UNDEFINED,1,&argument);
+    runtime.replay_active=false;
+    JS_FreeValue(runtime.context,argument);
+    if (JS_IsException(value)) throw std::runtime_error(exception(runtime.context));
+    if (runtime.lanes->failure.load(std::memory_order_acquire)) {
+        JS_FreeValue(runtime.context,value); drain_captures();
+        throw std::runtime_error("native journal violated owned memory boundary");
     }
-    return result;
+    JSValue serialized=publication_operation ? JS_JSONStringify(runtime.context,value,JS_UNDEFINED,JS_UNDEFINED) : JS_DupValue(runtime.context,value);
+    JS_FreeValue(runtime.context,value);
+    if (JS_IsException(serialized)) throw std::runtime_error(exception(runtime.context));
+    std::string encoded;
+    try { encoded=string(runtime.context,serialized); } catch (...) { JS_FreeValue(runtime.context,serialized); throw; }
+    JS_FreeValue(runtime.context,serialized);
+    auto response=nlohmann::json::parse(encoded);
+    if (publication_operation && response.is_object() && (response.value("native_publication_failure",false)
+        || !response.value("error",nlohmann::json()).is_null())) {
+        runtime.lanes->poison(capture::LaneFault::publication_failure);
+        drain_captures();
+        throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
+    }
+
+    if (!response.is_object()) throw std::runtime_error("native worker reply must be an object");
+    response.erase("native_quiet_boundary_version"); response.erase("native_deferred_callbacks");
+    response["native_async_capture"]=async_state();
+    if(operation=="mark" && command.contains("sample_request"))response["native_sample_request"]=command.at("sample_request");
+    if ((operation=="read" || operation=="terminal_read") && response.value("error",nlohmann::json()).is_null()
+               && !response.value("retry",false) && response.contains("events") && response.at("events").is_array()) {
+        const auto after=arkdps::capture::plan_uint(command.at("after"),UINT64_MAX);
+        const auto through=arkdps::capture::plan_uint(command.at("through"),UINT64_MAX);
+        bool contiguous=through>=after && through-after==response.at("events").size();
+        std::uint64_t sequence=after;
+        for (const auto& event : response.at("events")) {
+            if (!event.is_object() || !event.contains("sequence") || arkdps::capture::plan_uint(event.at("sequence"),UINT64_MAX)!=++sequence) contiguous=false;
+        }
+        if (contiguous) runtime.delivered_sequence=(std::max)(runtime.delivered_sequence,through);
+    }
+    if (stopping) { response["native_quiet"]=true; response["active"]=0; }
+    if (diagnostic) {
+        response["native_timing_control"]={{"version",1},{"enabled",timing_state.enabled.load()},
+            {"callback_sampling",0},{"capture_timing_available",false}};
+        if (diagnostic_snapshot) response["native_timing"]=timing_snapshot();
+    }
+    return response.dump();
+}
+void initialize(const std::string& source) {
+    auto& runtime=state();
+    runtime.worker.start([source] {
+        capture::CaptureLanes::Config lane_config;
+        lane_config.lane_queue={2048,2*1024*1024};
+        // The actual owned HP recipe is 907/6208 bytes for enter/heal-leave.
+        // 30k setters/s and a 500ms consumer pause need ~107MB, before a
+        // publication burst. One hot lane may borrow all four 32MiB banks.
+        lane_config.spill={32768,32*1024*1024};
+        state().lanes=std::make_unique<capture::CaptureLanes>(lane_config);
+        state().ingress.store(state().lanes.get(),std::memory_order_release);
+        initialize_on_worker(source);
+    },drain_captures);
+    runtime.worker.wait_initialized();
+}
+std::string readiness() {
+    return state().worker.submit([] { return readiness_on_worker(); });
+}
+std::string request(const std::string& json) {
+    if (json.size()>8*max_read) throw std::runtime_error("request too large");
+    auto command=nlohmann::json::parse(json,[](int depth,nlohmann::json::parse_event_t,nlohmann::json&) {
+        if (depth>64) throw std::runtime_error("request nesting exceeds limit");
+        return true;
+    });
+    std::uint64_t legacy_minimum=0;
+    if(command.value("operation",std::string())=="mark" && !command.contains("sampling")) {
+        if(state().sampling_plan)throw std::runtime_error("native mark requires a sampling transaction");
+        // Register legacy publication before queuing behind replay work, so a
+        // producer arriving during that work still captures this request.
+        auto* lanes=state().ingress.load(std::memory_order_acquire);
+        if(!lanes)throw std::runtime_error("native capture not initialized");
+        const auto reserved=lanes->reserved.load(std::memory_order_acquire);
+        if(reserved==UINT64_MAX)throw std::runtime_error("native capture ticket exhausted");
+        legacy_minimum=reserved+1;
+        lanes->minimum_publication_ticket.store(legacy_minimum,std::memory_order_release);
+        const auto revision=lanes->request_serial.fetch_add(1,std::memory_order_acq_rel)+1;
+        if(!revision)throw std::runtime_error("sample request identity exhausted");
+        lanes->publication_attempts.store(0,std::memory_order_release);
+        lanes->pending_publication.store(revision,std::memory_order_release);
+    }
+    return state().worker.submit([json,legacy_minimum] { return request_on_worker(json,legacy_minimum); });
+}
+std::uint64_t timing_begin() noexcept {
+    return timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;
+}
+void timing_transport(unsigned phase, std::uint64_t start, std::size_t bytes) noexcept {
+    if (!start || phase > 3) return;
+    auto* thread = timing_slot();
+    if (!thread) return;
+    auto& c = thread->cells[timing_transport_base+phase];
+    const auto elapsed = ticks_now()-start;
+    c.revision.fetch_add(1, std::memory_order_acq_rel);
+    timing_add(c.calls, 1); timing_add(c.samples, 1); timing_add(c.ticks, elapsed);
+    timing_add(c.exclusive, elapsed); timing_add(c.bytes, bytes);
+    c.maximum.store((std::max)(c.maximum.load(std::memory_order_relaxed),elapsed),std::memory_order_relaxed);
+    c.revision.fetch_add(1, std::memory_order_acq_rel);
 }
 }
 

@@ -1,0 +1,1165 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "sampled_functions": {},
+      "dispatch_counters": {
+        "graph_format0": 0,
+        "graph_format1": 0,
+        "args_proxy": 0,
+        "direct_entry": 0,
+        "direct_leave": 0,
+        "hp_adopt_requests": 0,
+        "hp_ordinary_requests": 0,
+        "fallback_reasons": {}
+      },
+      "native_request_counts": {},
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": null,
+        "batch_output_bytes": null,
+        "byte_read_calls": null,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "cpp_io_counters_available": false,
+        "cpp_timing_enabled": true,
+        "edges": 0,
+        "graph_calls": null,
+        "graph_check_calls": null,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": null,
+        "hook_point_calls": null,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": null,
+        "hp_observation_calls": null,
+        "missing_hook_calls": null,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": null,
+        "prepared_issue_attempts": 0,
+        "prepared_packets": 0,
+        "registered_plans": 0,
+        "scalar_calls": null,
+        "sealed_owner": true,
+        "selected_field_slots": null,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 9.134299993515015,
+      "setters_per_second": 547387.320708735,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {},
+      "business_events_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "sampled_functions": {
+        "native.prepareHp.outside": {
+          "calls": 9999,
+          "samples": 79,
+          "sampled_us": 237.89995908737183,
+          "max_us": 11.400014162063599
+        },
+        "__arkdpsReplayDispatch.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 2094.0999388694763,
+          "max_us": 183.89999866485596
+        },
+        "__arkdpsPackedCaptureRecord.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 97.60016202926636,
+          "max_us": 8.799999952316284
+        },
+        "__arkdpsReplayBegin.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 205.6998908519745,
+          "max_us": 41.59998893737793
+        },
+        "__arkdpsPreparedHpObservation.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 429.20011281967163,
+          "max_us": 75.69998502731323
+        },
+        "nativeIO.__nativeOwnedHpObservation.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 33.19993615150452,
+          "max_us": 2.7000010013580322
+        },
+        "HP.direct.entry.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 833.9000344276428,
+          "max_us": 39.000004529953
+        },
+        "withCapturedMode.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 713.3000195026398,
+          "max_us": 33.9999794960022
+        },
+        "applyHpEntry.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 553.0999898910522,
+          "max_us": 26.500016450881958
+        },
+        "__arkdpsReplayEnd.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 61.59988045692444,
+          "max_us": 3.500014543533325
+        },
+        "__arkdpsReplayDispatch.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 1621.1000978946686,
+          "max_us": 73.59999418258667
+        },
+        "__arkdpsPackedCaptureRecord.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 89.10009264945984,
+          "max_us": 4.0000081062316895
+        },
+        "__arkdpsReplayBegin.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 190.89999794960022,
+          "max_us": 11.400014162063599
+        },
+        "__arkdpsPreparedHpObservation.leave": {
+          "calls": 4999,
+          "samples": 40,
+          "sampled_us": 371.599942445755,
+          "max_us": 21.099984645843506
+        },
+        "nativeIO.__nativeOwnedHpObservation.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 31.90019726753235,
+          "max_us": 2.3000240325927734
+        },
+        "HP.direct.leave.leave": {
+          "calls": 4999,
+          "samples": 40,
+          "sampled_us": 513.9001309871674,
+          "max_us": 20.799994468688965
+        },
+        "withCapturedMode.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 395.70000767707825,
+          "max_us": 16.60001277923584
+        },
+        "applyHpLeave.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 268.50011944770813,
+          "max_us": 11.900007724761963
+        },
+        "__arkdpsReplayEnd.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 58.30004811286926,
+          "max_us": 2.200007438659668
+        },
+        "__arkdpsOwnedGraphCheck.leave": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 1867.6999807357788,
+          "max_us": 1867.6999807357788
+        },
+        "nativeIO.__nativeOwnedGraphCheck.leave": {
+          "calls": 2,
+          "samples": 1,
+          "sampled_us": 179.49998378753662,
+          "max_us": 179.49998378753662
+        },
+        "time.leave": {
+          "calls": 2,
+          "samples": 1,
+          "sampled_us": 115.40001630783081,
+          "max_us": 115.40001630783081
+        },
+        "nativeIO.__nativeOwnedPoint.leave": {
+          "calls": 7,
+          "samples": 1,
+          "sampled_us": 86.99998259544373,
+          "max_us": 86.99998259544373
+        },
+        "nativeIO.__nativeOwnedRead.leave": {
+          "calls": 2,
+          "samples": 1,
+          "sampled_us": 1.699984073638916,
+          "max_us": 1.699984073638916
+        },
+        "nativeIO.__nativeOwnedScalar.leave": {
+          "calls": 5,
+          "samples": 1,
+          "sampled_us": 1.4999806880950928,
+          "max_us": 1.4999806880950928
+        },
+        "capturedNativeScopePoint.leave": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 640.2999758720398,
+          "max_us": 640.2999758720398
+        },
+        "__arkdpsOwnedGraphPrimitives.leave": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 196.5000033378601,
+          "max_us": 196.5000033378601
+        }
+      },
+      "dispatch_counters": {
+        "graph_format0": 1,
+        "graph_format1": 1,
+        "args_proxy": 0,
+        "direct_entry": 5000,
+        "direct_leave": 4999,
+        "hp_adopt_requests": 9999,
+        "hp_ordinary_requests": 1,
+        "fallback_reasons": {
+          "cold_or_publication": 1
+        }
+      },
+      "native_request_counts": {
+        "__nativeOwnedHpObservation": 10000,
+        "__nativeOwnedGraphCheck": 2,
+        "__nativeOwnedPoint": 7,
+        "__nativeOwnedRead": 2,
+        "__nativeOwnedScalar": 5
+      },
+      "js_profile": {
+        "scope_ms": 0.6394000053405762,
+        "scope_inside_pub_ms": 0.6394000053405762,
+        "prefix_ms": 6.284500002861023,
+        "journal_ms": 0.7874000072479248
+      },
+      "native_profile": {
+        "batch_calls": null,
+        "batch_output_bytes": null,
+        "byte_read_calls": null,
+        "capture_ms": 4.696100000000279,
+        "capture_read_bytes": 1281886,
+        "capture_read_count": 77238,
+        "cpp_io_counters_available": false,
+        "cpp_timing_enabled": true,
+        "edges": 10000,
+        "graph_calls": null,
+        "graph_check_calls": null,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": null,
+        "hook_point_calls": null,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": null,
+        "hp_observation_calls": null,
+        "missing_hook_calls": null,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": null,
+        "prepared_issue_attempts": 9999,
+        "prepared_packets": 9999,
+        "registered_plans": 0,
+        "scalar_calls": null,
+        "sealed_owner": true,
+        "selected_field_slots": null,
+        "view_initialize_ms": 3.4364000000002153
+      },
+      "branch": "unchanged",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 536.1786000132561,
+      "setters_per_second": 9325.250951597814,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {},
+      "business_events_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "sampled_functions": {
+        "native.prepareHp.outside": {
+          "calls": 9999,
+          "samples": 79,
+          "sampled_us": 238.29993605613708,
+          "max_us": 6.7999958992004395
+        },
+        "__arkdpsReplayDispatch.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 2202.7000784873962,
+          "max_us": 93.69999170303345
+        },
+        "__arkdpsPackedCaptureRecord.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 103.6999523639679,
+          "max_us": 4.200011491775513
+        },
+        "__arkdpsReplayBegin.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 183.09995532035828,
+          "max_us": 8.299976587295532
+        },
+        "__arkdpsPreparedHpObservation.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 402.90018916130066,
+          "max_us": 17.300009727478027
+        },
+        "nativeIO.__nativeOwnedHpObservation.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 34.90003943443298,
+          "max_us": 1.7000138759613037
+        },
+        "HP.direct.entry.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 975.9999811649323,
+          "max_us": 60.69999933242798
+        },
+        "withCapturedMode.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 843.4000611305237,
+          "max_us": 57.50000476837158
+        },
+        "applyHpEntry.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 672.89999127388,
+          "max_us": 52.39999294281006
+        },
+        "__arkdpsReplayEnd.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 65.3998851776123,
+          "max_us": 3.4999847412109375
+        },
+        "__arkdpsReplayDispatch.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 5268.600016832352,
+          "max_us": 213.29998970031738
+        },
+        "__arkdpsPackedCaptureRecord.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 103.799968957901,
+          "max_us": 7.299989461898804
+        },
+        "__arkdpsReplayBegin.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 179.50010299682617,
+          "max_us": 10.399997234344482
+        },
+        "__arkdpsPreparedHpObservation.leave": {
+          "calls": 4999,
+          "samples": 40,
+          "sampled_us": 386.3999843597412,
+          "max_us": 25.29999613761902
+        },
+        "nativeIO.__nativeOwnedHpObservation.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 34.50003266334534,
+          "max_us": 2.9999911785125732
+        },
+        "HP.direct.leave.leave": {
+          "calls": 4999,
+          "samples": 40,
+          "sampled_us": 4111.200004816055,
+          "max_us": 148.30002188682556
+        },
+        "withCapturedMode.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 3992.4000203609467,
+          "max_us": 142.0000195503235
+        },
+        "applyHpLeave.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 3848.79994392395,
+          "max_us": 134.799987077713
+        },
+        "enemyMaxHp.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 177.50006914138794,
+          "max_us": 6.400018930435181
+        },
+        "scope.adapter.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 2751.799911260605,
+          "max_us": 89.59999680519104
+        },
+        "__arkdpsOwnedGraphPrimitives.leave": {
+          "calls": 5001,
+          "samples": 40,
+          "sampled_us": 1162.699967622757,
+          "max_us": 38.80000114440918
+        },
+        "nativeIO.__nativeOwnedGraphCheck.leave": {
+          "calls": 5002,
+          "samples": 40,
+          "sampled_us": 312.9000663757324,
+          "max_us": 16.099989414215088
+        },
+        "nativeIO.__nativeOwnedPoint.leave": {
+          "calls": 5007,
+          "samples": 40,
+          "sampled_us": 35.69996356964111,
+          "max_us": 1.5000104904174805
+        },
+        "nativeIO.__nativeOwnedScalar.leave": {
+          "calls": 5005,
+          "samples": 40,
+          "sampled_us": 35.09998321533203,
+          "max_us": 1.5999972820281982
+        },
+        "recordEnemyHp.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 286.1001491546631,
+          "max_us": 11.000007390975952
+        },
+        "__arkdpsReplayEnd.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 68.29997897148132,
+          "max_us": 4.999995231628418
+        },
+        "__arkdpsOwnedGraphCheck.leave": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 168.30000281333923,
+          "max_us": 168.30000281333923
+        },
+        "time.leave": {
+          "calls": 2,
+          "samples": 1,
+          "sampled_us": 26.399999856948853,
+          "max_us": 26.399999856948853
+        },
+        "nativeIO.__nativeOwnedRead.leave": {
+          "calls": 2,
+          "samples": 1,
+          "sampled_us": 2.2999942302703857,
+          "max_us": 2.2999942302703857
+        },
+        "capturedNativeScopePoint.leave": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 76.90000534057617,
+          "max_us": 76.90000534057617
+        }
+      },
+      "dispatch_counters": {
+        "graph_format0": 1,
+        "graph_format1": 5001,
+        "args_proxy": 0,
+        "direct_entry": 5000,
+        "direct_leave": 4999,
+        "hp_adopt_requests": 9999,
+        "hp_ordinary_requests": 1,
+        "fallback_reasons": {
+          "cold_or_publication": 1
+        }
+      },
+      "native_request_counts": {
+        "__nativeOwnedHpObservation": 10000,
+        "__nativeOwnedGraphCheck": 5002,
+        "__nativeOwnedPoint": 5007,
+        "__nativeOwnedScalar": 5005,
+        "__nativeOwnedRead": 2
+      },
+      "js_profile": {
+        "scope_ms": 393.4121009707451,
+        "scope_inside_pub_ms": 0.07620000839233398,
+        "prefix_ms": 124.40659999847412,
+        "journal_ms": 101.01800000667572
+      },
+      "native_profile": {
+        "batch_calls": null,
+        "batch_output_bytes": null,
+        "byte_read_calls": null,
+        "capture_ms": 18.899899999999796,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "cpp_io_counters_available": false,
+        "cpp_timing_enabled": true,
+        "edges": 10000,
+        "graph_calls": null,
+        "graph_check_calls": null,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": null,
+        "hook_point_calls": null,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": null,
+        "hp_observation_calls": null,
+        "missing_hook_calls": null,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": null,
+        "prepared_issue_attempts": 9999,
+        "prepared_packets": 9999,
+        "registered_plans": 0,
+        "scalar_calls": null,
+        "sealed_owner": true,
+        "selected_field_slots": null,
+        "view_initialize_ms": 17.673000000000712
+      },
+      "branch": "changed_damage",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 1368.4764000177383,
+      "setters_per_second": 3653.6983757521793,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 5000,
+      "event_kinds": {
+        "enemy_hp": 5000
+      },
+      "business_events_sha256": "6e182b367ee0e8b2ea57cb894baac6500c0feb627e7d134a840046a8ca1c3c91"
+    },
+    {
+      "sampled_functions": {
+        "native.prepareHp.outside": {
+          "calls": 9999,
+          "samples": 79,
+          "sampled_us": 254.99996542930603,
+          "max_us": 9.299993515014648
+        },
+        "__arkdpsReplayDispatch.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 2297.100007534027,
+          "max_us": 131.90001249313354
+        },
+        "__arkdpsPackedCaptureRecord.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 119.50001120567322,
+          "max_us": 9.20000672340393
+        },
+        "__arkdpsReplayBegin.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 193.09985637664795,
+          "max_us": 12.199997901916504
+        },
+        "__arkdpsPreparedHpObservation.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 446.4000463485718,
+          "max_us": 26.8000066280365
+        },
+        "nativeIO.__nativeOwnedHpObservation.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 38.699984550476074,
+          "max_us": 2.9999911785125732
+        },
+        "HP.direct.entry.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 975.8001863956451,
+          "max_us": 54.10000681877136
+        },
+        "withCapturedMode.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 841.3999080657959,
+          "max_us": 47.49998450279236
+        },
+        "applyHpEntry.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 671.0998713970184,
+          "max_us": 38.80000114440918
+        },
+        "__arkdpsReplayEnd.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 70.30001282691956,
+          "max_us": 3.7000179290771484
+        },
+        "__arkdpsReplayDispatch.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 5598.200023174286,
+          "max_us": 236.60001158714294
+        },
+        "__arkdpsPackedCaptureRecord.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 105.2999496459961,
+          "max_us": 5.099982023239136
+        },
+        "__arkdpsReplayBegin.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 188.29989433288574,
+          "max_us": 8.699983358383179
+        },
+        "__arkdpsPreparedHpObservation.leave": {
+          "calls": 4999,
+          "samples": 40,
+          "sampled_us": 410.50010919570923,
+          "max_us": 19.09998059272766
+        },
+        "nativeIO.__nativeOwnedHpObservation.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 34.80008244514465,
+          "max_us": 1.8999874591827393
+        },
+        "HP.direct.leave.leave": {
+          "calls": 4999,
+          "samples": 40,
+          "sampled_us": 4369.799882173538,
+          "max_us": 184.70001220703125
+        },
+        "withCapturedMode.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 4240.200012922287,
+          "max_us": 179.49998378753662
+        },
+        "applyHpLeave.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 4094.600021839142,
+          "max_us": 172.00002074241638
+        },
+        "enemyMaxHp.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 186.49983406066895,
+          "max_us": 9.399980306625366
+        },
+        "scope.adapter.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 3084.499806165695,
+          "max_us": 124.30000305175781
+        },
+        "__arkdpsOwnedGraphPrimitives.leave": {
+          "calls": 5001,
+          "samples": 40,
+          "sampled_us": 1304.8999607563019,
+          "max_us": 75.59999823570251
+        },
+        "nativeIO.__nativeOwnedGraphCheck.leave": {
+          "calls": 5002,
+          "samples": 40,
+          "sampled_us": 333.1000506877899,
+          "max_us": 19.09998059272766
+        },
+        "nativeIO.__nativeOwnedPoint.leave": {
+          "calls": 5007,
+          "samples": 40,
+          "sampled_us": 37.79986500740051,
+          "max_us": 1.8999874591827393
+        },
+        "nativeIO.__nativeOwnedScalar.leave": {
+          "calls": 5005,
+          "samples": 40,
+          "sampled_us": 36.80002689361572,
+          "max_us": 1.900017261505127
+        },
+        "recordEnemyHp.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 165.399968624115,
+          "max_us": 14.099985361099243
+        },
+        "__arkdpsReplayEnd.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 87.8000557422638,
+          "max_us": 20.199984312057495
+        },
+        "__arkdpsOwnedGraphCheck.leave": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 222.30002284049988,
+          "max_us": 222.30002284049988
+        },
+        "time.leave": {
+          "calls": 2,
+          "samples": 1,
+          "sampled_us": 48.90000820159912,
+          "max_us": 48.90000820159912
+        },
+        "nativeIO.__nativeOwnedRead.leave": {
+          "calls": 2,
+          "samples": 1,
+          "sampled_us": 3.899991512298584,
+          "max_us": 3.899991512298584
+        },
+        "capturedNativeScopePoint.leave": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 91.39999747276306,
+          "max_us": 91.39999747276306
+        }
+      },
+      "dispatch_counters": {
+        "graph_format0": 1,
+        "graph_format1": 5001,
+        "args_proxy": 0,
+        "direct_entry": 5000,
+        "direct_leave": 4999,
+        "hp_adopt_requests": 9999,
+        "hp_ordinary_requests": 1,
+        "fallback_reasons": {
+          "cold_or_publication": 1
+        }
+      },
+      "native_request_counts": {
+        "__nativeOwnedHpObservation": 10000,
+        "__nativeOwnedGraphCheck": 5002,
+        "__nativeOwnedPoint": 5007,
+        "__nativeOwnedScalar": 5005,
+        "__nativeOwnedRead": 2
+      },
+      "js_profile": {
+        "scope_ms": 354.2739988267422,
+        "scope_inside_pub_ms": 0.09059998393058777,
+        "prefix_ms": 5.974799990653992,
+        "journal_ms": 0.9758000075817108
+      },
+      "native_profile": {
+        "batch_calls": null,
+        "batch_output_bytes": null,
+        "byte_read_calls": null,
+        "capture_ms": 18.473400000000723,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "cpp_io_counters_available": false,
+        "cpp_timing_enabled": true,
+        "edges": 10000,
+        "graph_calls": null,
+        "graph_check_calls": null,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": null,
+        "hook_point_calls": null,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": null,
+        "hp_observation_calls": null,
+        "missing_hook_calls": null,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": null,
+        "prepared_issue_attempts": 9999,
+        "prepared_packets": 9999,
+        "registered_plans": 0,
+        "scalar_calls": null,
+        "sealed_owner": true,
+        "selected_field_slots": null,
+        "view_initialize_ms": 17.360200000000724
+      },
+      "branch": "heal_coalesced",
+      "setters": 5000,
+      "dirty": 0,
+      "elapsed_ms": 1093.0913000106812,
+      "setters_per_second": 4574.183327551086,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      },
+      "business_events_sha256": "bdfc93a2385bf11758f92c8bad8f5053c436b95f4688fd5ef70fddc61fd9411d"
+    },
+    {
+      "sampled_functions": {
+        "native.prepareHp.outside": {
+          "calls": 9999,
+          "samples": 79,
+          "sampled_us": 251.80011987686157,
+          "max_us": 8.90001654624939
+        },
+        "__arkdpsReplayDispatch.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 2236.999958753586,
+          "max_us": 101.09999775886536
+        },
+        "__arkdpsPackedCaptureRecord.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 110.79996824264526,
+          "max_us": 5.199998617172241
+        },
+        "__arkdpsReplayBegin.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 193.69995594024658,
+          "max_us": 8.499979972839355
+        },
+        "__arkdpsPreparedHpObservation.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 427.90016531944275,
+          "max_us": 19.600003957748413
+        },
+        "nativeIO.__nativeOwnedHpObservation.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 38.29997777938843,
+          "max_us": 2.0999908447265625
+        },
+        "HP.direct.entry.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 943.9001083374023,
+          "max_us": 42.50001907348633
+        },
+        "withCapturedMode.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 816.8001174926758,
+          "max_us": 36.400020122528076
+        },
+        "applyHpEntry.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 640.9999430179596,
+          "max_us": 29.100000858306885
+        },
+        "__arkdpsReplayEnd.entry": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 67.999929189682,
+          "max_us": 3.1999945640563965
+        },
+        "applyHpEntry.outside": {
+          "calls": 50,
+          "samples": 1,
+          "sampled_us": 6.099998950958252,
+          "max_us": 6.099998950958252
+        },
+        "applyHpLeave.outside": {
+          "calls": 50,
+          "samples": 1,
+          "sampled_us": 0.6000101566314697,
+          "max_us": 0.6000101566314697
+        },
+        "__arkdpsReplayDispatch.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 5484.200060367584,
+          "max_us": 226.59999132156372
+        },
+        "__arkdpsPackedCaptureRecord.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 103.90007495880127,
+          "max_us": 5.199998617172241
+        },
+        "__arkdpsReplayBegin.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 181.10007047653198,
+          "max_us": 7.800012826919556
+        },
+        "__arkdpsPreparedHpObservation.leave": {
+          "calls": 4999,
+          "samples": 40,
+          "sampled_us": 420.10003328323364,
+          "max_us": 24.100005626678467
+        },
+        "nativeIO.__nativeOwnedHpObservation.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 38.29997777938843,
+          "max_us": 2.9000043869018555
+        },
+        "HP.direct.leave.leave": {
+          "calls": 4999,
+          "samples": 40,
+          "sampled_us": 4268.800109624863,
+          "max_us": 173.7000048160553
+        },
+        "withCapturedMode.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 4137.100011110306,
+          "max_us": 166.60001873970032
+        },
+        "applyHpLeave.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 3994.1000938415527,
+          "max_us": 161.79999709129333
+        },
+        "enemyMaxHp.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 184.4000220298767,
+          "max_us": 8.200019598007202
+        },
+        "scope.adapter.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 3001.7998814582825,
+          "max_us": 125.49999356269836
+        },
+        "__arkdpsOwnedGraphPrimitives.leave": {
+          "calls": 5001,
+          "samples": 40,
+          "sampled_us": 1264.6000981330872,
+          "max_us": 55.599987506866455
+        },
+        "nativeIO.__nativeOwnedGraphCheck.leave": {
+          "calls": 5002,
+          "samples": 40,
+          "sampled_us": 332.09994435310364,
+          "max_us": 17.59999990463257
+        },
+        "nativeIO.__nativeOwnedPoint.leave": {
+          "calls": 5007,
+          "samples": 40,
+          "sampled_us": 38.300126791000366,
+          "max_us": 2.0000040531158447
+        },
+        "nativeIO.__nativeOwnedScalar.leave": {
+          "calls": 5005,
+          "samples": 40,
+          "sampled_us": 38.79991173744202,
+          "max_us": 2.1999776363372803
+        },
+        "recordEnemyHp.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 173.40001463890076,
+          "max_us": 12.60000467300415
+        },
+        "__arkdpsReplayEnd.leave": {
+          "calls": 5000,
+          "samples": 40,
+          "sampled_us": 81.19994401931763,
+          "max_us": 6.500005722045898
+        },
+        "__arkdpsOwnedGraphCheck.leave": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 177.30000615119934,
+          "max_us": 177.30000615119934
+        },
+        "time.leave": {
+          "calls": 2,
+          "samples": 1,
+          "sampled_us": 28.99998426437378,
+          "max_us": 28.99998426437378
+        },
+        "nativeIO.__nativeOwnedRead.leave": {
+          "calls": 2,
+          "samples": 1,
+          "sampled_us": 1.8000006675720215,
+          "max_us": 1.8000006675720215
+        },
+        "capturedNativeScopePoint.leave": {
+          "calls": 1,
+          "samples": 1,
+          "sampled_us": 85.09999513626099,
+          "max_us": 85.09999513626099
+        }
+      },
+      "dispatch_counters": {
+        "graph_format0": 1,
+        "graph_format1": 5001,
+        "args_proxy": 0,
+        "direct_entry": 5000,
+        "direct_leave": 4999,
+        "hp_adopt_requests": 9999,
+        "hp_ordinary_requests": 1,
+        "fallback_reasons": {
+          "cold_or_publication": 1
+        }
+      },
+      "native_request_counts": {
+        "__nativeOwnedHpObservation": 10000,
+        "__nativeOwnedGraphCheck": 5002,
+        "__nativeOwnedPoint": 5007,
+        "__nativeOwnedScalar": 5005,
+        "__nativeOwnedRead": 2
+      },
+      "js_profile": {
+        "scope_ms": 363.6937012076378,
+        "scope_inside_pub_ms": 0.08449998497962952,
+        "prefix_ms": 7.890199989080429,
+        "journal_ms": 3.1919000148773193
+      },
+      "native_profile": {
+        "batch_calls": null,
+        "batch_output_bytes": null,
+        "byte_read_calls": null,
+        "capture_ms": 18.190700000000543,
+        "capture_read_bytes": 7480646,
+        "capture_read_count": 497154,
+        "cpp_io_counters_available": false,
+        "cpp_timing_enabled": true,
+        "edges": 10000,
+        "graph_calls": null,
+        "graph_check_calls": null,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": null,
+        "hook_point_calls": null,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": null,
+        "hp_observation_calls": null,
+        "missing_hook_calls": null,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": null,
+        "prepared_issue_attempts": 9999,
+        "prepared_packets": 9999,
+        "registered_plans": 0,
+        "scalar_calls": null,
+        "sealed_owner": true,
+        "selected_field_slots": null,
+        "view_initialize_ms": 17.296800000000673
+      },
+      "branch": "maxhp_dirty",
+      "setters": 5000,
+      "dirty": 50,
+      "elapsed_ms": 1094.928600013256,
+      "setters_per_second": 4566.507806937791,
+      "publication_count": 1,
+      "scope_stamps": 5000,
+      "sequence_delta": 101,
+      "event_kinds": {
+        "enemy_hp": 101
+      },
+      "business_events_sha256": "b1265df76058d4f3be0edc2c185e95b250001f5eaa61d751b2db36df07b56e9b"
+    }
+  ],
+  "command": [
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-production-hp-throughput\\runtime\\direct-hp-d-validation\\run\\production-hp.exe",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\flat-scope-validation\\profile\\sampled-phase-correct.js",
+    "--direct-hp",
+    "--sample-functions"
+  ],
+  "provenance": {
+    "binary_sha256": "4bffb2f0eaebdcdd847af7dd19ac1bcb3460df4ffb874eddafbb2728e396f9ab",
+    "executed_script_sha256": "15f83781cdec805d347c1d38d9442dc450b5270822a55ca5cc66f1ef6dba1154",
+    "unmodified_source_files": {
+      "event_probe_autochess.js": "3ee8014bb1de459c1a312327326bd238924fa1d92ebb92d1f59fb19207fb7b89",
+      "event_probe_native_pc.js": "b8280ed762527a85f5241f81b2f6dba9c21441406b1c4ff2812cf38c90a77c37",
+      "event_probe_runtime.js": "035f8f2a39bcba53236d296f5c5687aa17cc1b45af45b4cf4108e31f2e4238f4",
+      "native_pc\\native_event_runtime\\bridge.js": "fbf6377c3a1fd0b851881a0fe4c2759c0d21bbaa309140fe709862f1ab732cad",
+      "native_pc\\native_event_runtime\\build.py": "59afa0e78989b1524557e5bde041515a552f831f5e9f58517c2f26fa06c14779",
+      "native_pc\\native_event_runtime\\capture_queue.h": "03b7bd11dfadd15976065ee109c70d26d71d9d8ee99811e488cd08c56f601fb2",
+      "native_pc\\native_event_runtime\\capture_spill_pool.h": "be99e87c159fe7dcd382b8f6fa020e614687e3b56901f47a110d8bada3b177e4",
+      "native_pc\\native_event_runtime\\cold_plan.js": "b9819936b72aa4fa422e477486a642220acf165cd3676fd2e42aa3979b87991c",
+      "native_pc\\native_event_runtime\\engine.cpp": "3d331ff64a7941f8f698576c87bf43383d51b2ce3c28dc064ab314b633bd2369",
+      "native_pc\\native_event_runtime\\engine.h": "faf029c9e14b76075678dc4ad558e8d2a7489f1e3ca901ee69d717bdb5ba056a",
+      "native_pc\\native_event_runtime\\engine_capture_config.h": "865f43a477d356bb31565daee8c241f092269240744593d0290df1ec6ce1379c",
+      "native_pc\\native_event_runtime\\engine_capture_lane.h": "d0f68f0733c3456cf9ca7090c5ffc43c9fa959fdf2283fd4e6e7642f1b0ba9a3",
+      "native_pc\\native_event_runtime\\engine_capture_pipeline.h": "fedc71be3a1ed10fa818d4e9f4d01dcf14c5c8effe773c49a586b9e939e9b891",
+      "native_pc\\native_event_runtime\\engine_capture_plan.h": "e70280594cb541e8e5aa529a57aaed14391c03ee7aa1faf491704e699df9fe67",
+      "native_pc\\native_event_runtime\\engine_capture_timing.h": "7bf5360fa15ea46c148aaf94dcf3058ee7287ca802f99480e872bd4f51fc73a1",
+      "native_pc\\native_event_runtime\\engine_terminal_fence.h": "a20ea172703f0483a73d065d417f40684e6ad809a2e4e4d07565317fbc8296d3",
+      "native_pc\\native_event_runtime\\engine_worker.h": "648cd3b9c3071b7211ad7a30f2f5867eefc2223338603c8fcd01a6f1b468aedd",
+      "native_pc\\native_event_runtime\\hooks.S": "52ab92dc1ee071ba30de591f467aba19a6ea35c3325c2ceda877ea8540b34690",
+      "native_pc\\native_event_runtime\\native_capture.cpp": "c714fb232d5a3661ac6a5b587d31c0d2870f7fb39fe540afff92167a3b179b2a",
+      "native_pc\\native_event_runtime\\native_capture.h": "d787bda15d26afea7ef605def24fbc6bcad0e2c04391fbaccf65570cd0d9db2a",
+      "native_pc\\native_event_runtime\\owned_replay_js.h": "050244e99e47f3e3d5f8d1a3d8d7e6b6fcbffdf3f627af7775e9e50a5ae39e12",
+      "native_pc\\native_event_runtime\\owned_replay_view.h": "13f993309f0d1c3890d69683a18ea6537c5142f256703ce26fa23a73b1b5df59",
+      "native_pc\\native_event_runtime\\owned_role_index.h": "507ed4e8fd1fb8d5eaa4ba8ac9bb7143405df7240f6eda577e6fc8081ea49fd4",
+      "native_pc\\native_event_runtime\\publication.js": "65c27e8a8d9197c686c3f97322b06d2923fb7172c2328d4d3f1153d42787cb29",
+      "native_pc\\native_event_runtime\\server.cpp": "7184d6a196779a481ee86fc144dd7cd5722f07d1f8109ac8c20355829c02e912",
+      "native_pc\\native_event_runtime\\smoke.py": "e0ea963152f7abc98f2d4ab0546e8063859738d5d20179c7baa8cc5a3acb248e",
+      "native_pc\\native_event_runtime\\test_build.py": "29c8b65eb68ca4d32ce9b97d1f6d46e661de869098d203129b566fb277edfc25"
+    },
+    "instrumentation": "Runtime wrappers of actual functions, independent entry/leave counters, 1/128 inclusive; includes nested wrapper overhead"
+  }
+}

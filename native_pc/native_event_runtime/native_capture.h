@@ -1,0 +1,145 @@
+#pragma once
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace arkdps::capture {
+static_assert(sizeof(std::uintptr_t) == 8, "capture plans require the verified 64-bit ABI");
+constexpr std::size_t max_fields = 8192, max_depth = 12, max_segments = 16384, max_bytes = 1048576;
+constexpr std::size_t max_roots = 16, max_string_units = 200, max_guards = 4096, max_reads = 65536;
+constexpr std::size_t max_array_elements = 128, max_element_bytes = 128;
+constexpr std::size_t max_projection_nodes = 128, max_projection_visits = 256, max_projection_depth = 24;
+constexpr std::uint16_t dynamic_field_id_begin = 32768;
+constexpr std::size_t field_key_slots = max_fields * 2;
+static_assert((field_key_slots & (field_key_slots - 1)) == 0, "field key table must be a power of two");
+enum class Phase : std::uint8_t { entry, leave, checkpoint };
+enum class Root : std::uint8_t { arg, entry_ref, parent_ref, global_slot, return_value, checkpoint_ref, absolute };
+enum class Kind : std::uint8_t { bytes, utf16, counted_bytes, utf16_array, projection_tree };
+enum class ProjectionKind : std::uint8_t { object, utf16, array };
+constexpr std::size_t max_class_set_entries = 65536;
+enum class TypeGate : std::uint8_t { none, exact, ancestor, class_set };
+// Fixed metadata layout only: no callbacks, predicates, owner inference or arbitrary bytecode.
+struct ProjectionNode {
+    ProjectionKind kind = ProjectionKind::object;
+    std::uint8_t depth = 0;
+    std::array<std::uint32_t, max_depth> pointer_offsets{};
+    std::uint32_t offset = 0;
+    std::uint16_t bytes = 0, child_begin = 0, child_count = 0, max_visits = 1;
+    TypeGate gate = TypeGate::none;
+    std::uintptr_t expected_class = 0;
+    std::uint8_t ancestry_depth = 0;
+    std::uint32_t class_set_begin = 0, class_set_count = 0;
+    bool allow_null = false;
+    std::uint16_t max_units = 0;
+    std::uint32_t count_offset = 0, items_offset = 0, data_offset = 0;
+    std::uint16_t element_bytes = 0, max_count = 0;
+    // Dictionary tombstones: retain/guard the slot, but never dereference its stale children.
+    std::int16_t skip_negative_i32_offset = -1;
+    bool local_fail_boundary = false;
+    std::int32_t parent_byte_offset = -1;
+    std::uint8_t parent_byte_value = 1;
+};
+enum class Guard : std::uint8_t { none, before, after, member };
+enum class Error : std::uint8_t {
+    ok, invalid_plan, invalid_phase, bounds, missing_root, field_unreadable,
+    class_mismatch, invalid_length, changed_guard, missing_plan_field, ambiguous_read
+};
+struct Field {
+    std::uint16_t id = 0, role = 0;
+    Phase phase = Phase::entry;
+    Root root = Root::arg;
+    std::uint8_t root_index = 0, depth = 0;
+    std::array<std::uint32_t, max_depth> pointer_offsets{};
+    std::uintptr_t absolute_address = 0;
+    std::uint32_t offset = 0, bytes = 0;
+    Kind kind = Kind::bytes;
+    std::uint16_t max_units = 0;
+    std::uintptr_t expected_class = 0;
+    std::uint16_t count_field_id = 0, element_bytes = 0, max_count = 0, element_pointer_offset = 0;
+    bool stop_at_dynamic = false;
+    std::uint16_t projection_root = 0;
+    std::uint16_t guard_id = 0;
+    Guard guard = Guard::none;
+    bool required = true;
+};
+struct HookCapturePlan {
+    std::uint16_t schema_version = 1, field_count = 0;
+    std::uint32_t max_bytes = 0, max_reads = 0;
+    std::uint16_t arg_mask = 0;
+    std::uint8_t arg_count = 0;
+    std::array<Field, max_fields> fields{};
+    std::uint16_t projection_count = 0;
+    std::array<ProjectionNode, max_projection_nodes> projections{};
+    // Installation-owned immutable metadata. Never resized by capture.
+    std::vector<std::uintptr_t> class_set_entries;
+};
+struct Context {
+    std::array<std::uintptr_t, max_roots> args{}, entry_refs{}, parent_refs{}, globals{}, checkpoint_refs{};
+    std::uint16_t args_valid = 0, entry_valid = 0, parent_valid = 0, globals_valid = 0, checkpoint_valid = 0;
+    std::uintptr_t return_value = 0;
+    bool return_valid = false;
+    std::uint64_t invocation_id = 0, parent_invocation_id = 0;
+    std::uint32_t checkpoint = 0;
+};
+struct Segment {
+    std::uintptr_t address = 0;
+    std::uint16_t field_id = 0, role = 0;
+    std::uint32_t offset = 0, size = 0;
+    std::uint16_t guard_id = 0;
+    std::uint32_t checkpoint = 0;
+};
+struct FieldState {
+    std::uint16_t id = 0, role = 0;
+    Error error = Error::missing_plan_field;
+    std::uint16_t final_segment = 0xffff;
+    std::uintptr_t attempted_address = 0;
+    std::uint32_t attempted_size = 0;
+    std::uint32_t checkpoint = 0;
+    std::uint16_t segment_begin = 0, segment_end = 0, guard_id = 0;
+    Guard guard = Guard::none;
+    bool required = true;
+};
+struct GuardState {
+    std::uint16_t before = 0xffff, after = 0xffff;
+};
+// Owned, trivially copyable record. Addresses are labels, never delayed read permissions.
+struct Snapshot {
+    std::uint64_t invocation_id = 0, parent_invocation_id = 0;
+    std::uint32_t checkpoint = 0;
+    Phase phase = Phase::entry;
+    std::uint16_t segment_count = 0, field_count = 0;
+    std::uint32_t byte_count = 0;
+    std::uint32_t read_count = 0, read_bytes = 0; // Attempted native reads/bytes, including failed reads.
+    Error error = Error::ok;
+    std::uint32_t byte_budget = 0, read_budget = 0;
+    bool session_open = false, finalized = false;
+    std::uint16_t guard_count = 0;
+    std::array<bool, max_guards> guard_valid{}, guard_seen{};
+    std::array<std::uint16_t, max_guards> guard_ids{};
+    std::array<GuardState, max_guards> guards{};
+    std::uint16_t field_key_count = 0, next_dynamic_field_id = dynamic_field_id_begin;
+    std::uint32_t field_key_probes = 0;
+    std::array<std::uint64_t, field_key_slots> field_keys{};
+    std::array<std::uint16_t, max_fields> used_key_slots{};
+    std::array<Segment, max_segments> segments{};
+    std::array<FieldState, max_fields> fields{};
+    std::array<std::byte, max_bytes> bytes{};
+};
+using ReadMemory = bool (*)(void*, std::uintptr_t, void*, std::size_t) noexcept;
+
+// Initialization-time validation. No parser, native calls or arbitrary executable predicates.
+Error validate_plan(const HookCapturePlan&) noexcept;
+// Callback-time capture of an initialization-validated immutable plan.
+// No heap, locks, exceptions, JS, queue waits or borrowed storage.
+Error capture(const HookCapturePlan&, Phase, const Context&, ReadMemory, void*, Snapshot&) noexcept;
+// One raw record may append independently labelled parent/context snapshots.
+// All appends share budgets; outer guard pairs can bracket other plan slices.
+Error capture_begin(Snapshot&, Phase, const Context&, std::uint32_t byte_budget, std::uint32_t read_budget) noexcept;
+Error capture_append(const HookCapturePlan&, Phase, const Context&, ReadMemory, void*, Snapshot&,
+                     std::uint16_t field_begin = 0, std::uint16_t field_end = 0xffff) noexcept;
+Error capture_finalize(Snapshot&) noexcept;
+// Worker-only immutable read. Missing/invalid/ambiguous evidence is a hard error, never a live read.
+Error read_snapshot(const Snapshot&, std::uint16_t role, std::uint32_t checkpoint,
+                    std::uint16_t field_id, std::uintptr_t address, void*, std::size_t) noexcept;
+}

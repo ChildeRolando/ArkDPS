@@ -13,6 +13,7 @@ from hashlib import sha256
 import json
 import os
 from pathlib import Path, PurePosixPath
+from metrics import timed, sanitize_native_async_capture, NATIVE_CAPTURE_RETRY_REASONS
 import re
 import secrets
 from threading import Lock
@@ -23,7 +24,7 @@ from event_observer import ObserverStatus
 from event_probe import (NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry, AssembledProbeSource,
                          assemble_probe_source, ready_probe_modes, acquire_native_terminal_tail,
                          reset_probe_cursor, commit_probe_prefix, check_round_start_range, read_probe_range,
-                         request_capture_pause,
+                         request_capture_pause, check_cursor_lifetime,
                          finite_message_number as _finite_number,
                          reject_message_constant as _reject_constant,
                          unique_message_fields as _unique_fields)
@@ -32,10 +33,74 @@ from native_pc import probe_native_pc as access
 from native_pc.windows_dll_loader import WindowsDllLoader
 
 
+# The wire diagnostic is reconstructed by server.cpp from this finite vocabulary.
+# Never retain an arbitrary exception substring in normal capture logs.
+SAMPLING_FAILURE_REASONS = {'sampling plan requires independent clock roots and cold fallback': 'plan_contract',
+ 'sampling clock bracket is not independent and paired': 'clock_contract',
+ 'invalid sampling capture plan': 'invalid_plan',
+ 'sampling checkpoint serial exhausted': 'serial_exhausted',
+ 'sampling owned view rejected structural capture': 'owned_view_structure',
+ 'sampling checkpoint violated owned boundary': 'owned_boundary',
+ 'sampling publication failed': 'publication_failed',
+ 'sampling publication certificate mismatch': 'publication_certificate_mismatch',
+ 'invalid sampling transaction operation': 'invalid_transaction',
+ 'invalid sample request identity': 'invalid_request_identity',
+ 'sample request no longer active': 'request_inactive',
+ 'sample request transaction binding changed': 'transaction_binding_changed',
+ 'sample request identity exhausted': 'request_identity_exhausted',
+ 'native sampling capture plan changed during setup': 'plan_changed_during_setup',
+ 'sampling checkpoint lacks native authority': 'checkpoint_authority',
+ 'invalid sampling checkpoint': 'invalid_checkpoint',
+ 'sampling publication lacks native authority': 'publication_authority'}
+
+
+def sampling_failure_diagnostic(message):
+    match = re.fullmatch(
+        r'native runtime (?:mark|read|ack|terminal_read|initialize|request) failed; '
+        r'error_type=(?:std::exception|Error|InternalError|TypeError|ReferenceError|RangeError|SyntaxError); ([^\r\n]+)',
+        message)
+    if match is None:
+        return {}
+    detail = match[1]
+    parts = detail.split('; ')
+    values = {}
+    if parts[0].startswith('native_sampling_failure:'):
+        stage = re.fullmatch(r'native_sampling_failure:v1,s=([1-7]),c=(0|[1-9]|[12][0-9]|3[0-2]),j=(0|[1-5][0-9]{2})', parts.pop(0))
+        if stage is None:
+            return {}
+        values.update(sampling_failure_reason='native_stage_failure', sampling_stage=int(stage[1]),
+                      sampling_lane_fault=int(stage[2]), sampling_json_exception_id=int(stage[3]))
+    if parts and parts[0].startswith('native_sampling_gap:'):
+        gap = re.fullmatch(r'native_sampling_gap:v1,t=(0|[1-9][0-9]{0,19}),r=(0|[1-9][0-9]{0,4}),'
+            r'p=(0|[1-9][0-9]{0,4}),f=(-1|0|[1-9][0-9]{0,4}),g=([1-9]|1[0-6]),m=(0|[1-9][0-9]{0,6}),'
+            r'k=((?:0|[1-9]|[12][0-9]|3[01])(?:\.(?:0|[1-9]|[12][0-9]|3[01])){0,15}),'
+            r'q=(0|[12]:[0-9]{1,6}(?:\.[12]:[0-9]{1,6}){0,2})', parts.pop(0))
+        if gap is None or int(gap[1]) > 2**64-1 or any(int(gap[i]) > 65535 for i in (2, 3, 4)) or int(gap[6]) > 1048576:
+            return {}
+        values.update(code='native_sampling_gap', replay_ticket=int(gap[1]), replay_role_id=int(gap[2]),
+            replay_checkpoint=int(gap[3]), replay_field_id=int(gap[4]), replay_gap_count=int(gap[5]),
+            metadata_read_size=int(gap[6]), replay_reason_codes=gap[7], replay_script_lines=gap[8])
+        values.setdefault('sampling_failure_reason', 'owned_boundary')
+    if values:
+        return values if not parts else {}
+    reason = SAMPLING_FAILURE_REASONS.get(detail)
+    if reason is not None:
+        return dict(sampling_failure_reason=reason)
+    structural = re.fullmatch(r'sampling structural capture error: (0|[1-9]|10)', detail)
+    if structural is not None:
+        return dict(sampling_failure_reason='structural_capture_error',
+                    sampling_capture_error_code=int(structural[1]))
+    return {}
+
+
 DLL_NAME = 'ArkDPS.NativeEvents.dll'
 PROVIDER = 'arkdps-native-hooks'
 PROTOCOL = 1
-RUNTIME_SOURCES = ('engine.cpp', 'engine.h', 'server.cpp', 'hooks.S', 'bridge.js', 'build.py')
+RUNTIME_SOURCES = ('engine.cpp', 'engine.h', 'engine_worker.h', 'engine_capture_lane.h',
+                   'engine_capture_plan.h', 'engine_capture_config.h', 'engine_capture_pipeline.h', 'engine_terminal_fence.h', 'engine_capture_timing.h',
+                   'capture_queue.h', 'capture_spill_pool.h', 'native_capture.cpp', 'native_capture.h',
+                   'owned_replay_view.h', 'owned_replay_js.h', 'owned_role_index.h',
+                   'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'cold_plan.js', 'build.py')
 NATIVE_HOOK_LICENSES = {
     'quickjs-LICENSE': '598fd7fc928e4350abce36e337ba5a1346923c5c692f5be92c3d8e29ddd7c18d',
     'minhook-LICENSE.txt': 'd5c2224982b0b95a16b098a561335fa93f3eaf4d0aa964b7843edb986df78dc8',
@@ -64,7 +129,7 @@ NATIVE_HOOK_REQUIRED_SOURCES = (
     'native_pc/native_hook_runtime.py', 'native_pc/windows_dll_loader.py',
     'native_pc/probe_native_pc.py', 'native_pc/probe_native_pc_battle.py',
     'native_pc/probe_native_pc_rows.py',
-    'event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js',
+    'event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js', 'event_probe_store.js',
 )
 _SHA256 = re.compile(r'[0-9a-f]{64}')
 
@@ -725,12 +790,67 @@ class NativeHookEventProbe:
         reset_probe_cursor(self)
         self._autochess_enabled = None
         self._timing_sink = self._timing_enabled = None
+        self._performance_sink = None
+        self._performance_enabled = lambda: False
+        self._performance_next_snapshot = 0.0
+        self._native_timing_may_be_enabled = False
+        self._native_timing_confirmed = False
+        self._publication_token = None
+        self._sampling_supported = False
+        self._sampling_scheduler_supported = False
+        self._configured_options = None
+        self._terminal_sample_request = None
+        self._sample_request = None
+        self._sample_options = None
+        self._sampling_anchor = None
+        self._pressure_since = None
+        self._pressure_next = 0.0
+        self._pressure_reported = False
+        self._capture_status_next = 0.0
 
     def set_request_timing_audit(self, sink=None, *, enabled=None):
         self._timing_sink, self._timing_enabled = sink, enabled
 
+    def set_performance_diagnostics(self, sink=None, *, enabled=None):
+        self._performance_sink = sink
+        self._performance_enabled = enabled or (lambda: False)
+
     def set_autochess_setting(self, enabled):
         self._autochess_enabled = enabled
+
+    def _audit_capture_pressure(self, result):
+        # Counts already travel with each reply. This does not enable callback
+        # timers, issue extra requests, or enter the statistics stream.
+        if self._timing_sink is None or not isinstance(result.get('native_async_capture'), dict):
+            return
+        now = time.perf_counter()
+        pending = result.get('retry') is True
+        if pending:
+            if self._pressure_since is None:
+                self._pressure_since = now
+            if now - self._pressure_since < 2.0 or now < self._pressure_next:
+                return
+        else:
+            self._pressure_since = None
+            if not self._pressure_reported and now < self._capture_status_next:
+                return
+        reason = result.get('mark_retry_reason') if pending else 'none'
+        if type(reason) is not str or reason not in NATIVE_CAPTURE_RETRY_REASONS:
+            reason = 'other'
+        try:
+            self._timing_sink('native_capture_pressure', dict(
+                schema=1, source='native_runtime',
+                phase='pending' if pending else 'recovered' if self._pressure_reported else 'steady',
+                reason=reason, utc=datetime.now(timezone.utc).isoformat(),
+                async_capture=sanitize_native_async_capture(result['native_async_capture'],
+                    identity=self._owned_process_instance)))
+        except Exception:
+            pass  # Diagnostic failures cannot change native delivery or ACK.
+        self._pressure_next = now + 1.0
+        self._pressure_reported = pending
+        if not pending:
+            self._pressure_since = None
+            self._capture_status_next = now + 5.0
 
     def start(self):
         if self.status != ObserverStatus.STOPPED or self._attempted:
@@ -799,6 +919,13 @@ class NativeHookEventProbe:
                 raise RuntimeError('ArkPie 实时组件握手或架构不匹配')
             if not process.process_alive():
                 raise RuntimeError('游戏进程在原生组件初始化期间退出')
+            sampling_version = hello['ready'].get('native_sampling_version')
+            self._sampling_supported = type(sampling_version) is int and sampling_version == 1
+            scheduler = hello.get('native_mark_scheduler_version')
+            self._sampling_scheduler_supported = type(scheduler) is int and scheduler == 1
+            if self._sampling_scheduler_supported and (not self._sampling_supported
+                    or type(hello.get('mode_control_version')) is not int or hello['mode_control_version'] != 1):
+                raise RuntimeError('native sampling scheduler lacks mode control capability')
             if self._autochess_enabled is not None:
                 options = self._mark_options()
                 if type(options['autochess_enabled']) is not bool:
@@ -806,9 +933,13 @@ class NativeHookEventProbe:
                 # The bridge applies the preference before trying to acquire a
                 # watermark. A retry (e.g. no battle in the lobby) is harmless:
                 # this is only a control request, never a baseline, read or ACK.
-                initial = self._pipe.request('mark', timeout=self.request_timeout, **options)
+                initial = self._pipe.request('configure_mode' if self._sampling_scheduler_supported else 'mark',
+                                             timeout=self.request_timeout, **options)
                 if initial.get('error') or initial.get('stopped'):
                     raise RuntimeError(initial.get('error') or 'native observer stopped before applying preferences')
+                if self._sampling_scheduler_supported:
+                    self._validate_mode_control(initial, options)
+                    self._configured_options = tuple(sorted(options.items()))
                 if not process.process_alive():
                     raise RuntimeError('游戏进程在原生组件偏好初始化期间退出')
             self.probe_modes = ready_probe_modes(hello['ready'])
@@ -832,11 +963,24 @@ class NativeHookEventProbe:
                 pass  # Keep failed resources and cleanup_errors for retry.
             raise
 
+    @timed('native_transport')
     def _raw_request(self, operation, *, timeout=None, **arguments):
         if self.status != ObserverStatus.READY or self._pipe is None:
             raise RuntimeError(self.error or 'native hook observer is not ready')
         if not self.collector.process.process_alive():
             raise RuntimeError('游戏进程已退出')
+        report_timing = False
+        if operation == 'mark':
+            enabled = bool(self._performance_enabled())
+            if enabled or self._native_timing_may_be_enabled:
+                now = time.perf_counter() if enabled else 0.0
+                report_timing = enabled and now >= self._performance_next_snapshot
+                if report_timing:
+                    self._performance_next_snapshot = now + 1.0
+                if report_timing or not enabled or not self._native_timing_confirmed:
+                    arguments['native_timing'] = dict(version=1, enabled=enabled, snapshot=report_timing)
+                # Retain this until a matching disable ACK, including lost replies.
+                self._native_timing_may_be_enabled |= enabled
         try:
             result = self._pipe.request(operation,
                 timeout=self.request_timeout if timeout is None else timeout, **arguments)
@@ -858,15 +1002,90 @@ class NativeHookEventProbe:
                                           response_limit=int(oversized[2]))
                         if oversized[3] is not None:
                             diagnostic['requested_event_count'] = int(oversized[3])
+                    diagnostic.update(sampling_failure_diagnostic(str(exc)))
+                    capture_failure = re.search(
+                        r'(?:^|; )native capture failed: code=([0-9])$', str(exc))
+                    if capture_failure:
+                        diagnostic.update(code='native_capture_failed',
+                                          native_failure_code=int(capture_failure[1]))
+                    replay_gap = re.search(
+                        r'(?:^|; )native_replay_gap:v1,h=([0-9]{1,5}),e=([01]),t=([0-9]{1,20}),'
+                        r'r=([0-9]{1,5}),p=([0-9]{1,5}),f=(-1|[0-9]{1,5}),g=([0-9]{1,2}),'
+                        r'm=([0-9]{1,7}),k=([0-9]{1,2}(?:\.[0-9]{1,2}){0,15}),'
+                        r'q=(0|[12]:[0-9]{1,6}(?:\.[12]:[0-9]{1,6}){0,2})$', str(exc))
+                    if replay_gap:
+                        values = [int(replay_gap[i]) for i in range(1, 9)]
+                        codes = [int(v) for v in replay_gap[9].split('.')]
+                        if (values[2] <= 2**64 - 1 and max(values[3:6]) <= 65535
+                                and 1 <= values[6] <= 16 and values[7] <= 1048576
+                                and all(v <= 31 for v in codes)):
+                            diagnostic.update(code='native_replay_gap', replay_hook_id=values[0],
+                                replay_edge=values[1], replay_ticket=values[2], replay_role_id=values[3],
+                                replay_checkpoint=values[4], replay_field_id=values[5],
+                                replay_gap_count=values[6], metadata_read_size=values[7],
+                                replay_reason_codes=replay_gap[9], replay_script_lines=replay_gap[10])
+                            combined = re.search(r'(?:^|; )native capture failed: code=([0-9]); '
+                                                 r'(?=native_replay_gap:v1,)', str(exc))
+                            if combined:
+                                diagnostic['native_failure_code'] = int(combined[1])
                     self._timing_sink('native_hook_request_failed', diagnostic)
                 except Exception:
                     pass  # Failure reporting cannot replace the transport error.
             raise
+        if operation == 'mark' and isinstance(result, dict):
+            self._audit_capture_pressure(result)
+            control = result.get('native_timing_control')
+            if isinstance(control, dict) and control.get('version') == 1 and type(control.get('enabled')) is bool:
+                self._native_timing_confirmed = control['enabled']
+            if isinstance(control, dict) and control.get('version') == 1 and control.get('enabled') is False:
+                self._native_timing_may_be_enabled = False
+            if report_timing and self._performance_sink is not None:
+                native = result.get('native_timing')
+                data = dict(schema=1, source='native_runtime', utc=datetime.now(timezone.utc).isoformat(),
+                            available=isinstance(native, dict), native=native if isinstance(native, dict) else None,
+                            async_capture=sanitize_native_async_capture(result.get('native_async_capture'),
+                                native=native, identity=self._owned_process_instance))
+                try:
+                    self._performance_sink('native_performance_timing', data)
+                except Exception:
+                    pass
+            # Diagnostic extensions never enter binding, replay, archives or UI statistics.
+            result.pop('native_timing_control', None)
+            result.pop('native_timing', None)
         return result
 
+    @timed('native_request_and_binding')
     def _request(self, operation, *, timeout=None, **arguments):
+        requested_publication = None
+        if operation == 'read' and self._publication_token is not None:
+            requested_publication = self._publication_token
+            arguments['publication_token'] = requested_publication
+
+        def bind(raw):
+            if operation == 'mark' and self._sampling_supported:
+                request = raw.get('native_sample_request')
+                if request is not None and (not isinstance(request, str)
+                        or re.fullmatch(r'[1-9][0-9]{0,19}', request) is None
+                        or int(request) > 0xffffffffffffffff):
+                    raise RuntimeError('PC 采样请求身份无效')
+                if arguments.get('sampling') == 'fresh':
+                    # Binding can yield before returning to mark(). Keep the
+                    # still-unfulfilled producer request across that retry.
+                    self._sample_request = request if raw.get('retry') else None
+            result = self.binding.bind(operation, raw)
+            if operation in ('mark', 'read') and not any(result.get(key) for key in ('retry', 'error', 'stopped')):
+                publication = result.get('native_publication')
+                if publication is not None or 'native_async_capture' in result:
+                    token = self._validated_publication_token(result)
+                    if operation == 'mark':
+                        self._publication_token = token
+                    elif token != requested_publication:
+                        raise RuntimeError('PC 异步采集读取更换了已选定的发布前缀')
+            result.pop('native_async_capture', None)
+            return result
+
         if self._timing_sink is None or (self._timing_enabled and not self._timing_enabled()):
-            return self.binding.bind(operation, self._raw_request(operation, timeout=timeout, **arguments))
+            return bind(self._raw_request(operation, timeout=timeout, **arguments))
         started = time.perf_counter()
         received = raw = None
         outcome = 'transport_error'
@@ -874,7 +1093,7 @@ class NativeHookEventProbe:
             raw = self._raw_request(operation, timeout=timeout, **arguments)
             received = time.perf_counter()
             outcome = 'binding_error'
-            result = self.binding.bind(operation, raw)
+            result = bind(raw)
             outcome = 'success'
             return result
         except ObserverReadRetry:
@@ -901,8 +1120,87 @@ class NativeHookEventProbe:
     def _mark_options(self):
         return {} if self._autochess_enabled is None else dict(autochess_enabled=self._autochess_enabled())
 
+    @staticmethod
+    def _validate_mode_control(result, options):
+        if (result.get('mode_control_version') != 1 or type(result.get('mode_control_version')) is not int
+                or result.get('applied') is not True or type(result.get('mode_epoch')) is not int
+                or not 0 <= result['mode_epoch'] <= 9007199254740991
+                or result.get('desired_mode') != ('all' if options['autochess_enabled'] else 'local')):
+            raise RuntimeError('native mode control did not confirm the requested preference')
+
+    def _scheduled_options(self, options):
+        if not self._sampling_scheduler_supported:
+            return options
+        current = tuple(sorted(options.items()))
+        if options and current != self._configured_options:
+            if type(options['autochess_enabled']) is not bool:
+                raise ValueError('autochess_enabled must be boolean')
+            self._validate_mode_control(self._raw_request('configure_mode', **options), options)
+            self._configured_options = current
+            self._sample_request = self._terminal_sample_request = None
+        return {}
+
     def mark(self):
-        return self._request('mark', native_quiet_boundary_version=1, **self._mark_options())
+        options = self._mark_options()
+        wire_options = self._scheduled_options(options)
+        self._sampling_anchor = None
+        self._terminal_sample_request = None
+        arguments = {}
+        if self._sampling_supported:
+            current = tuple(sorted(options.items()))
+            if current != self._sample_options:
+                self._sample_request = None
+            self._sample_options = current
+            arguments['sampling'] = 'fresh'
+            if self._sample_request is not None:
+                arguments['sample_request'] = self._sample_request
+        result = self._request('mark', native_publication_version=1, **arguments, **wire_options)
+        if self._sampling_supported:
+            self._sampling_anchor = result, self._cursor_lifetime
+        return result
+
+    def confirm_mark(self, opening):
+        if not getattr(self, '_sampling_supported', False):
+            return self.mark()
+        anchor = self._sampling_anchor
+        if anchor is None or anchor[0] is not opening:
+            raise RuntimeError('PC 采样确认不是当前事务的原始标记')
+        check_cursor_lifetime(self, anchor[1])
+        token = self._validated_publication_token(opening)
+        self._sampling_anchor = None
+        # Native confirmation takes new owned evidence at the current prefix;
+        # it never waits for a future business hook or retimestamps this mark.
+        return self._request('mark', sampling='confirm', publication_token=token,
+                             native_publication_version=1, **self._scheduled_options(self._mark_options()))
+
+    @staticmethod
+    def _validated_publication_token(result):
+        publication = result.get('native_publication')
+        sampling = isinstance(publication, dict) and publication.get('kind') == 'sampling_checkpoint'
+        if (not isinstance(publication, dict) or type(publication.get('version')) is not int
+                or publication['version'] != 1 or not isinstance(publication.get('token'), str)
+                or re.fullmatch(r'[0-9]{1,20}:[1-9][0-9]{0,15}', publication['token']) is None
+                or any(not isinstance(publication.get(key), str)
+                       or re.fullmatch(r'(?:0|[1-9][0-9]{0,19})', publication[key]) is None
+                       or int(publication[key]) > 0xffffffffffffffff
+                       for key in ('closed_ticket', 'activity_begin', 'activity_end'))
+                or int(publication['closed_ticket']) <= 0 and not sampling
+                or publication['token'].split(':', 1)[0] != publication['closed_ticket']
+                or int(publication['activity_end']) != int(publication['activity_begin']) + (0 if sampling else 1)
+                or any(type(publication.get(key)) is not int or publication[key] < 0
+                       for key in ('sequence', 'epoch'))
+                or 'sequence' in result and publication['sequence'] != result['sequence']
+                or 'epoch' in result and publication['epoch'] != result['epoch']):
+            raise RuntimeError('PC 异步采集缺少完整闭合发布前缀')
+        if sampling:
+            for key in ('sampling_serial', 'sample_request'):
+                value = publication.get(key)
+                if (not isinstance(value, str) or re.fullmatch(r'[1-9][0-9]{0,19}', value) is None
+                        or int(value) > 0xffffffffffffffff):
+                    raise RuntimeError('PC 独立采样缺少现场序号或请求身份')
+        elif 'kind' in publication:
+            raise RuntimeError('PC 发布前缀类型无效')
+        return publication['token']
 
     @property
     def capture_pause_supported(self):
@@ -916,18 +1214,45 @@ class NativeHookEventProbe:
 
     def read_terminal_mark(self):
         self.last_terminal_response = None
-        raw = self._raw_request('mark', timeout=self.terminal_mark_timeout, **self._mark_options())
+        raw = self._terminal_raw_mark(timeout=self.terminal_mark_timeout, **self._mark_options())
+        raw.pop('native_async_capture', None)
         self.last_terminal_response = deepcopy(raw)
         return self.binding.bind_terminal_mark(raw)
 
+    def _terminal_raw_mark(self, *, timeout=None, **options):
+        wire_options = self._scheduled_options(options)
+        if not self._sampling_scheduler_supported:
+            return self._raw_request('mark', timeout=timeout, **wire_options)
+        self._sampling_anchor = None
+        self._sample_request = None
+        arguments = dict(sampling='terminal', native_publication_version=1)
+        if self._terminal_sample_request is not None:
+            arguments['sample_request'] = self._terminal_sample_request
+        raw = self._raw_request('mark', timeout=timeout, **arguments, **wire_options)
+        identity = raw.get('native_sample_request')
+        if identity is not None and (not isinstance(identity, str)
+                or re.fullmatch(r'[1-9][0-9]{0,19}', identity) is None or int(identity) > 2**64-1):
+            raise RuntimeError('PC 终局采样请求身份无效')
+        self._terminal_sample_request = identity if raw.get('retry') else None
+        if not any(raw.get(key) for key in ('retry', 'error', 'stopped')):
+            self._publication_token = self._validated_publication_token(raw)
+        return raw
+
     def read_terminal_tail(self, after, *, deadline=None):
-        return acquire_native_terminal_tail(self, self._raw_request, after, deadline=deadline)
+        def request(operation, **arguments):
+            result = (self._terminal_raw_mark(**arguments) if operation == 'mark'
+                      else self._raw_request(operation, **arguments))
+            result.pop('native_async_capture', None)
+            return result
+        return acquire_native_terminal_tail(self, request, after, deadline=deadline)
 
     def read_through(self, sequence):
         return self._read_range(self._committed_sequence, sequence)
 
     def read_baseline(self, sequence):
-        return self._read_range(sequence, sequence)
+        if self._ack_error:
+            raise RuntimeError(self._ack_error)
+        return self._request('read', after=sequence, through=sequence, baseline=True)
 
     def read_round_start_range(self, after, through):
         check_round_start_range(self, after)

@@ -4,6 +4,7 @@ Only cumulative character damage and the game's fixed-step clock are published.
 All data for one sample is read in a device-side frame-guarded transaction.
 """
 from __future__ import annotations
+from metrics import timed
 import json
 import math
 import re
@@ -267,6 +268,7 @@ class Collector:
             ('deref', 2, S.CHAR_ADVANCED_STATS, 0, 0x20),
         ]
 
+    @timed('snapshot_read')
     def read(self):
         started = time.perf_counter()
         captured_monotonic = time.monotonic()
@@ -444,6 +446,7 @@ class Collector:
         if not self.core._resolve_battle_clock():
             raise SampleUnavailable('未能验证当前单例的逻辑时钟')
 
+    @timed('roster_read')
     def read_roster(self, max_attempts: int = 8) -> RosterSnapshot:
         """Read stable statistic keys, host mapping and live membership.
 

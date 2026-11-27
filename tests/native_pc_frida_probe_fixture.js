@@ -8,18 +8,21 @@ const path = require('node:path');
 // effective Android layout. Production must receive its host-selected values.
 const LEGACY_ANDROID_FIXTURE_LAYOUT=Object.freeze({native:0x10,nativeOwner:0x28,logger:0xd8,
   loggerOwner:0x18,stats:0x30,level:0x158,state:0x220,levelId:0x18});
-function loadProbeSource(sourcePath) {
+function loadProbeSource(sourcePath,researchHp=false) {
   const adapter = fs.readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
   if (!adapter.startsWith('// ArkDPS event probe adapter v1;')) return adapter;
-  const runtime = fs.readFileSync(path.join(path.dirname(sourcePath), 'event_probe_runtime.js'), 'utf8')
+  let runtime = fs.readFileSync(path.join(path.dirname(sourcePath), 'event_probe_runtime.js'), 'utf8')
     .replace(/\r\n?/g, '\n');
+  if(researchHp)runtime=require('./experiments/hp_research_assembly.js').assembleResearchRuntime(runtime);
   const autochess = fs.readFileSync(path.join(path.dirname(sourcePath), 'event_probe_autochess.js'), 'utf8')
     .replace(/\r\n?/g, '\n');
-  return autochess + '\n' + adapter + '\n' + runtime;
+  const store = fs.readFileSync(path.join(path.dirname(sourcePath), 'event_probe_store.js'), 'utf8')
+    .replace(/\r\n?/g, '\n');
+  return store + '\n' + autochess + '\n' + adapter + '\n' + runtime;
 }
 
 function fixture({platform = 'native_pc', sourcePath = process.argv[2],
-  settlement = false, enemyHpState = false, traceHpContext = false, traceNestedParent = false, skillCastState = false, characterLifecycle = false, failLifecycleBornHook = false,
+  researchHpReference = true, settlement = false, enemyHpState = false, traceHpContext = false, traceNestedParent = false, skillCastState = false, characterLifecycle = false, failLifecycleBornHook = false,
   loggerOffset = platform === 'native_pc' ? 0xe0 : 0xd8, stateMethod = true, roundResetMethod = false, nullClassIndex = null,
   unreadableClassIndex = null, extraNullRow = false, lazySkillFields = false,
   fieldOwnerMismatch = false, fieldCountMismatch = false, fieldIteratorMismatch = false,
@@ -298,6 +301,9 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   const module = {name: platform === 'native_pc' ? 'GameAssembly.dll' : 'libil2cpp.so',
     base: ptr(0x1000), getExportByName: name => name};
   const context = {
+    // Preserve the historical full-event contract in existing reference tests.
+    // Lightweight production cases explicitly override this with false.
+    arkdpsCollectEnemyHpChanges: true,
     ...(platform==='native_pc'?{}:{arkdpsAndroidBattleLayout:{...LEGACY_ANDROID_FIXTURE_LAYOUT}}),
     arkdpsTraceHpContext: traceHpContext,
     arkdpsTraceNestedParent: traceNestedParent,
@@ -319,7 +325,7 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   };
   Object.assign(context,globals);
   vm.createContext(context);
-  const source = loadProbeSource(sourcePath);
+  const source = loadProbeSource(sourcePath,researchHpReference&&context.arkdpsCollectEnemyHpChanges===true);
   vm.runInContext(source, context);
   function callback(name, owner) {
     const code = callbacks.get(name + '@' + owner);
@@ -336,8 +342,9 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     write(p.add(0x48), BigInt(Math.round(real * 4294967296)));
     write(p.add(0x60), 0); write(p.add(0x68), type); write(p.add(0x70), 0); return p;
   }
-  function installSyntheticMitigation({fail = false} = {}) {
-    const plan = {outer: alloc(), internal: alloc(), final: alloc(), damageType: 0x18};
+  function installSyntheticMitigation({fail = false, factories = 0, noEvent = false} = {}) {
+    const plan = {outer: alloc(), internal: alloc(), final: alloc(), damageType: 0x18,
+      ...(factories?{factories:Array.from({length:factories},()=>alloc())}:{}),...(noEvent?{noEvent:alloc()}:{})};
     const before = hooks.size;
     if (fail) rejectedHook = plan.internal.toString();
     context.syntheticMitigationPlan = plan;
@@ -347,6 +354,21 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
     rejectedHook = null;
     return {synthetic: true, installed_hook_delta: hooks.size - before};
   }
+  // Fault injection replaces canonical frozen facts; it never mutates them.
+  // Preserve the private provenance tag so a test fails for its chosen field.
+  vm.runInContext(`globalThis.corruptQueuedEvent=(event,changes)=>{
+    const index=queue.indexOf(event);
+    if(index<0)throw Error('fault injection event is not queued');
+    const tagged=queueSettlementScopes.has(event),scope=queueSettlementScopes.get(event);
+    const replacement=Object.freeze({...event,...changes});
+    for(const key of Object.keys(changes))if(!Object.is(replacement[key],changes[key])||Object.is(event[key],changes[key]))
+      throw Error('fault injection did not change '+key);
+    queue[index]=replacement;
+    if(tagged)queueSettlementScopes.set(replacement,scope);
+    if(queue[index]!==replacement||queueSettlementScopes.has(replacement)!==tagged||
+       queueSettlementScopes.get(replacement)!==scope)throw Error('fault injection lost provenance');
+    return replacement;
+  };`,context);
   function hookAt(address) {
     const hook = hooks.get(address.toString());
     assert(hook, 'Production callback installed at synthetic address ' + address);

@@ -1,0 +1,121 @@
+﻿hook,name,role,root,root_index,pointer_offsets,offset,bytes,kind,guard_id,guard_side,decision,purpose
+Entity.ApplyModifier,parent.modifier,parent.body,parent_ref,1,[],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.modifier,parent.body,parent_ref,1,[],16,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.modifier,parent.body,parent_ref,1,[],48,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.modifier,parent.body,parent_ref,1,[],72,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.modifier,parent.body,parent_ref,1,[],96,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.modifier,parent.body,parent_ref,1,[],104,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.modifier,parent.body,parent_ref,1,[],112,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.hp,parent.body,parent_ref,1,[16],64,8,bytes,0,none,remove,single parent.target HP witness supplies same body/checkpoint address
+Entity.ApplyModifier,parent.source,parent.body,parent_ref,1,[0],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.source,parent.body,parent_ref,1,[0],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.source,parent.body,parent_ref,1,"[0, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",108,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.source.data.flags,parent.body,parent_ref,1,"[0, 1336]",144,2,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.ApplyModifier,parent.source.data.host_uid,parent.body,parent_ref,1,"[0, 1336]",160,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.ApplyModifier,parent.source.data.cid_pointer,parent.body,parent_ref,1,"[0, 1336]",80,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.ApplyModifier,parent.source.data.host_pointer,parent.body,parent_ref,1,"[0, 1336]",152,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.ApplyModifier,parent.source.data.cid,parent.body,parent_ref,1,"[0, 1336, 80]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.ApplyModifier,parent.source.data.host,parent.body,parent_ref,1,"[0, 1336, 152]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.ApplyModifier,parent.source.player_side,parent.body,parent_ref,1,[0],32,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.ApplyModifier,parent.target,parent.body,parent_ref,1,[16],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.target,parent.body,parent_ref,1,[16],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.target,parent.body,parent_ref,1,[16],64,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.ApplyModifier,parent.target,parent.body,parent_ref,1,"[16, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],16,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],48,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],72,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],96,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],104,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],112,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.hp,parent.body,parent_ref,1,[16],64,8,bytes,0,none,remove,single parent.target HP witness supplies same body/checkpoint address
+Unit.OnTakeDamage,parent.source,parent.body,parent_ref,1,[0],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.source,parent.body,parent_ref,1,[0],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.source,parent.body,parent_ref,1,"[0, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",108,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.source.data.flags,parent.body,parent_ref,1,"[0, 1336]",144,2,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnTakeDamage,parent.source.data.host_uid,parent.body,parent_ref,1,"[0, 1336]",160,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnTakeDamage,parent.source.data.cid_pointer,parent.body,parent_ref,1,"[0, 1336]",80,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnTakeDamage,parent.source.data.host_pointer,parent.body,parent_ref,1,"[0, 1336]",152,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnTakeDamage,parent.source.data.cid,parent.body,parent_ref,1,"[0, 1336, 80]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnTakeDamage,parent.source.data.host,parent.body,parent_ref,1,"[0, 1336, 152]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnTakeDamage,parent.source.player_side,parent.body,parent_ref,1,[0],32,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnTakeDamage,parent.target,parent.body,parent_ref,1,[16],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.target,parent.body,parent_ref,1,[16],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.target,parent.body,parent_ref,1,[16],64,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnTakeDamage,parent.target,parent.body,parent_ref,1,"[16, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],16,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],48,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],72,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],96,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],104,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.modifier,parent.body,parent_ref,1,[],112,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.hp,parent.body,parent_ref,1,[16],64,8,bytes,0,none,remove,single parent.target HP witness supplies same body/checkpoint address
+Entity.OnTakeDamage,parent.source,parent.body,parent_ref,1,[0],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.source,parent.body,parent_ref,1,[0],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.source,parent.body,parent_ref,1,"[0, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",108,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.source.data.flags,parent.body,parent_ref,1,"[0, 1336]",144,2,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnTakeDamage,parent.source.data.host_uid,parent.body,parent_ref,1,"[0, 1336]",160,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnTakeDamage,parent.source.data.cid_pointer,parent.body,parent_ref,1,"[0, 1336]",80,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnTakeDamage,parent.source.data.host_pointer,parent.body,parent_ref,1,"[0, 1336]",152,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnTakeDamage,parent.source.data.cid,parent.body,parent_ref,1,"[0, 1336, 80]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnTakeDamage,parent.source.data.host,parent.body,parent_ref,1,"[0, 1336, 152]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnTakeDamage,parent.source.player_side,parent.body,parent_ref,1,[0],32,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnTakeDamage,parent.target,parent.body,parent_ref,1,[16],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.target,parent.body,parent_ref,1,[16],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.target,parent.body,parent_ref,1,[16],64,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnTakeDamage,parent.target,parent.body,parent_ref,1,"[16, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],16,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],48,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],72,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],96,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],104,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],112,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.hp,parent.body,parent_ref,1,[16],64,8,bytes,0,none,remove,single parent.target HP witness supplies same body/checkpoint address
+Entity.OnAfterOutputDamage,parent.source,parent.body,parent_ref,1,[0],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.source,parent.body,parent_ref,1,[0],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.source,parent.body,parent_ref,1,"[0, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",108,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.source.data.flags,parent.body,parent_ref,1,"[0, 1336]",144,2,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnAfterOutputDamage,parent.source.data.host_uid,parent.body,parent_ref,1,"[0, 1336]",160,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnAfterOutputDamage,parent.source.data.cid_pointer,parent.body,parent_ref,1,"[0, 1336]",80,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnAfterOutputDamage,parent.source.data.host_pointer,parent.body,parent_ref,1,"[0, 1336]",152,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnAfterOutputDamage,parent.source.data.cid,parent.body,parent_ref,1,"[0, 1336, 80]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnAfterOutputDamage,parent.source.data.host,parent.body,parent_ref,1,"[0, 1336, 152]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnAfterOutputDamage,parent.source.player_side,parent.body,parent_ref,1,[0],32,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Entity.OnAfterOutputDamage,parent.target,parent.body,parent_ref,1,[16],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.target,parent.body,parent_ref,1,[16],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.target,parent.body,parent_ref,1,[16],64,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Entity.OnAfterOutputDamage,parent.target,parent.body,parent_ref,1,"[16, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],16,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],48,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],72,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],96,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],104,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.modifier,parent.body,parent_ref,1,[],112,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.hp,parent.body,parent_ref,1,[16],64,8,bytes,0,none,remove,single parent.target HP witness supplies same body/checkpoint address
+Unit.OnAfterOutputDamage,parent.source,parent.body,parent_ref,1,[0],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.source,parent.body,parent_ref,1,[0],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.source,parent.body,parent_ref,1,"[0, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.source.data,parent.body,parent_ref,1,"[0, 1336]",108,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.source.data.flags,parent.body,parent_ref,1,"[0, 1336]",144,2,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnAfterOutputDamage,parent.source.data.host_uid,parent.body,parent_ref,1,"[0, 1336]",160,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnAfterOutputDamage,parent.source.data.cid_pointer,parent.body,parent_ref,1,"[0, 1336]",80,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnAfterOutputDamage,parent.source.data.host_pointer,parent.body,parent_ref,1,"[0, 1336]",152,8,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnAfterOutputDamage,parent.source.data.cid,parent.body,parent_ref,1,"[0, 1336, 80]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnAfterOutputDamage,parent.source.data.host,parent.body,parent_ref,1,"[0, 1336, 152]",0,0,utf16,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnAfterOutputDamage,parent.source.player_side,parent.body,parent_ref,1,[0],32,4,bytes,0,none,remove,no parent-point consumer; current callback token/form evidence retained
+Unit.OnAfterOutputDamage,parent.target,parent.body,parent_ref,1,[16],0,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.target,parent.body,parent_ref,1,[16],24,4,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.target,parent.body,parent_ref,1,[16],64,8,bytes,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks
+Unit.OnAfterOutputDamage,parent.target,parent.body,parent_ref,1,"[16, 328]",0,0,utf16,0,none,keep,parent source/target/modifier identity and exact target HP; existing shared nested settlement and anchor checks

@@ -17,6 +17,11 @@ spec.loader.exec_module(package)
 HEAD = 'a' * 40
 
 
+def test_canonical_event_store_is_in_every_backend_package_inventory():
+    assert package.BACKEND.count('event_probe_store.js') == 1
+    assert (ROOT / 'event_probe_store.js').is_file()
+
+
 def test_archive_variant_preserves_existing_names():
     assert package.archive_name('1.2.3', False, with_native_hooks=True) == 'ArkDPS-1.2.3-win-x64-native-hooks-startup-test.zip'
     assert package.archive_name('1.2.3', True) == 'ArkDPS-1.2.3-win-x64.zip'

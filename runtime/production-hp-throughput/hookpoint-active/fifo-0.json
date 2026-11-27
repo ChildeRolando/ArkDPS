@@ -1,0 +1,94 @@
+{
+  "queue": {
+    "actual_producer_setters_per_second": 29766.815354803155,
+    "capacity_pass": false,
+    "consumed_bytes": 33481292,
+    "consumed_prefix_contiguous": true,
+    "consumed_records": 9399,
+    "consumer_busy_ms": 798.2332999999993,
+    "consumer_service_records_per_second": 11774.753070311659,
+    "elapsed_ms": 799.9412,
+    "entry_compact_max": 917,
+    "entry_compact_min": 917,
+    "failure_code": 4,
+    "leave_compact_max": 128078,
+    "leave_compact_min": 6208,
+    "max_queue_age_ms": 639.1316,
+    "pause_ms": 0,
+    "peak_resident_bytes": 136316990,
+    "producer_ms": 799.4137,
+    "raw_prefix_contiguous": false,
+    "requested_producer_ms": 10000,
+    "requested_setters": 300000,
+    "reserved_records": 47594,
+    "submitted_setters": 23796,
+    "target_setters_per_second": 30000,
+    "trend": [
+      {
+        "backlog": 1,
+        "consumed": 0,
+        "ms": 0.4574,
+        "reserved": 1
+      },
+      {
+        "backlog": 4634,
+        "consumed": 1260,
+        "ms": 100.5157,
+        "reserved": 5894
+      },
+      {
+        "backlog": 9182,
+        "consumed": 2402,
+        "ms": 200.5449,
+        "reserved": 11584
+      },
+      {
+        "backlog": 14120,
+        "consumed": 3496,
+        "ms": 300.5837,
+        "reserved": 17616
+      },
+      {
+        "backlog": 19108,
+        "consumed": 4590,
+        "ms": 400.6599,
+        "reserved": 23698
+      },
+      {
+        "backlog": 23442,
+        "consumed": 5870,
+        "ms": 500.7692,
+        "reserved": 29312
+      },
+      {
+        "backlog": 28880,
+        "consumed": 7028,
+        "ms": 600.8056,
+        "reserved": 35908
+      },
+      {
+        "backlog": 33377,
+        "consumed": 8191,
+        "ms": 700.8492,
+        "reserved": 41568
+      }
+    ]
+  },
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "actual CaptureLanes private queue and four 32MiB spill banks",
+    "independent paced producer and actual serialized consumer",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC and native hook trampoline",
+    "native dirty callback snapshots"
+  ],
+  "results": []
+}

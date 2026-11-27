@@ -1,0 +1,306 @@
+{
+  "scope": "Real DLL HP-provider binding in a fresh self-owned child; never a game PID.",
+  "binary_sha256": "4ff028d178cbe774f2c5fe2b2e2f14fdd4d6c3ad4a28454d99d6d96ae6eec6cf",
+  "cases": [
+    {
+      "hostile": false,
+      "identity": {
+        "pid": 27264,
+        "created": 134401995145303586
+      },
+      "original_abi_preserved": true,
+      "initial": {
+        "active": 0,
+        "active_hooks": [],
+        "entries": 1,
+        "epoch": 1,
+        "error": null,
+        "frame": 1,
+        "game_time": 0.03333333333333333,
+        "leaves": 1,
+        "mode_epoch": 0,
+        "native_async_capture": {
+          "active": 0,
+          "activity_generation": 2,
+          "callback_timing": {
+            "enabled": false,
+            "includes_first_touch": false,
+            "includes_identity_lookup": true,
+            "includes_metrics_recording": false,
+            "includes_original_function": false,
+            "qpc_frequency": 10000000,
+            "sample_sums_are_not_extrapolated": true,
+            "samples": [],
+            "scope": "after_sampling_decision_through_capture_enqueue",
+            "selection": "xorshift_approximately_1_in_128"
+          },
+          "captured_prefix_lag_records": 0,
+          "closed_ticket": 2,
+          "delivered_event_sequence": 0,
+          "desired_mode_epoch": 0,
+          "failure_code": 0,
+          "lane_metrics": [
+            {
+              "age_sample_count": 0,
+              "capture_uncertain_records": 0,
+              "captured_bytes": 2071,
+              "captured_records": 2,
+              "consumed_bytes": 2071,
+              "consumed_records": 2,
+              "counter_snapshot_consistent": true,
+              "lane": 0,
+              "lane_generation": 0,
+              "last_capture_to_replay_qpc": null,
+              "maximum_capture_to_replay_qpc": null,
+              "observed_pending_age_lower_bound_qpc": null,
+              "peak_resident_bytes": 2071,
+              "peak_resident_records": 2,
+              "queue_age_available": false,
+              "resident_bytes_approx": 0,
+              "resident_records_approx": 0,
+              "thread_birth": "134401995145303598",
+              "thread_id": 26564
+            }
+          ],
+          "processed_ticket": 2,
+          "publication_lag_records": 0,
+          "publication_ready": true,
+          "published_event_sequence": 0,
+          "published_mode_epoch": 0,
+          "published_ticket": 2,
+          "queue_age_available": false,
+          "queue_age_qpc_frequency": 10000000,
+          "read_prefix_lag_events": 0,
+          "reserved_ticket": 2,
+          "version": 1
+        },
+        "native_capture_scope_mode_epoch": 0,
+        "native_publication": {
+          "activity_begin": "1",
+          "activity_end": "2",
+          "closed_ticket": "2",
+          "epoch": 1,
+          "sequence": 0,
+          "terminal_verified": false,
+          "token": "2:1",
+          "version": 1
+        },
+        "records": [
+          {
+            "checkpoint": 0,
+            "edge": "entry",
+            "hp": "429496729600",
+            "id": "enemy_owned",
+            "mode": 0,
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "leave",
+            "hp": "429496729600",
+            "mode": 0,
+            "uid": 12
+          }
+        ],
+        "sequence": 0,
+        "stopped": false
+      },
+      "switch": {
+        "error": null,
+        "events": [],
+        "hp_context": [],
+        "mark_retry_reason": "native_fresh_publication_not_ready",
+        "native_async_capture": {
+          "active": 0,
+          "activity_generation": 2,
+          "callback_timing": {
+            "enabled": false,
+            "includes_first_touch": false,
+            "includes_identity_lookup": true,
+            "includes_metrics_recording": false,
+            "includes_original_function": false,
+            "qpc_frequency": 10000000,
+            "sample_sums_are_not_extrapolated": true,
+            "samples": [],
+            "scope": "after_sampling_decision_through_capture_enqueue",
+            "selection": "xorshift_approximately_1_in_128"
+          },
+          "captured_prefix_lag_records": 0,
+          "closed_ticket": 2,
+          "delivered_event_sequence": 0,
+          "desired_mode_epoch": 1,
+          "failure_code": 0,
+          "lane_metrics": [
+            {
+              "age_sample_count": 0,
+              "capture_uncertain_records": 0,
+              "captured_bytes": 2071,
+              "captured_records": 2,
+              "consumed_bytes": 2071,
+              "consumed_records": 2,
+              "counter_snapshot_consistent": true,
+              "lane": 0,
+              "lane_generation": 0,
+              "last_capture_to_replay_qpc": null,
+              "maximum_capture_to_replay_qpc": null,
+              "observed_pending_age_lower_bound_qpc": null,
+              "peak_resident_bytes": 2071,
+              "peak_resident_records": 2,
+              "queue_age_available": false,
+              "resident_bytes_approx": 0,
+              "resident_records_approx": 0,
+              "thread_birth": "134401995145303598",
+              "thread_id": 26564
+            }
+          ],
+          "processed_ticket": 2,
+          "publication_lag_records": 0,
+          "publication_ready": false,
+          "published_event_sequence": 0,
+          "published_mode_epoch": 0,
+          "published_ticket": 2,
+          "queue_age_available": false,
+          "queue_age_qpc_frequency": 10000000,
+          "read_prefix_lag_events": 0,
+          "reserved_ticket": 2,
+          "version": 1
+        },
+        "retry": true,
+        "stopped": false
+      },
+      "mode1": {
+        "active": 0,
+        "active_hooks": [],
+        "entries": 2,
+        "epoch": 2,
+        "error": null,
+        "frame": 2,
+        "game_time": 0.06666666666666667,
+        "leaves": 2,
+        "mode_epoch": 1,
+        "native_async_capture": {
+          "active": 0,
+          "activity_generation": 4,
+          "callback_timing": {
+            "enabled": false,
+            "includes_first_touch": false,
+            "includes_identity_lookup": true,
+            "includes_metrics_recording": false,
+            "includes_original_function": false,
+            "qpc_frequency": 10000000,
+            "sample_sums_are_not_extrapolated": true,
+            "samples": [],
+            "scope": "after_sampling_decision_through_capture_enqueue",
+            "selection": "xorshift_approximately_1_in_128"
+          },
+          "captured_prefix_lag_records": 0,
+          "closed_ticket": 4,
+          "delivered_event_sequence": 0,
+          "desired_mode_epoch": 1,
+          "failure_code": 0,
+          "lane_metrics": [
+            {
+              "age_sample_count": 0,
+              "capture_uncertain_records": 0,
+              "captured_bytes": 4142,
+              "captured_records": 4,
+              "consumed_bytes": 4142,
+              "consumed_records": 4,
+              "counter_snapshot_consistent": true,
+              "lane": 0,
+              "lane_generation": 0,
+              "last_capture_to_replay_qpc": null,
+              "maximum_capture_to_replay_qpc": null,
+              "observed_pending_age_lower_bound_qpc": null,
+              "peak_resident_bytes": 2071,
+              "peak_resident_records": 2,
+              "queue_age_available": false,
+              "resident_bytes_approx": 0,
+              "resident_records_approx": 0,
+              "thread_birth": "134401995145303598",
+              "thread_id": 26564
+            }
+          ],
+          "processed_ticket": 4,
+          "publication_lag_records": 0,
+          "publication_ready": true,
+          "published_event_sequence": 0,
+          "published_mode_epoch": 1,
+          "published_ticket": 4,
+          "queue_age_available": false,
+          "queue_age_qpc_frequency": 10000000,
+          "read_prefix_lag_events": 0,
+          "reserved_ticket": 4,
+          "version": 1
+        },
+        "native_capture_scope_mode_epoch": 1,
+        "native_publication": {
+          "activity_begin": "3",
+          "activity_end": "4",
+          "closed_ticket": "4",
+          "epoch": 2,
+          "sequence": 0,
+          "terminal_verified": false,
+          "token": "4:2",
+          "version": 1
+        },
+        "records": [
+          {
+            "checkpoint": 0,
+            "edge": "entry",
+            "hp": "429496729600",
+            "id": "enemy_owned",
+            "mode": 0,
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "leave",
+            "hp": "429496729600",
+            "mode": 0,
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "entry",
+            "hp": "429496729600",
+            "id": "enemy_owned",
+            "mode": 1,
+            "uid": 12
+          },
+          {
+            "checkpoint": 0,
+            "edge": "leave",
+            "hp": "429496729600",
+            "mode": 1,
+            "uid": 12
+          }
+        ],
+        "sequence": 0,
+        "stopped": false
+      },
+      "retries": [],
+      "calls": [
+        {
+          "count": 1,
+          "results": [
+            1956417321193
+          ],
+          "expected": 1956417321193
+        },
+        {
+          "count": 1,
+          "results": [
+            1956417321193
+          ],
+          "expected": 1956417321193
+        }
+      ],
+      "source_sha256": "55d033469b7e173385ddc6e1c65c2089100c5cc269c9105babc132e4a62c7219",
+      "plan_sha256": "de9b1534884f94b0fa4612bd6646160b78dadc97097502416406579bcf899348"
+    }
+  ],
+  "result": "FAIL",
+  "error_type": "AssertionError",
+  "error": "native observer pipe is closed or has an incomplete request"
+}

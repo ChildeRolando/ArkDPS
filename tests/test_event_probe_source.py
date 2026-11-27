@@ -19,24 +19,26 @@ ROOT = Path(__file__).resolve().parents[1]
     ("mumu", "event_probe_android2791.js"), ("native_pc", "event_probe_native_pc.js")])
 def test_source_composition_and_component_hashes_bind_the_same_bytes(platform, adapter, tmp_path):
     context = "event_probe_autochess.js"
-    for name in (context, adapter, "event_probe_runtime.js"):
+    store = "event_probe_store.js"
+    for name in (store, context, adapter, "event_probe_runtime.js"):
         # Production checkout/package may contain CRLF. Compilation matches
         # the existing read_text boundary; file hashes still bind raw bytes.
         raw = (ROOT / name).read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
         (tmp_path / name).write_bytes(raw)
     assembled = assemble_probe_source(platform, directory=tmp_path)
     manifest = assembled.audit()
-    assert manifest["assembly_version"] == 2
+    assert manifest["assembly_version"] == 3
     assert manifest["adapter_file"] == adapter
     assert manifest["runtime_file"] == "event_probe_runtime.js"
     assert manifest["context_file"] == context
-    for key, name in (("context", context), ("adapter", adapter), ("runtime", "event_probe_runtime.js")):
+    assert manifest["store_file"] == store
+    for key, name in (("store", store), ("context", context), ("adapter", adapter), ("runtime", "event_probe_runtime.js")):
         raw = (tmp_path / name).read_bytes()
         assert manifest[key + "_sha256"] == hashlib.sha256(raw).hexdigest()
         normalized = raw.decode().replace("\r\n", "\n")
         assert manifest[key + "_source_sha256"] == hashlib.sha256(normalized.encode()).hexdigest()
     expected = "\n".join((tmp_path / name).read_text(encoding="utf-8")
-                         for name in (context, adapter, "event_probe_runtime.js"))
+                         for name in (store, context, adapter, "event_probe_runtime.js"))
     assert assembled.source == expected
     assert manifest["assembled_sha256"] == hashlib.sha256(expected.encode()).hexdigest()
 
@@ -66,7 +68,7 @@ def test_missing_or_wrong_source_format_cannot_fall_back_to_a_different_probe(tm
 
 def test_source_reader_assembles_exact_verified_snapshot_without_disk_rereads(tmp_path):
     expected = assemble_probe_source('native_pc')
-    names = (expected.adapter_file, expected.runtime_file, expected.context_file)
+    names = (expected.adapter_file, expected.runtime_file, expected.context_file, expected.store_file)
     snapshot = {tmp_path / name: (ROOT / name).read_bytes() for name in names}
     calls = []
 
@@ -82,6 +84,39 @@ def test_source_reader_assembles_exact_verified_snapshot_without_disk_rereads(tm
     with pytest.raises(TypeError, match='immutable bytes'):
         assemble_probe_source('native_pc', directory=tmp_path,
                               read_file=lambda path: bytearray(snapshot[path]))
+
+
+
+def test_store_is_read_once_and_hashes_the_exact_admitted_snapshot(tmp_path):
+    expected = assemble_probe_source('native_pc')
+    names = (expected.adapter_file, expected.runtime_file, expected.context_file, expected.store_file)
+    snapshot = {name: (ROOT / name).read_bytes() for name in names}
+    counts = {name: 0 for name in names}
+    def read(path):
+        counts[path.name] += 1
+        if counts[path.name] != 1:
+            raise AssertionError('source was reread after admission')
+        return snapshot[path.name]
+    actual = assemble_probe_source('native_pc', directory=tmp_path, read_file=read)
+    assert actual == expected and set(counts.values()) == {1}
+    changed = dict(snapshot)
+    changed[expected.store_file] += b'\n// changed store source\n'
+    tampered = assemble_probe_source('native_pc', directory=tmp_path,
+                                    read_file=lambda path: changed[path.name])
+    assert tampered.store_sha256 != expected.store_sha256
+    assert tampered.store_source_sha256 != expected.store_source_sha256
+    assert tampered.assembled_sha256 != expected.assembled_sha256
+    assert tampered.adapter_sha256 == expected.adapter_sha256
+    assert tampered.runtime_sha256 == expected.runtime_sha256
+    assert tampered.context_sha256 == expected.context_sha256
+
+
+def test_missing_store_cannot_fall_back_to_the_old_three_part_assembly(tmp_path):
+    expected = assemble_probe_source('native_pc')
+    for name in (expected.adapter_file, expected.runtime_file, expected.context_file):
+        (tmp_path / name).write_bytes((ROOT / name).read_bytes())
+    with pytest.raises(FileNotFoundError, match='event_probe_store'):
+        assemble_probe_source('native_pc', directory=tmp_path)
 
 
 def test_amount_skill_and_settlement_logic_has_one_shared_owner():

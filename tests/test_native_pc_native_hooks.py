@@ -18,14 +18,14 @@ from native_pc import event_source
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_native_quiet_mark_checks_real_adapter_and_invalid_fences():
+def test_native_statistics_has_no_live_dispatch_fallback():
     completed = subprocess.run(
         ['node', str(ROOT / 'tests/native_pc_autochess_quiet_boundary_fixture.js')],
         cwd=ROOT, capture_output=True, text=True, encoding='utf-8', timeout=30, check=True)
-    assert completed.stdout.strip() == 'PASS_OWNED_QUIET_BOUNDARY'
+    assert completed.stdout.strip() == 'PASS_OWNED_NATIVE_RPC_ROUTING'
 
 
-def test_only_ordinary_native_mark_opts_into_the_versioned_boundary(monkeypatch):
+def test_native_mark_requests_the_immutable_publication_protocol(monkeypatch):
     probe = module.NativeHookEventProbe(collector())
     requests = []
 
@@ -40,7 +40,7 @@ def test_only_ordinary_native_mark_opts_into_the_versioned_boundary(monkeypatch)
     probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)))
     probe.mark()
     probe.read_terminal_mark()
-    assert requests == [('mark', {'timeout': None, 'native_quiet_boundary_version': 1}),
+    assert requests == [('mark', {'timeout': None, 'native_publication_version': 1}),
                         ('mark', {'timeout': probe.terminal_mark_timeout})]
     kind, timing = records[0]
     assert kind == 'native_hook_request_timing'
@@ -195,11 +195,41 @@ class Pipe:
         self.closed = True
 
 
+def test_scheduler_startup_and_preference_changes_are_control_only(setup_probe):
+    make, _, pipes = setup_probe
+    probe = make()
+    selected = [False]
+    probe.set_autochess_setting(lambda: selected[0])
+    factory = probe.pipe_factory
+    def scheduler_pipe(name, pid):
+        pipe = factory(name, pid)
+        pipe.hello.update(native_mark_scheduler_version=1, mode_control_version=1)
+        pipe.hello['ready']['native_sampling_version']=1
+        original = pipe.request
+        def request(operation, **arguments):
+            if operation == 'configure_mode':
+                pipe.calls.append((operation, arguments))
+                return dict(mode_control_version=1, applied=True, mode_epoch=1,
+                            desired_mode='all' if arguments['autochess_enabled'] else 'local')
+            return original(operation, **arguments)
+        pipe.request=request
+        return pipe
+    probe.pipe_factory=scheduler_pipe
+    probe.start()
+    assert [op for op,_ in pipes[0].calls]==['initialize','configure_mode']
+    assert probe._committed_sequence==probe._acknowledged_sequence==0
+    selected[0]=True
+    probe.mark()
+    assert [op for op,_ in pipes[0].calls][-2:]==['configure_mode','mark']
+    assert pipes[0].calls[-1][1]['sampling']=='fresh'
+    assert 'autochess_enabled' not in pipes[0].calls[-1][1]
+
+
 @pytest.fixture
 def setup_probe(tmp_path, monkeypatch):
     source_root = tmp_path / 'source-root'
     source_root.mkdir()
-    for name in ('event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js'):
+    for name in ('event_probe_store.js', 'event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js'):
         (source_root / name).write_bytes((ROOT / name).read_bytes())
     binary = source_root / 'source.dll'
     binary.write_bytes(b'controlled-not-an-executable')
@@ -254,7 +284,7 @@ def test_real_source_is_submitted_without_frida_or_fabricated_events(setup_probe
     assert probe.mark()['native_session'] == 'bound-session'
     assert probe.mark()['source_build'] == source_build
     assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=False,
-                                             native_quiet_boundary_version=1))
+                                             native_publication_version=1))
     probe.stop()
     assert loaders[0].closed and pipes[0].closed
     assert probe.hook_disable_confirmed
@@ -525,7 +555,7 @@ def test_read_cursor_and_ack_are_idempotent_not_reconstructed(setup_probe):
     probe = make()
     probe.start()
     probe.read_baseline(2)
-    assert pipes[0].calls[-1][1] == dict(timeout=5.0, after=2, through=2)
+    assert pipes[0].calls[-1][1] == dict(timeout=5.0, after=2, through=2, baseline=True)
     assert probe.commit_events(2) is True
     assert probe.commit_events(2) is True
     assert len([x for x in pipes[0].calls if x[0] == 'ack']) == 1
@@ -902,7 +932,7 @@ def test_prepared_ui_preference_uses_initial_then_dynamic_mark_without_rewriting
     selected[0] = not enabled
     result = probe.mark()
     assert pipes[0].calls[-1] == ('mark', dict(timeout=5.0, autochess_enabled=not enabled,
-                                             native_quiet_boundary_version=1))
+                                             native_publication_version=1))
     assert result['native_autochess_context']['collection_mode'] == 'all'
     assert not any(operation in ('read', 'ack') for operation, _ in pipes[0].calls)
     probe.stop()
@@ -958,3 +988,145 @@ def test_prepared_business_source_change_is_rejected_even_with_ui_callback(prepa
         probe.start()
     assert not prepared.claimed and not pipes and not loaders[0].closed
     prepared.close()
+
+
+@pytest.mark.parametrize('suffix, accepted', [
+    ('h=2,e=1,t=18446744073709551615,r=3,p=0,f=-1,g=1,m=8,k=1,q=1:123.2:456', True),
+    ('h=2,e=1,t=3,r=3,p=0,f=1,g=1,m=8,k=1,q=0; token=secret', False),
+    ('h=2,e=1,t=3,r=3,p=0,f=1,g=1,m=8,k=99,q=0', False),
+])
+def test_replay_gap_audit_is_numeric_bounded_and_keeps_failure(suffix, accepted):
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; native_replay_gap:v1,' + suffix)
+    def request(*args, **kwargs):
+        raise failure
+    records = []
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure
+    assert probe.status == ObserverStatus.FAILED
+    data = records[0][1]
+    assert (data.get('code') == 'native_replay_gap') is accepted
+    assert 'secret' not in repr(data)
+    if accepted:
+        assert data['replay_ticket'] == 2**64 - 1
+        assert data['replay_field_id'] == -1
+        assert data['metadata_read_size'] == 8
+        assert data['replay_reason_codes'] == '1'
+        assert data['replay_script_lines'] == '1:123.2:456'
+
+
+@pytest.mark.parametrize('suffix, accepted', [('4', True), ('10', False), ('4; token=private', False)])
+def test_native_failure_code_is_recorded_without_debug(suffix, accepted):
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; native capture failed: code=' + suffix)
+    def request(*_args, **_kwargs):
+        raise failure
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure and probe.status == ObserverStatus.FAILED
+    assert (records[0][1].get('code') == 'native_capture_failed') is accepted
+    assert 'private' not in repr(records)
+    if accepted:
+        assert records[0][1]['native_failure_code'] == 4
+
+
+def test_combined_native_fault_and_replay_gap_keep_both_bounded_causes():
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; '
+        'native capture failed: code=6; native_replay_gap:v1,h=2,e=1,t=17,r=3,p=0,f=-1,g=1,m=8,k=1,q=0')
+    def request(*_args, **_kwargs):
+        raise failure
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure and probe.status == ObserverStatus.FAILED
+    assert records[0][1]['native_failure_code'] == 6
+    assert records[0][1]['code'] == 'native_replay_gap'
+    assert records[0][1]['replay_ticket'] == 17
+
+
+@pytest.mark.parametrize('detail, reason, code', [
+    *[(text, reason, None) for text, reason in module.SAMPLING_FAILURE_REASONS.items()],
+    ('sampling structural capture error: 0', 'structural_capture_error', 0),
+    ('sampling structural capture error: 10', 'structural_capture_error', 10),
+    ('sampling structural capture error: 11', None, None),
+    ('sampling structural capture error: 01', None, None),
+    ('sampling publication failed; token=PRIVATE', None, None),
+    ('sampling publication failed\nPRIVATE', None, None),
+    ('sampling publication certificate mismatch 0xPRIVATE', None, None),
+    ('PRIVATE', None, None),
+])
+def test_sampling_failure_audit_is_finite_and_preserves_original_failure(detail, reason, code):
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; ' + detail)
+    def request(*_args, **_kwargs):
+        raise failure
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure and probe.status == ObserverStatus.FAILED
+    data = records[0][1]
+    assert data.get('sampling_failure_reason') == reason
+    assert data.get('sampling_capture_error_code') == code
+    assert 'PRIVATE' not in repr(data)
+
+
+_SAMPLING_STAGE = 'native_sampling_failure:v1,s=7,c=32,j=599'
+_SAMPLING_GAP = 'native_sampling_gap:v1,t=18446744073709551615,r=65535,p=65535,f=-1,g=16,m=1048576,k=0.31,q=1:999999.2:999999.1:999999'
+
+
+@pytest.mark.parametrize('detail, accepted', [
+    (_SAMPLING_STAGE, True),
+    ('native_sampling_failure:v1,s=1,c=0,j=0', True),
+    (_SAMPLING_GAP, True),
+    (_SAMPLING_STAGE + '; ' + _SAMPLING_GAP, True),
+    *[(_SAMPLING_STAGE.replace(old, new), False) for old, new in
+      [('s=7', 's=0'), ('s=7', 's=8'), ('c=32', 'c=33'), ('c=32', 'c=-1'),
+       ('j=599', 'j=600'), ('j=599', 'j=99'), ('j=599', 'j=001')]],
+    *[(_SAMPLING_GAP.replace(old, new), False) for old, new in
+      [('18446744073709551615', '18446744073709551616'), ('r=65535', 'r=65536'),
+       ('p=65535', 'p=65536'), ('f=-1', 'f=-2'), ('g=16', 'g=0'), ('g=16', 'g=17'),
+       ('m=1048576', 'm=1048577'), ('k=0.31', 'k=32'), ('k=0.31', 'k=' + '.'.join(['1'] * 17)),
+       ('q=1:999999.2:999999.1:999999', 'q=3:123'),
+       ('q=1:999999.2:999999.1:999999', 'q=1:1.1:1.1:1.1:1')]],
+    (_SAMPLING_STAGE + '; ' + _SAMPLING_GAP + '; token=PRIVATE', False),
+    (_SAMPLING_STAGE + '\nPRIVATE', False),
+])
+def test_numeric_sampling_failure_context_is_strict_and_keeps_original_exception(detail, accepted):
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; ' + detail)
+    def request(*_args, **_kwargs):
+        raise failure
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure and probe.status == ObserverStatus.FAILED
+    data = records[0][1]
+    assert ('sampling_failure_reason' in data) is accepted
+    assert 'PRIVATE' not in repr(data)
+    assert 'replay_hook_id' not in data and 'replay_edge' not in data
+    if accepted and 'native_sampling_failure:' in detail:
+        assert data['sampling_stage'] in range(1, 8)
+        assert 0 <= data['sampling_lane_fault'] <= 32
+    if accepted and 'native_sampling_gap:' in detail:
+        assert data['code'] == 'native_sampling_gap'
+        assert data['replay_ticket'] == 2**64 - 1
+        assert data['replay_field_id'] == -1
+        assert data['replay_reason_codes'] == '0.31'

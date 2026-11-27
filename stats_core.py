@@ -7,6 +7,7 @@ Overkill is a subset of the already inclusive
 native damage total and is never subtracted from it. Source keys identify
 distinct client statistic entries, not transient entities.
 """
+from metrics import timed
 from collections import deque
 from math import isclose, isfinite
 
@@ -102,6 +103,7 @@ class Statistics:
         self.settlement_skill_deployment_unknown = set()
         self.completed_skill_cast_invocations = set()
         self.lifecycle_watermark = start_time
+        self.lifecycle_terminal_watermark = None
         self.skill_windows = {}
         self.skill_seen = set()
         self.skill_unknown = False
@@ -117,6 +119,7 @@ class Statistics:
         self.enemy_phases = {}
         self.enemy_state_start_frame = None
         self.enemy_state_incomplete = False
+        self.enemy_hp_mode = 'events'  # Historical envelopes had the full stream.
         self.enemy_state_events = []
         self.enemy_state_identities = {}
         self.enemy_damage = None
@@ -1799,6 +1802,7 @@ class Statistics:
                 partial['engagement_' + kind + '_unverified_share'] = _unverified_share(evidence['total'], denominator)
         return partial
 
+    @timed('statistics_materialize')
     def result(self):
         """Return per-owner values and explicit coverage; unknown is None."""
         late_events = self.event_coverage_start > self.start_time
@@ -2067,7 +2071,8 @@ class Statistics:
             row.update(self.deployment_lifecycle.result(owner, self.lifecycle_watermark,
                 continuous=self.start_time == 0 and self.event_coverage_start == 0
                     and self.event_coverage and not self.event_coverage_broken,
-                archived=self.end_time is not None, start_time=self.event_coverage_start))
+                archived=self.end_time is not None, start_time=self.event_coverage_start,
+                terminal_watermark=self.lifecycle_terminal_watermark))
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())
@@ -2114,6 +2119,7 @@ class Statistics:
                     snapshot['enemy_entry_attributes'] = dict(snapshot['enemy_entry_attributes'])
                 events.append(snapshot)
             result['enemy_state'] = {
+                **({'hp_mode': self.enemy_hp_mode} if self.enemy_hp_mode != 'events' else {}),
                 'complete': not (self.enemy_state_incomplete or self.event_coverage_broken),
                 'start_frame': self.enemy_state_start_frame,
                 'events': events,

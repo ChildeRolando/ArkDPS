@@ -185,6 +185,7 @@ class Layout:
     side_mode: bool = False
     multiplayer_enabled: bool = False
     debug_mode: bool = False
+    performance_diagnostics: bool = False
 
     def __post_init__(self):
         if self.theme not in THEMES:
@@ -197,6 +198,8 @@ class Layout:
             raise ValueError('卫戍四家开关必须是布尔值')
         if not isinstance(self.debug_mode, bool):
             raise ValueError('调试模式开关必须是布尔值')
+        if not isinstance(self.performance_diagnostics, bool):
+            raise ValueError('性能计时开关必须是布尔值')
         if not self.panels:
             raise ValueError('至少需要一个面板')
         ids = [panel.panel_id for panel in self.panels]
@@ -214,6 +217,7 @@ class Layout:
                 'event_observation': bool(self.event_observation),
                 'multiplayer_enabled': self.multiplayer_enabled,
                 'debug_mode': self.debug_mode,
+                'performance_diagnostics': self.performance_diagnostics,
                 'number_units': self.number_units,
                 'side_mode': self.side_mode,
                 'gui': self.gui.to_dict() if self.gui else None,
@@ -347,6 +351,10 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
     if not isinstance(debug_mode, bool):
         warnings.append('调试模式开关无效，已使用默认关闭')
         debug_mode = False
+    performance_diagnostics = raw.get('performance_diagnostics', False)
+    if not isinstance(performance_diagnostics, bool):
+        warnings.append('性能计时开关无效，已使用默认关闭')
+        performance_diagnostics = False
     gui = None
     if raw.get('gui') is not None:
         try:
@@ -371,7 +379,7 @@ def _parse_layout(raw: object) -> tuple[Layout, list[str], int | None]:
                   event_observation=event, theme=theme,
                   number_units=number_units, hud_styles=hud_styles,
                   side_mode=side_mode, multiplayer_enabled=multiplayer_enabled,
-                  debug_mode=debug_mode), warnings, migrated_from
+                  debug_mode=debug_mode, performance_diagnostics=performance_diagnostics), warnings, migrated_from
 
 
 class LayoutStore:

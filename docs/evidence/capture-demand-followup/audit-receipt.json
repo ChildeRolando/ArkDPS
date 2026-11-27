@@ -1,0 +1,50 @@
+{
+  "baseline_head": "677c420893e7c72fb559c24bccc481c06ecb0fef",
+  "external_audit_baseline": "ef1486640e42146e7a8aaaae22488b1ac0be35f0",
+  "external_report_sha256": "aab23d549630e0288dd3a971575b386307235df4b32c58eadf7ff351f79a7b14",
+  "external_2604_field_ledger_sha256": "3621752bab304bd74765bfd3a536ca15c4f5a8d4a4431d322f6f388e8fbeb6c0",
+  "current_product_sha256": {
+    "event_probe_native_pc.js": "7d39a9ed0e7c66daec1bcda57b01c54f05868f42dacb612c08395985e2de399e",
+    "event_probe_runtime.js": "82fcb632267e9c860e8c926339941f060cf52186fcd2de453c17cf55b00c6e54"
+  },
+  "parent_fields": {
+    "baseline_per_hook": 24,
+    "current_per_hook": 16,
+    "rows": 120,
+    "removed_total": 40,
+    "parent_source_token_form_owner": "own Apply/Output callback, never child parent.body",
+    "hp_dedup": "one retained parent.target HP field at same parent.body/checkpoint; no before/after or cross-point reuse"
+  },
+  "receipts_sha256": {
+    "runtime/capture-demand/audit-followup/producer-count/receipt.json": "72ce7adcc29f24dd3bd2132152cc495d9219bcb5f5d6db40b97b4dd113607999",
+    "runtime/capture-demand/audit-followup/producer-source.json": "f816f8eef703e924c4133c704c809915243f890c331de1be8314fe10eb0f98e6",
+    "runtime/capture-demand/final/branches-final-receipt.json": "c7013b7ee61f1ab0b5eb5f60cac35572ed9a865e9332aeece2184f28183ec385",
+    "runtime/capture-demand/audit-followup/mismatch-mutation/receipt.json": "4a4e8c2a36e364d9e5e6fa3a041ed7e4c1bd44338e8f01e4344f4df1404c62f8",
+    "runtime/capture-demand/dll/current-identity-final/receipt.json": "588233c82915bca6008d6e5bf17ef897afce81cad3eeccf2f6ed72998d3a86b5",
+    "runtime/capture-demand/dll/FINAL-MANIFEST.json": "feaccde1122e7699cba201b23a749f1c4a9b417c34c8aef58ac9f777412b78b4",
+    "runtime/capture-demand/dll/FINAL-REPORT.md": "77c1c4dd765d20b8af5382a28abc14753f8f92fc59edbe468ec351925eb13b2a",
+    "runtime/capture-demand/audit-followup/pytest-final.xml": "e778c2be9dc2a7b133d8a76b2bacb70bc85f989d734f086b5ab9a46b6f840034",
+    "runtime/capture-demand/audit-followup/pytest-final-rerun.xml": "e62423ce3068ed0a883876dc01a43b64f3efda0b19b0451800749c40439e2dd6",
+    "runtime/capture-demand/audit-followup/pytest-targeted.xml": "a09724a754ff80d101894507a34c2d1aad67a6ff54d4bece4ed8381736d12884",
+    "runtime/capture-demand/audit-followup/production_terminal_run/receipt.json": "eac3ce7eab688b9a33ac7fbfca710da71f247a4e92c4f0de96a88101384b3ba7",
+    "runtime/capture-demand/audit-followup/production_sampling_run/receipt.json": "208b6e34f424598549cba1ee917dd388cf9acb756357ee3a4b2e4d5e1e4b29da",
+    "runtime/capture-demand/audit-followup/production_root_class_run/receipt.json": "1a2db9c4d0440b24397efca55e27963610171aeeb83041fe0b05bb9b76b571cc"
+  },
+  "advisory_parent_candidate": "temporary advisory experiment has incomplete provenance and is not an acceptance gate; fixed-source producer and strict branch receipts above are independent",
+  "live_fps_verified": false,
+  "pytest_final": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "29",
+    "tests": "6547",
+    "time": "160.117",
+    "timestamp": "2026-11-27T20:44:34.651337+08:00",
+    "hostname": "1080TI"
+  },
+  "previous_full_attempt": "1 stale source-text assertion failed; original failure preserved; updated assertion retains old target-hit ambiguity and requires mismatch ambiguity too; targeted105 and final full6518 pass",
+  "native_dll_sha256": "66c6db3b9a06b00d1b41ef91399929b9bc0114703a35f36335a1ad1e2d9bff87",
+  "native_dll_product_source_matches": true,
+  "real_dll_gate": "4 fresh self-owned children: valid72/readACK7, true missing required amount code6, mismatch28/readACK3 with independent exact target oracle, pre-read ACK actual server error",
+  "dll_fault_ack": "local poison refusal and actual disconnected-wire ERR232 distinguished; no DLL ACK business execution or post-disconnect ACK state claimed"
+}

@@ -1,0 +1,74 @@
+{
+  "kind": "post_audit_integration_validation",
+  "completed_before_integration": "2a964ab80b5de30035422b96c9f19d0a3789a0dd",
+  "incoming_original_commit": "d14fdd110ca83b45c168374bc6acfdc5c0d0803b",
+  "product_sha256": {
+    "event_probe_native_pc.js": "ad9c9be8bd14edb9fbd14138ed368ebb9a3f5a9f03e42aaffc55db4acf86a6eb",
+    "event_probe_runtime.js": "82fcb632267e9c860e8c926339941f060cf52186fcd2de453c17cf55b00c6e54",
+    "event_probe.py": "7ff8e7969684a5576555793fa485357b8c6d8218fdc63daf71c5e36c0eba8917",
+    "event_capture.py": "0574c196c3156f606364473ef1db6f008578b72a9af633114846643a108086ef",
+    "battle_lifecycle.py": "8c1fd2d6aa9d9de23f286b96d0b82c4f91c2446cbbf66b2a4250a296a99ba8ec",
+    "deployment_lifecycle.py": "7e55bed6a80f140dbadc13db07f9542295296ddd6d4e287d008d79d52ba4b312",
+    "stats_core.py": "ced12e63934079bd79fef011a66f5d1aa5d65cfe5e623d57139f987ca17f2046",
+    "enemy_telemetry.py": "73444757a5e2d2d0159b2a305b19dec90d6b9b092aef5da24324dfe507e3df6c",
+    "panel_model.py": "c7e42af16dd6cdb1c4f948b3cefdd4b7700da4ec61947a0adc6d7dee93240ec6",
+    "snapshot_adapter.py": "e6ebfa4dcd6fd4c3364fc695fa90877d60eb6b689b4093a61319a4610df03185",
+    "desktop/ArkDPS.Desktop/Inspector.cs": "d64245c01831e78a39b05beee580532bc5989f248f44d9401c6f7a0ffb44e0f4"
+  },
+  "test_sha256": {
+    "tests/capture_demand_dll_owned.py": "f49933ccaa26ce86bf2949aa1e0517050b210dfc96200f46e2011c10ea80472c",
+    "tests/capture_demand_dll_source.py": "f310555a90065bbd51b8254ce100881b427117e55de66bc3171f35efa059ceaa",
+    "tests/capture_demand_dll_helper.cpp": "23c9b443818140f5da3b4182fcbaddbb6888594bde03ff2f791ebaea98b5e7cc",
+    "tests/damage_demand_branches.js": "8e2cadc2b106b04765d3234585e863e4127ac878b58905fe0f2b1462d2ed7c67",
+    "tests/native_pc_cold_source_replay_fixture.js": "527e0dde725e5319bb36416b3ecca7207255a4af4fb2d7b26caed6cd10173dcf",
+    "tests/native_pc_owned_field_fixture.js": "efee4fda03e18fe3fb26cc12491d65f70fd83a2c8013db3a8338628e1adc0c12"
+  },
+  "receipts_sha256": {
+    "runtime/integration-d14/full-python.xml": "a4a925f1fe371343df9c744afa46e236797d0ec7ad579808f4eea78278153858",
+    "runtime/integration-d14/python-targeted.xml": "51a36378863ae2aa820a481e89da159f43572d562099da0f004b15eb4cc91fa5",
+    "runtime/integration-d14/review-receipt.json": "426f00f4b587e7ebb085ed6447073e57b498a0c193ea554ccdd063b55ce96a60",
+    "runtime/integration-d14/production_terminal_run/receipt.json": "3f6a1c52648f0e5158b7341398ecec2559c7dc441122c76df7947b3f95607661",
+    "runtime/integration-d14/production_sampling_run/receipt.json": "672b3141171dde21f0d79a48eb6569a9652a7d2c8842832ef0c304425a3da7ae",
+    "runtime/integration-d14/production_root_class_run/receipt.json": "01fa56d68b56df8c06b8cc73b23bf24f45defe6da8362881b1969eb321699c84",
+    "runtime/capture-demand/dll/post-d14-all-final/receipt.json": "fc653aa12691f931f566abc55d601cabe5a08cb870327553c4f8f0606812af77",
+    "runtime/capture-demand/dll/POST-D14-REPORT.md": "8fca9f8277890a0c015725041705ce2d51ddb83c05d1e1ecd0b03cc7aabb31e3",
+    "runtime/capture-demand/dll/POST-D14-MANIFEST.json": "3d4b308edf24f735add61023ad5af5e4fa95ef6c08fd31fd91364350dc2aba4b",
+    "runtime/capture-demand/dll/pre-d14-ordinary-control/receipt.json": "14f37f3cfca73624c71564a758bed6419d64d5c31a0bc939627cf2d0c4b65244"
+  },
+  "python_full": {
+    "name": "pytest",
+    "errors": "0",
+    "failures": "0",
+    "skipped": "29",
+    "tests": "6583",
+    "time": "152.608",
+    "timestamp": "2026-11-27T21:02:37.821092+08:00",
+    "hostname": "1080TI"
+  },
+  "python_targeted_passed": 297,
+  "desktop_headless": "exit0; canonical presence10s/skill50% full/reference4assertions; no windows/input",
+  "actual_dll_cases_passed": 5,
+  "dll_sha256": "66c6db3b9a06b00d1b41ef91399929b9bc0114703a35f36335a1ad1e2d9bff87",
+  "dll_native_source_files_unchanged": 22,
+  "cold_handoff": {
+    "first_raw_ticket": 0,
+    "game_frame": 30,
+    "first_cold_has_future_graph": false,
+    "record_facts_mutated": false,
+    "next_sample_has_graph": true,
+    "hook_boundaries": 8,
+    "normal_damage": 40,
+    "elemental_damage": 60,
+    "elemental_bar_not_money": 5,
+    "read_ack_through": 4,
+    "pre_integration_same_input_control": "fails because future graphs absent"
+  },
+  "live_game_or_fps_verified": false,
+  "high_load_mixed_steady_state_verified": false,
+  "uncovered": [
+    "real game IL2CPP discovery and method ABI",
+    "game-frame-zero native-hook real-device acceptance",
+    "same-level live FPS/latency acceptance",
+    "sustained overloaded mixed service capacity"
+  ]
+}

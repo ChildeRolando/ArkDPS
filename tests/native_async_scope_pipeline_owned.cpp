@@ -1,0 +1,156 @@
+#include "engine_capture_pipeline.h"
+#include <cassert>
+#include <iostream>
+using namespace arkdps::capture;
+using J=nlohmann::json;
+struct Reads { unsigned count=0; bool mutate=false; std::uint64_t word=42; std::uint8_t born=0; };
+bool reader(void* p,std::uintptr_t address,void* out,std::size_t size) noexcept {
+ auto& r=*static_cast<Reads*>(p); ++r.count;
+ if (r.mutate && r.count==2) ++r.word;
+ if(address==reinterpret_cast<std::uintptr_t>(&r.born)&&size==1){std::memcpy(out,&r.born,1);return true;}
+ if(address!=reinterpret_cast<std::uintptr_t>(&r.word)||size!=8)return false;
+ std::memcpy(out,&r.word,size);return true;
+}
+bool owned_reader(void* count,std::uintptr_t address,void* out,std::size_t size) noexcept {
+ ++*static_cast<unsigned*>(count);std::memcpy(out,reinterpret_cast<const void*>(address),size);return true;
+}
+int main(){
+ auto configs=std::make_unique<CaptureConfigurations>();
+ Reads reads; const auto address=std::to_string(reinterpret_cast<std::uintptr_t>(&reads.word));
+ auto field=[&](unsigned id,const char* role,const char* phase,const char* side,unsigned guard){
+ return J{{"field_id",id},{"role",role},{"phase",phase},{"root","absolute"},{"absolute_address",address},
+ {"root_index",0},{"pointer_offsets",J::array()},{"offset",0},{"bytes",8},{"kind","bytes"},{"guard_id",guard},{"guard_side",side},{"required",true}};};
+ J plan{{"schema_version",1},{"complete",true},{"address","1"},{"abi","win64-gp"},{"arg_count",0},{"arg_mask",0},
+ {"globals",J::array()},{"max_bytes",1024},{"max_reads",32},{"required_projections",J::array()},
+ {"fields",J::array({field(1,"clock_open","entry","before",1),field(2,"body","entry","none",0),field(3,"clock_close","entry","after",1)})}};
+ auto base=std::make_unique<CompiledPlan>(compile_plan(plan,1)); configs->intern(*base);
+ J graph{{"version",1},{"revision",1},{"mode_epoch",0},{"raw_collection","all"},{"available",true},{"body_insertion_index",1},
+ {"fields",J::array({field(1,"scope.open","checkpoint","before",1),field(2,"scope.close","checkpoint","after",1)})}};
+ configs->publish(graph,false); auto* pinned=configs->pin(0); assert(pinned);
+ auto snapshot=std::make_unique<Snapshot>();Context context{};RecordHeader header;
+ capture_scope_point(*base,Phase::entry,context,pinned,reader,&reads,*snapshot,header);
+ assert(snapshot->error==Error::ok && snapshot->field_count==5 && reads.count==5);
+ assert(header.scope_revision==1 && !header.scope_unavailable);
+ reads.count=0;reads.mutate=true;
+ capture_scope_point(*base,Phase::entry,context,pinned,reader,&reads,*snapshot,header);
+ assert(snapshot->error==Error::changed_guard);
+ graph["revision"]=2; configs->publish(graph,false);
+ assert(configs->pin(0)!=pinned && pinned->scope->revision==1);
+ assert(configs->pin(0)->scope->revision==2);
+ J publication{{"version",1},{"revision",1},{"mode_epoch",0},{"raw_collection","all"},{"available",true},
+ {"chunks",J::array({{{"fields",J::array({field(1,"publication.open.0","checkpoint","before",1),field(2,"publication.close.0","checkpoint","after",1)})}}})}};
+ configs->publish(publication,true);reads.mutate=false;reads.count=0;header={};header.publication_request=1;
+ capture_scope_point(*base,Phase::entry,context,configs->pin(0),reader,&reads,*snapshot,header);
+ assert(snapshot->error==Error::ok && snapshot->field_count==7 && reads.count==7);
+ assert(header.publication_captured && header.publication_revision==1);
+ reads.count=0;header={};
+ capture_scope_point(*base,Phase::entry,context,configs->pin(0),reader,&reads,*snapshot,header);
+ assert(snapshot->field_count==5 && !header.publication_captured);
+ J cold{{"version",1},{"max_bytes",1024},{"max_reads",32},
+ {"fields",J::array({field(1,"cold.root_open","checkpoint","before",1),field(2,"cold.body","checkpoint","none",0),field(3,"cold.root_close","checkpoint","after",1)})}};
+ plan["cold_plan"]=cold; plan["force_full_binding"]={{"phase","entry"}};
+ auto boundary=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*boundary);
+ header={};reads.count=0;
+ capture_scope_point(*boundary,Phase::entry,context,nullptr,reader,&reads,*snapshot,header);
+ assert(snapshot->error==Error::ok && snapshot->field_count==6 && reads.count==6);
+ assert(header.cold_revision==1 && header.projection_candidate && !header.publication_request);
+ reads.count=0;reads.mutate=true;header={};
+ capture_scope_point(*boundary,Phase::entry,context,nullptr,reader,&reads,*snapshot,header);
+ assert(snapshot->error==Error::changed_guard);
+ reads.mutate=false;reads.count=0;
+ plan.erase("cold_plan");plan.erase("force_full_binding");plan["profile"]="owned";
+ plan["fields"].push_back(field(4,"parent.body","checkpoint","none",0));
+ auto modifier=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*modifier);modifier->parent_checkpoint_fields=true;
+ auto lane=std::make_unique<Lane>();lane->depth=3;
+ lane->calls[0].id=UINT64_MAX-10;lane->calls[0].apply_modifier=true;
+ lane->calls[1].id=UINT64_MAX-5;lane->calls[1].apply_modifier=true;
+ lane->calls[2].id=123;lane->calls[2].apply_modifier=true;
+ header={};header.invocation=123;
+ capture_scope_point(*modifier,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(snapshot->error==Error::ok && snapshot->field_count==5);
+ assert(header.parent_checkpoint_count==2);
+ assert(lane->parent_checkpoints[0].invocation==UINT64_MAX-10 && lane->parent_checkpoints[0].checkpoint==1);
+ assert(lane->parent_checkpoints[1].invocation==UINT64_MAX-5 && lane->parent_checkpoints[1].checkpoint==2);
+ assert(snapshot->fields[2].checkpoint==1 && snapshot->fields[3].checkpoint==2);
+ plan["arg_count"]=2;plan["arg_mask"]=3;plan["profile"]="owned";
+ plan["hp_filter"]={{"receiver_arg",0},{"attribute_index_arg",1},{"max_hp_attribute",0},{"enemy_class","42"},{"normal_setter",false}};
+ auto hp=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*hp);
+ lane->depth=1;lane->calls[0].hp_ignored=false;context.args_valid=3;context.args[1]=1;
+ reads.count=0;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count==0 && snapshot->field_count==0 && lane->calls[0].hp_ignored);
+ capture_scope_point(*hp,Phase::leave,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count==0 && snapshot->field_count==0);
+ hp->hp_field_kind[1]=1;
+ hp->plan->fields[hp->plan->field_count]=hp->plan->fields[1];
+ auto& born_field=hp->plan->fields[hp->plan->field_count++];
+ born_field.id=20;born_field.bytes=1;born_field.absolute_address=reinterpret_cast<std::uintptr_t>(&reads.born);
+ hp->hp_field_kind[hp->plan->field_count-1]=2;
+ context.args[1]=0;reads.count=0;reads.mutate=false;reads.word=42;reads.born=0;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count==2 && snapshot->field_count==2 && lane->calls[0].hp_ignored);
+ reads.count=0;reads.born=1;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count>2 && !lane->calls[0].hp_ignored);
+ reads.count=0;reads.born=0;reads.word=43;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(reads.count>2 && !lane->calls[0].hp_ignored);
+ std::array<std::byte,128> enemy{};std::uint64_t klass=42,hpbits=123456;std::uint32_t uid=7;
+ std::memcpy(enemy.data(),&klass,8);std::memcpy(enemy.data()+0x18,&uid,4);
+ enemy[0x25]=std::byte{1};std::memcpy(enemy.data()+0x40,&hpbits,8);
+ auto hpfield=[&](unsigned id,const char* name,const char* phase,unsigned offset,unsigned size) {
+   auto f=field(id,"body",phase,"none",0);f["name"]=name;f["absolute_address"]=std::to_string(reinterpret_cast<std::uintptr_t>(enemy.data()+offset));f["bytes"]=size;return f;
+ };
+ plan["hp_filter"]["attribute_index_arg"]=nullptr;plan["hp_filter"]["normal_setter"]=true;plan["hp_filter"]["defer_entry_scope"]=true;
+ plan["fields"]=J::array({field(1,"clock_open","entry","before",1),field(2,"clock_close","entry","after",1),
+ hpfield(3,"hp.identity","entry",0,0x1c),hpfield(4,"hp.born","entry",0x25,1),hpfield(5,"hp.before","entry",0x40,8),
+ hpfield(6,"hp.id","entry",0x60,8),field(7,"clock_open","leave","before",1),field(8,"clock_close","leave","after",1),
+ hpfield(9,"hp.closing","leave",0x18,0x30),hpfield(10,"attributes.count","leave",0x60,4)});
+ plan["fields"][9]["tier"]="changed";
+ auto nochange_plan=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*nochange_plan);
+ unsigned native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::entry,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(lane->calls[0].hp_before_valid && lane->calls[0].hp_exact_enemy);
+ assert(native_reads==6 && header.scope_unavailable);
+ native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==3 && snapshot->field_count==3 && header.scope_unavailable);
+ lane->calls[0].hp_nested_dirty=true;native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==6 && !header.scope_unavailable);
+ lane->calls[0].hp_nested_dirty=false;native_reads=0;header={};header.publication_request=1;
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==8 && header.publication_captured && !header.scope_unavailable);
+ nochange_plan->hp_defer_scope=false;native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::entry,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==8 && !header.scope_unavailable);
+ native_reads=0;header={};
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==5 && !header.scope_unavailable);
+ nochange_plan->hp_defer_scope=true;
+ native_reads=0;header={};hpbits++;std::memcpy(enemy.data()+0x40,&hpbits,8);
+ capture_scope_point(*nochange_plan,Phase::leave,context,configs->pin(0),owned_reader,&native_reads,*snapshot,header,lane.get());
+ assert(native_reads==6);
+ lane->depth=2;lane->calls[0].hp_nested_dirty=false;context.args[1]=0;header={};
+ capture_scope_point(*hp,Phase::entry,context,nullptr,reader,&reads,*snapshot,header,lane.get());
+ assert(lane->calls[0].hp_nested_dirty);
+ boundary->force_full_entry=false;reads.mutate=false;reads.count=0;header={};header.publication_request=55;
+ capture_scope_point(*boundary,Phase::entry,context,configs->pin(0),reader,&reads,*snapshot,header,nullptr,true);
+ assert(header.cold_revision==1 && !header.scope_revision && !header.publication_revision);
+ assert(snapshot->field_count==6);
+ plan.erase("hp_filter");plan["name"]="BattleController.Destroy";plan["profile"]="owned";
+ auto singleton=field(3,"body","leave","none",0);singleton["name"]="terminal.singleton";
+ plan["fields"]=J::array({field(1,"clock_open","leave","before",1),field(2,"clock_close","leave","after",1),singleton});
+ auto destroy=std::make_unique<CompiledPlan>(compile_plan(plan,1));configs->intern(*destroy);
+ reads.count=0;header={};
+ capture_scope_point(*destroy,Phase::leave,context,configs->pin(0),reader,&reads,*snapshot,header);
+ assert(header.projection_candidate && !header.publication_request && !header.publication_captured);
+ assert(snapshot->field_count==3 && destroy->terminal_guard_fields[0]==3);
+ const auto bounds=configs->collect_quiescent(0);
+ assert(bounds["scope_before"]==2 && bounds["publication_before"]==1 && bounds["mode_before"]==0);
+ assert(configs->pin(0)->scope->revision==2);
+ graph["mode_epoch"]=1;graph["revision"]=3;configs->publish(graph,false);
+ const auto new_bounds=configs->collect_quiescent(1);
+ assert(configs->pin(0)==nullptr && configs->pin(1)->scope->revision==3 && new_bounds["mode_before"]==1);
+ std::cout<<"scope bracket, clock spanning graph, pinned immutable revision passed\n";
+}

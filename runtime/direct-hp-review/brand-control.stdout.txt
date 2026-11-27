@@ -1,0 +1,2 @@
+PASS_RAW_HP_JS provider pin/primitive types/deferred structural+planned/mode/cp/private receiver/lease/trap/count0/no live
+{"brand":false,"UID":123456,"complete":true}

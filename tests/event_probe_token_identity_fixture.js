@@ -1,4 +1,4 @@
-// Actual producer callbacks with owned Token -> Character metadata. No game.
+// Actual producer callbacks with complete owned Token -> Character -> NULL metadata. No game.
 const assert=require('node:assert/strict');
 const path=require('node:path');
 const {world}=require('./native_pc_autochess_context_fixture.js');
@@ -10,16 +10,23 @@ const androidLayout={native:16,nativeOwner:40,logger:224,loggerOwner:24,stats:48
 
 function derivedFactory(f){
  const parents=new Map(),original=f.metadataExports.il2cpp_class_is_assignable_from;
- function klass(name,parent){
-  const k=f.alloc();f.write(k.add(0x10),f.text(name));f.write(k.add(0x18),f.text('Torappu.Battle'));
+ function klass(name,parent,namespace='Torappu.Battle'){
+  const k=f.alloc();f.write(k.add(0x10),f.text(name));f.write(k.add(0x18),f.text(namespace));
   f.write(k.add(0x58),parent);parents.set(k.toString(),parent);return k;
+ }
+ // Every owned class used by the derived source has an explicit closed tail.
+ // Character itself is no longer an implicit endpoint of an early-positive walk.
+ const object=klass('Object',f.ptr(0),'System');
+ for(const [child,parent] of [[f.bObject,object],[f.entity,f.bObject],[f.unitClass,f.entity],
+   [f.character,f.unitClass],[f.enemyClass,f.unitClass]]){
+  f.write(child.add(0x58),parent);parents.set(child.toString(),parent);
  }
  // Extend the owned stand-in for this existing metadata API to honor the
  // extra real inheritance edges declared by this fixture. No event/quality
  // result or data UID is supplied to the producer by this stand-in.
  f.metadataExports.il2cpp_class_is_assignable_from=(base,candidate)=>{
   const seen=new Set();let current=candidate;
-  for(let depth=0;depth<16&&!current.isNull();depth++){
+  while(!current.isNull()){
    if(original(base,current))return true;
    if(seen.has(current.toString())||!parents.has(current.toString()))return false;
    seen.add(current.toString());current=parents.get(current.toString());
@@ -51,7 +58,10 @@ function sourceUnit(f,klass,uid,nativeUid){
 function positive(platform){
  const options={settlement:true,...(platform==='mumu'?{androidBattleLayout:androidLayout,unitManagerOffset:0x2c0,
   globals:{arkdpsAndroidBattleLayout:androidLayout}}:{})};
- const f=world({platform,fixtureOptions:options}),klass=derivedFactory(f),tokenClass=klass('Token',f.character);
+ const f=world({platform,fixtureOptions:options}),klass=derivedFactory(f);
+ let tokenParent=f.character;for(let i=0;i<12;i++)tokenParent=klass('OwnedTokenBase'+i,tokenParent);
+ const tokenClass=klass('Token',tokenParent);
+ assert.equal(f.context.immutableClassLineage(tokenClass).length,18);
  ['091000001','002000002','083000003','004000004'].forEach((uid,i)=>f.write(f.players[i][1].add(0x18),f.text(uid)));
  f.write(f.center.add(0x38),1);
  const pairs=f.roleList.add(0x10).readPointer();
@@ -96,11 +106,11 @@ function positive(platform){
  assert(!skillEvents.some(event=>event.source===identities.host_cid),'the producer never invents a host activation for a token skill');
  assert.deepEqual(batch.events.map(event=>event.sequence),Array.from({length:batch.events.length},(_,i)=>i+1));
  return {before:plain(before),baseline:plain(baseline),mark:plain(mark),batch,settlement:settlements[0],settlements,
-  skill_events:skillEvents,identities};
+  skill_events:skillEvents,identities,owned_lineage_classes:18};
 }
 function negatives(platform){
  const output={};
- for(const name of ['exact_enemy','unrelated_class','wrong_data_class','missing_data','zero_uid','class_cycle','truncated_ancestry']){
+ for(const name of ['exact_enemy','unrelated_class','wrong_data_class','missing_data','zero_uid','class_cycle','incomplete_ancestry']){
   const f=fixture({platform,settlement:true,sourcePath:path.join(__dirname,'..',
    platform==='native_pc'?'event_probe_native_pc.js':'event_probe_android2791.js')});
   const klass=derivedFactory(f),token=klass('Token',f.character),source=sourceUnit(f,token,70027,27);
@@ -110,7 +120,11 @@ function negatives(platform){
   if(name==='missing_data')f.write(source.add(0x538),f.ptr(0));
   if(name==='zero_uid')f.write(source.add(0x538).readPointer().add(0x6c),0);
   if(name==='class_cycle'){const loop=klass('Loop',f.ptr(0));f.write(loop.add(0x58),loop);f.write(source,loop);}
-  if(name==='truncated_ancestry'){let parent=f.character;for(let i=0;i<11;i++)parent=klass('Deep'+i,parent);f.write(source,parent);}
+  if(name==='incomplete_ancestry'){
+   // Character is present, but its eventual parent is unreadable: a positive
+   // prefix must not substitute for a completely captured metadata lineage.
+   f.write(f.character.add(0x58),f.alloc());
+  }
   assert.equal(f.context.sourceCharacterUid(source,identities.token_cid),undefined,name);
   f.clock(30,FP);const target=f.unit('enemy_owned_target',77);f.write(target,f.enemyClass);damage(f,source,target,40,50);
   const mark=f.context.rpc.exports.mark(),batch=f.context.rpc.exports.readEvents(0,mark.sequence);
