@@ -46,7 +46,7 @@ function captureClockFrame(){return captureRead('clock_close',()=>clock.readU32(
 function captureClockFixed(){return captureRead('clock_close',()=>clock.add(4).readS64());}
 function registerProbeHook(address,callbacks){
  if(typeof probeAdapter.prepareCaptureHook==='function')probeAdapter.prepareCaptureHook(address,callbacks);
- return Interceptor.attach(address,callbacks);
+ return attachEventHook(address,callbacks);
 }
 const immutableClassNames=new Map(),immutableClassNamespaces=new Map();
 function className(k){
@@ -422,6 +422,39 @@ let acknowledgedSequence=0,readThroughSequence=0,hpContextDropped=0;
 let autoChessRoundStart=null,autoChessUnclaimedZero=null;
 const AUTOCHESS_ROUND_START_EVENT_LIMIT=2048;
 const stacks=new Map(), hooks=[];
+// Temporary capture control owns listeners, never the event queue or ACK cursor.
+const captureHooks=[];
+let capturePaused=false,captureBlocked=false,captureInterrupted=false;
+let captureRevision=0,captureGeneration=0,captureCallbacks=0;
+function attachEventHook(address,callbacks){
+ const entry={address,callbacks:null,listener:null,detached:false};
+ function enter(receiver,callback,first,second){
+  receiver.arkdpsCaptureAdmitted=!captureBlocked&&!stopped;
+  if(!receiver.arkdpsCaptureAdmitted)return;
+  captureCallbacks++;
+  try{return callback?.call(receiver,first,second);}
+  catch(e){receiver.arkdpsCaptureAdmitted=false;captureCallbacks--;throw e;}
+ }
+ function leave(receiver,callback,value){
+  if(!receiver.arkdpsCaptureAdmitted)return;
+  try{return callback?.call(receiver,value);}
+  finally{receiver.arkdpsCaptureAdmitted=false;captureCallbacks--;}
+ }
+ // Keep the prepared contract, labels and private direct-HP entry points.
+ // Both transports participate in the same pause admission/lifetime gate.
+ entry.callbacks={...callbacks,
+  onEnter(args){return enter(this,callbacks.onEnter,args);},
+  onLeave(result){return leave(this,callbacks.onLeave,result);}
+ };
+ if(typeof callbacks.arkdpsDirectHpEntry==='function'){
+  entry.callbacks.arkdpsDirectHpEntry=function(enemy,io){return enter(this,callbacks.arkdpsDirectHpEntry,enemy,io);};
+  entry.callbacks.arkdpsDirectHpLeave=function(io){return leave(this,callbacks.arkdpsDirectHpLeave,io);};
+ }
+ if(!captureBlocked||globalThis.__arkdpsNativeCaptureControl===true)
+  entry.listener=Interceptor.attach(address,entry.callbacks);
+ captureHooks.push(entry);
+ return {detach(){entry.detached=true;if(entry.listener){entry.listener.detach();entry.listener=null;}}};
+}
 function str(p){if(p.isNull())return null;const n=p.add(0x10).readS32();if(n<0||n>200)throw new Error('bad string');return p.add(0x14).readUtf16String(n);}
 function fp(p){return p.readS64().toNumber()/4294967296;}
 function entityId(p){if(p.isNull())throw new Error('missing source entity');const id=str(p.add(0x148).readPointer());if(!id)throw new Error('missing source identity');return id;}
@@ -3843,6 +3876,51 @@ function installAutoChessRoundResetHook(){
  }catch(e){cfg.autoChessRoundResetError=String(e);}
 }
 installAutoChessRoundResetHook();
+function captureControlStatus(){
+ return {capture_pause_version:1,paused:capturePaused,revision:captureRevision,
+  capture_generation:captureGeneration,sequence,epoch,active:Math.max(active,captureCallbacks),
+  active_hooks:[...activeHooks.keys()],retry:false,error:fatal,stopped};
+}
+function resetCaptureContexts(){
+ // Preserve every queued record and its old settlement provenance. Only state
+ // that could bridge an unobserved interval is discarded at the new segment.
+ resetEnemyHpCoalescing();resetDamageSettlementScope();
+ stacks.clear();nativeSkillCastCalls.clear();activeModifiers.clear();activeApplyScopes.clear();
+ formulaScopes.clear();pendingFormulaDamage.clear();activeDamageFactories.clear();
+ shieldByFrame.clear();shieldUnknownByFrame.clear();enemyHpWrites.clear();
+ awaitingEnemyTile.clear();enemyBirthProofs.clear();enemyHealthPhases.clear();pendingEnemyRebirth.clear();
+ enemyEntryFrame=null;terminalBoundary=null;autoChessRoundStart=null;autoChessUnclaimedZero=null;
+ if(typeof probeAdapter.discardInitialBoundary==='function')probeAdapter.discardInitialBoundary('manual_capture_pause');
+}
+function setCapturePaused(paused,revision){
+ const rejected=error=>({...captureControlStatus(),error});
+ if(typeof paused!=='boolean'||!Number.isInteger(revision)||revision<1||revision>2147483647)
+  return rejected('invalid capture control request');
+ if(stopped||fatal)return rejected(fatal||'event probe stopped');
+ if(revision<captureRevision||(revision===captureRevision&&paused!==capturePaused))
+  return rejected('stale capture control revision');
+ if(revision===captureRevision)return captureControlStatus();
+ // Frida callbacks are serialized with this control. Gate new invocations,
+ // allow admitted onLeave work to finish, then physically detach listeners.
+ if(paused&&!capturePaused)captureInterrupted=true;
+ captureBlocked=true;
+ if(captureCallbacks||active||activeHooks.size)
+  return {...captureControlStatus(),revision,retry:true};
+ if(paused){
+  if(globalThis.__arkdpsNativeCaptureControl!==true)
+   for(const entry of captureHooks)if(!entry.detached&&entry.listener){entry.listener.detach();entry.listener=null;}
+  if(coalesceEnemyHp)flushCoalescedEnemyHp();
+ }else{
+  if(capturePaused||captureInterrupted)resetCaptureContexts();
+  if(globalThis.__arkdpsNativeCaptureControl!==true)
+   for(const entry of captureHooks)if(!entry.detached&&!entry.listener)
+    entry.listener=Interceptor.attach(entry.address,entry.callbacks);
+ }
+ if(globalThis.__arkdpsNativeCaptureControl!==true&&typeof Interceptor.flush==='function')Interceptor.flush();
+ if(capturePaused!==paused||!paused&&captureInterrupted)captureGeneration++;
+ capturePaused=paused;captureRevision=revision;captureBlocked=paused;captureInterrupted=false;
+ return captureControlStatus();
+}
 function markEvents(withPresence=false){
  const pending=probeAdapter.markEntryCallbacks?.()??probeAdapter.pendingMarkCallbacks?.()??0;
  if(pending>0&&!fatal&&!stopped)
@@ -3955,6 +4033,7 @@ function receiveEventRequest(){
     case 'read':result=readEvents(request.after,request.through);break;
     case 'terminal_read':result=readTerminalEvents(request.after,request.through);break;
     case 'ack':result=ackEvents(request.sequence);break;
+    case 'capture_control':result=setCapturePaused(request.paused,request.revision);break;
     default:result={error:'unknown event transport operation'};
    }
   }catch(e){result={error:String(e)};}
@@ -3966,12 +4045,14 @@ rpc.exports={
  readEvents,
  readTerminalEvents,
  ackEvents,
+ setCapturePaused,
+ captureControlStatus,
  stop(){stopped=true;if(typeof probeAdapter.discardInitialBoundary==='function')probeAdapter.discardInitialBoundary('stopped');
   for(const h of hooks)h.detach();return {active,error:fatal};}
 };
 probeHooksReady=true;
 receiveEventRequest();
-send({ready:true,arch:Process.arch,skill_ready:!skillUnknown&&cfg.skillReady,
+send({ready:true,arch:Process.arch,capture_pause_version:1,skill_ready:!skillUnknown&&cfg.skillReady,
  ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),
  autochess_round_start_ready:!!autoChessRoundResetMethod&&!cfg.autoChessRoundResetError,
  autochess_round_start_error:cfg.autoChessRoundResetError||null,

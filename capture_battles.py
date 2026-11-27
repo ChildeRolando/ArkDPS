@@ -69,6 +69,8 @@ def capture(seconds, output, adb=DEFAULT_ADB, serial=DEFAULT_SERIAL):
             elif kind == 'archive_ready':
                 summary['archives'] += 1
                 pending_records.append({'archive_ready': data})
+            elif kind == 'event_capture_segment':
+                pending_records.append({'event_capture_segment': data})
             elif kind == 'connected':
                 diagnostics = data['diagnostics']
                 write({'connected': dict(pid=data['pid'],
@@ -358,6 +360,7 @@ def _replay_snapshots(lines):
     pending = []
     samples = archives = 0
     finished = False
+    seen_feeds = set()
     for line in lines:
         value = json.loads(line)
         if finished:
@@ -366,6 +369,10 @@ def _replay_snapshots(lines):
             if sessions is not None:
                 raise ValueError('duplicate capture header')
             sessions = BattleSessions(value['header']['feed'])
+            seen_feeds.add(sessions.feed_id)
+        elif 'event_capture_segment' in value:
+            sessions = _replay_capture_segment(sessions, value['event_capture_segment'], seen_feeds)
+            pending.extend(sessions.pop_archives())
         elif 'observation' in value:
             raw = value['observation']
             try:
@@ -404,6 +411,17 @@ def observation_from_json(raw):
     return BattleObservation(**raw)
 
 
+def _replay_capture_segment(sessions, data, seen_feeds):
+    if (sessions is None or not isinstance(data, dict)
+            or data.get('previous_feed') != sessions.feed_id
+            or not isinstance(data.get('feed'), str) or data['feed'] in seen_feeds
+            or type(data.get('revision')) is not int or not 1 <= data['revision'] <= 2147483647):
+        raise ValueError('invalid capture segment handoff')
+    successor = sessions.next_capture_segment(data.get('reason'), data['feed'])
+    seen_feeds.add(successor.feed_id)
+    return successor
+
+
 def replay_product(lines):
     """Verify the GUI/CLI journal, including event drains, publications and handoffs."""
     reader = DesktopAuditReader()
@@ -412,6 +430,7 @@ def replay_product(lines):
     samples = archives = 0
     finished = False
     failures = 0
+    seen_feeds = set()
     for line in lines:
         record = reader.restore(json.loads(line))
         kind, data = record['kind'], record['data']
@@ -422,6 +441,12 @@ def replay_product(lines):
             if sessions is not None:
                 raise ValueError('duplicate lifecycle header')
             sessions = BattleSessions(data['feed'])
+            seen_feeds.add(sessions.feed_id)
+        elif kind == 'event_capture_segment':
+            if finished or failures:
+                raise ValueError('capture segment outside a valid lifecycle journal')
+            sessions = _replay_capture_segment(sessions, data, seen_feeds)
+            pending.extend(sessions.pop_archives())
         elif kind == 'lifecycle_observation':
             if sessions is None or finished:
                 raise ValueError('observation outside lifecycle journal')

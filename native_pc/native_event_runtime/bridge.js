@@ -1,5 +1,6 @@
 // Narrow compatibility surface for the unmodified PC event probe. Not a Frida runtime.
 'use strict';
+globalThis.__arkdpsNativeCaptureControl=true;
 function __integer(value) {
  if(value instanceof NativePointer)return value.value;
  if(value instanceof NativeInteger)return value.value;
@@ -880,8 +881,11 @@ function __arkdpsPointer(value){return ptr(value);}
 function __arkdpsRequest(json){
  const command=JSON.parse(json),api=rpc.exports;
  if(!command||typeof command!=='object')throw new Error('invalid request');
- // Statistical requests have exactly one native path: immutable publication
- // dispatch. Keep only explicit lifecycle cleanup on the shared probe API.
- if(command.operation!=='stop')throw new Error('native event requests require the publication journal');
- return JSON.stringify(api.stop());
+ // Lifecycle control executes on the sole consumer worker after native drain.
+ switch(command.operation){
+ case 'capture_status':return JSON.stringify(api.captureControlStatus());
+ case 'capture_control':return JSON.stringify(api.setCapturePaused(command.paused,command.revision));
+ case 'stop':return JSON.stringify(api.stop());
+ default:throw new Error('native event requests require the publication journal');
+ }
 }

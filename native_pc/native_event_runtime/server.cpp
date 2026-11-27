@@ -225,7 +225,8 @@ bool equal_token(const std::string& left, const std::string& right) {
 }
 
 Json hello() {
-    return Json{{"provider", "arkdps-native-hooks"}, {"protocol", 1}, {"ready", parse(arkdps::readiness())}};
+    return Json{{"provider", "arkdps-native-hooks"}, {"protocol", 1}, {"capture_pause_version", 1},
+        {"ready", parse(arkdps::readiness())}};
 }
 
 std::string safe_diagnostic(const char* message, const char* phase) {
@@ -390,7 +391,8 @@ DWORD WINAPI worker(void* argument) {
                     phase = "readiness";
                     result = hello();
                 } else {
-                    for (const char* known : {"mark", "read", "ack", "stop"}) if (operation == known) phase = known;
+                    for (const char* known : {"mark", "read", "ack", "stop", "capture_control", "capture_status"})
+                        if (operation == known) phase = known;
                     request.erase("id");
                     const auto response = arkdps::request(request.dump());
                     // Do not parse and encode an already oversized QuickJS reply again.

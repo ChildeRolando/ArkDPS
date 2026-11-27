@@ -10,7 +10,7 @@ from collector import (Collector, SampleUnavailable, BattleChanged, ProcessChang
                        UnsupportedVersion, collector_process)
 from enemy_telemetry import defense_enemy_projection
 from event_capture import CaptureRetry, LiveEventCapture
-from event_observer import ObserverStatus
+from event_observer import ObserverReadRetry, ObserverStatus
 from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from event_probe import EventProbe
 from metrics import TimingWindow, timing_batch
@@ -83,6 +83,11 @@ class CollectionSession:
         self.history_error = None
         self._pending_history = None
         self._observer_generation = None
+        self.events_paused = False
+        self._event_capture_generation = 0
+        self._pending_event_control = None
+        self._pause_tail = None
+        self._event_identity_only = getattr(self.collector, 'event_identity_only', False)
 
     def enable_lifecycle(self, runtime=None):
         """Use ordered battle generations in the GUI and capture entry points."""
@@ -338,6 +343,68 @@ class CollectionSession:
                                          event_error=self.event_error))
         return True, self.observer
 
+    @property
+    def event_pause_supported(self):
+        return (self.observer is not None
+                and getattr(self.observer, 'status', None) == ObserverStatus.READY
+                and getattr(self.observer, 'capture_pause_supported', False) is True
+                and callable(getattr(self.observer, 'set_capture_paused', None)))
+
+    def set_events_paused(self, paused, revision):
+        """Run on the acquisition owner; a protocol reply alone cannot rewrite history."""
+        if type(paused) is not bool or type(revision) is not int or not 1 <= revision <= 2147483647:
+            raise ValueError('无效的事件暂停请求')
+        if not self.event_pause_supported:
+            raise RuntimeError('当前观察者不支持暂停事件采集')
+        if self._pending_event_control is not None and self._pending_event_control[0] != paused:
+            # Finish an already issued physical pause and its owned tail before
+            # enabling callbacks again. A newer desired value cannot erase it.
+            self.set_events_paused(*self._pending_event_control)
+        if self.runtime is not None and not self.runtime.settle_event_ack(self.observer):
+            raise ObserverReadRetry('等待已接纳事件前缀的确认')
+        try:
+            reply = self.observer.set_capture_paused(paused, revision)
+        except ObserverReadRetry:
+            self._pending_event_control = (paused, revision)
+            raise
+        if (not isinstance(reply, dict) or reply.get('paused') is not paused
+                or type(reply.get('revision')) is not int or reply['revision'] != revision):
+            raise RuntimeError('事件暂停确认与请求不匹配')
+        generation = reply.get('capture_generation')
+        if generation is not None and (type(generation) is not int or generation < self._event_capture_generation):
+            raise RuntimeError('事件控制世代无效或回退')
+        changed = (self.events_paused != paused or
+                   generation is not None and generation != self._event_capture_generation)
+        if changed and self.runtime is not None and (paused or not self.events_paused):
+            sequence = reply.get('sequence')
+            if type(sequence) is not int or sequence < 0:
+                raise RuntimeError('事件控制确认缺少有效的尾部水位')
+            if self._pause_tail is None:
+                self._pause_tail = (sequence, self.runtime.sessions.generation)
+            self._pending_event_control = (paused, revision)
+            if not self.runtime.control_tail_ready(sequence):
+                self.runtime.poll_control_tail(self.collector, self.observer, *self._pause_tail)
+            if not self.runtime.control_tail_ready(sequence):
+                raise ObserverReadRetry('等待暂停前已采集尾部接纳和确认')
+        self.events_paused = paused
+        if hasattr(self.collector, 'event_identity_only'):
+            self.collector.event_identity_only = False if paused else self._event_identity_only
+        if changed and self.runtime is not None:
+            reason = 'event_capture_paused' if paused else 'event_capture_resumed'
+            boundary = self.runtime.begin_capture_segment(reason)
+            self.capture = LiveEventCapture(self.collector, None if paused else self.observer, audit=self.audit)
+            self._observer_generation = None
+            self.audit('event_capture_segment', dict(boundary, revision=revision))
+            self._drain_archives()
+        if generation is not None:
+            self._event_capture_generation = generation
+        self._pending_event_control = None
+        self._pause_tail = None
+        self.event_status = 'paused' if paused else 'ready'
+        self.event_error = '事件采集已暂停，累计快照继续' if paused else None
+        self.collector.event_capability = dict(status=self.event_status, error=self.event_error)
+        return reply
+
     def locate(self, *, force=False, wait_seconds=0, cancelled=None):
         """Compatibility readiness gate; BattleFeed alone binds battle roots.
 
@@ -364,8 +431,11 @@ class CollectionSession:
         from snapshot_adapter import FrameMismatch
         from roster import RosterUnavailable
         try:
-            observation = self.runtime.poll(self.collector, self.observer,
-                                           prepare_observer=self._prepare_battle_observer)
+            if self._pause_tail is not None:
+                observation = self.runtime.poll_control_tail(self.collector, self.observer, *self._pause_tail)
+            else:
+                observation = self.runtime.poll(self.collector, None if self.events_paused else self.observer,
+                    prepare_observer=None if self.events_paused else self._prepare_battle_observer)
         except (CaptureRetry, FrameMismatch, RosterUnavailable, SampleUnavailable) as exc:
             if isinstance(exc, (CaptureRetry, BattleChanged)):
                 raise
@@ -380,6 +450,8 @@ class CollectionSession:
         sample = self.runtime.display_sample()
         if sample is None:
             raise CaptureRetry('waiting for a reliable battle baseline')
+        if self.events_paused:
+            sample.update(event_status='paused', event_error='事件采集已暂停，累计快照继续')
         status = sample['event_status']
         if status == 'unavailable' or self.event_status == WAITING_GAME_INIT:
             sample.update(event_status=self.event_status, event_error=self.event_error)

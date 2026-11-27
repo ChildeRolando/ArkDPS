@@ -161,6 +161,42 @@ send({ready:true,fixture:'self-owned-quiet-mark-concurrency', markWaiting:markWa
 '''.replace('RESULT_BUFFER', json.dumps(result_buffer)).replace('AUTOCHESS', json.dumps(autochess))
 
 
+def capture_control_source(binary, *, slow=False, detach_float=False, late_attach=False):
+    slow_offset = export_offsets(binary)['ArkDpsTestSlow']
+    return fixture_source(binary, slow=slow) + r'''
+if(DETACH_FLOAT)hooks[1].detach();
+let capturePaused=false,captureRevision=0,captureGeneration=0;
+const originalMark=rpc.exports.mark;
+let lateAttached=false;
+rpc.exports.mark=()=>{
+ if(LATE_ATTACH&&capturePaused&&!lateAttached){
+  hooks.push(Interceptor.attach(base.add(SLOW_OFFSET),{
+   onEnter(){this.serial=++serial;records.push({phase:'enter',name:'LateSlow',serial:this.serial});},
+   onLeave(){records.push({phase:'leave',name:'LateSlow',serial:this.serial});}
+  }));lateAttached=true;
+ }
+ return {...originalMark(),late_attached:lateAttached};
+};
+rpc.exports.captureControlStatus=()=>{
+ const active=records.filter(r=>r.phase==='enter').length-records.filter(r=>r.phase==='leave').length;
+ return {capture_pause_version:1,paused:capturePaused,revision:captureRevision,capture_generation:captureGeneration,
+  sequence:records.length,epoch:serial,active,active_hooks:active?['fixture']:[],retry:false,error:null};
+};
+rpc.exports.setCapturePaused=(paused,revision)=>{
+ const status=rpc.exports.captureControlStatus;
+ if(typeof paused!=='boolean'||!Number.isInteger(revision)||revision<1||revision>2147483647)
+  return {...status(),error:'invalid capture control request'};
+ if(revision<captureRevision||(revision===captureRevision&&paused!==capturePaused))
+  return {...status(),error:'stale capture control revision'};
+ if(status().active)return {...status(),revision,retry:true};
+ if(capturePaused!==paused)captureGeneration++;
+ capturePaused=paused;captureRevision=revision;
+ return status();
+};
+send({ready:true,fixture:'self-owned-capture-control',capture_pause_version:1,activity:activity.toString()});
+'''.replace('DETACH_FLOAT', json.dumps(detach_float)).replace('LATE_ATTACH', json.dumps(late_attach)).replace('SLOW_OFFSET', str(slow_offset))
+
+
 def child(binary):
     """Child owns its own test functions, memory and LoadLibrary invocation."""
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -219,7 +255,7 @@ def child(binary):
 
     def code_digest():
         return {name: sha256(ctypes.string_at(ctypes.cast(getattr(libraries[0], 'ArkDpsTest' + name), ctypes.c_void_p).value, 32)).hexdigest()
-                for name in ('Integer', 'Float', 'Sret', 'Nested')}
+                for name in ('Integer', 'Float', 'Sret', 'Nested', 'Slow')}
 
     for line in sys.stdin:
         command = json.loads(line)
@@ -294,7 +330,10 @@ def child(binary):
         elif operation == 'start-threads':
             function_name = command.get('function', 'Integer')
             function = getattr(libraries[0], 'ArkDpsTest' + function_name)
-            values = [400] if function_name == 'Slow' else list(range(1, 13))
+            milliseconds = command.get('milliseconds', 400)
+            if type(milliseconds) is not int or not 1 <= milliseconds <= 5000:
+                raise ValueError('invalid owned slow-call duration')
+            values = [milliseconds] if function_name == 'Slow' else list(range(1, 13))
             function.argtypes, function.restype = [ctypes.c_uint64] * len(values), ctypes.c_uint64
 
             def invoke_background():
@@ -532,7 +571,8 @@ def check_smoke(binary=DEFAULT_OUTPUT):
             original = fixture.command('load')['code']
             pipe = NativePipe(fixture.pipe_name, fixture.identity['pid'])
             ready = pipe.request('initialize', token=fixture.token)
-            assert ready == dict(provider='arkdps-native-hooks', protocol=1, ready=dict(ready=True, fixture='self-owned-abi'))
+            assert ready == dict(provider='arkdps-native-hooks', protocol=1, capture_pause_version=1,
+                                 ready=dict(ready=True, fixture='self-owned-abi'))
             assert fixture.command('snapshot')['code'] != original
             called = fixture.command('call')
             assert called == dict(integer=650, floating=62.5, sret=[17, 29, 46, 12], nested=687), called
@@ -694,6 +734,115 @@ def check_smoke(binary=DEFAULT_OUTPUT):
                 time.sleep(.01)
             assert fixture.command('call')['integer'] == 650
             receipt['fatal_callback_reported_and_hooks_disabled'] = True
+        finally:
+            if pipe is not None:
+                pipe.close()
+            fixture.close()
+    return receipt
+
+
+def check_capture_control(binary=DEFAULT_OUTPUT):
+    """Exercise reversible physical Hook changes in self-owned ABI processes."""
+    from native_pc.native_hook_source import NativePipe
+    binary = Path(binary).resolve()
+    receipt = dict(game_connected=False, fixture='self-owned-capture-control',
+                   dll_sha256=sha256(binary.read_bytes()).hexdigest())
+    with TemporaryDirectory(prefix='native-capture-control-', dir=binary.parent) as temporary:
+        root = Path(temporary)
+        fixture = Fixture(root / 'round-trip', binary)
+        pipe = None
+        try:
+            fixture.configure(source=capture_control_source(binary, detach_float=True, late_attach=True))
+            original = fixture.command('load')['code']
+            pipe = NativePipe(fixture.pipe_name, fixture.identity['pid'])
+            hello = pipe.request('initialize', token=fixture.token)
+            assert hello['capture_pause_version'] == hello['ready']['capture_pause_version'] == 1
+            patched = fixture.command('snapshot')['code']
+            assert patched['Integer'] != original['Integer'] and patched['Float'] == original['Float']
+            called = fixture.command('call')
+            before = pipe.request('mark')['records']
+            paused = pipe.request('capture_control', paused=True, revision=1)
+            assert paused['paused'] is paused['native_paused'] is True
+            assert paused['native_quiet'] is True and paused['retry'] is False and paused['error'] is None
+            assert paused['capture_generation'] == 1 and paused['active'] == 0 and paused['active_hooks'] == []
+            assert paused['sequence'] == len(before)
+            assert fixture.command('snapshot')['code'] == original
+            duplicate = pipe.request('capture_control', paused=True, revision=1)
+            assert duplicate['capture_generation'] == 1 and duplicate['sequence'] == len(before)
+            assert fixture.command('call') == called
+            during = pipe.request('mark')
+            assert during['records'] == before and during['late_attached'] is True
+            # A hook registered while paused must remain physically unpatched,
+            # even after the following ordinary mark applies queued changes.
+            assert fixture.command('snapshot')['code'] == original
+            for revision in (0, 1):
+                rejected = pipe.request('capture_control', paused=False, revision=revision)
+                assert rejected['error'] and rejected['paused'] is True
+                assert pipe.request('mark')['records'] == before  # Rejection retains the pipe.
+            resumed = pipe.request('capture_control', paused=False, revision=2)
+            assert resumed['paused'] is resumed['native_paused'] is False
+            assert resumed['retry'] is False and resumed['error'] is None and resumed['capture_generation'] == 2
+            resumed_code = fixture.command('snapshot')['code']
+            assert resumed_code['Integer'] != original['Integer'] and resumed_code['Slow'] != original['Slow']
+            assert resumed_code['Float'] == original['Float']  # Permanent detach stays detached.
+            assert fixture.command('call') == called
+            assert fixture.command('start-threads', function='Slow', milliseconds=5) == {'started': 4}
+            assert fixture.command('join-threads') == {'results': [128] * 4}
+            after = pipe.request('mark')['records']
+            assert after[:len(before)] == before and len(after) > len(before)
+            assert not any(record['name'] == 'Float' for record in after)
+            assert sum(record['name'] == 'LateSlow' for record in after) == 8
+            status = pipe.request('capture_status')
+            assert status['sequence'] == len(after) and status['epoch'] > paused['epoch']
+            assert pipe.request('capture_control', paused=True, revision=3)['capture_generation'] == 3
+            assert pipe.request('capture_control', paused=False, revision=4)['capture_generation'] == 4
+            stopped = pipe.request('stop')
+            assert stopped['native_quiet'] is True and stopped['active'] == 0
+            assert fixture.command('snapshot')['code'] == original and fixture.command('call') == called
+            receipt.update(physical_hooks_removed_during_pause=True, same_pipe_resume=True,
+                original_functions_callable_while_paused=True, queued_prefix_preserved=True,
+                revisions_idempotent_and_rejected_without_disconnect=True,
+                late_hook_stays_disabled_until_resume=True, permanent_detach_not_resurrected=True,
+                repeated_pause_resume_and_final_stop=True)
+        finally:
+            if pipe is not None:
+                pipe.close()
+            fixture.close()
+
+        fixture = Fixture(root / 'busy-superseded-pause', binary)
+        pipe = None
+        try:
+            fixture.configure(source=capture_control_source(binary, slow=True))
+            original = fixture.command('load')['code']
+            pipe = NativePipe(fixture.pipe_name, fixture.identity['pid'])
+            hello = pipe.request('initialize', token=fixture.token)
+            address = hello['ready']['activity']
+            fixture.command('start-threads', function='Slow', milliseconds=2000)
+            deadline = time.monotonic() + 5
+            while fixture.command('memory', address=address)['value'] != 1:
+                if time.monotonic() >= deadline:
+                    raise AssertionError('did not observe the owned slow call')
+                time.sleep(.005)
+            busy = pipe.request('capture_control', paused=True, revision=1)
+            assert busy['retry'] is True and busy['native_quiet'] is False and busy['active'] > 0
+            assert busy['paused'] is busy['native_paused'] is True and busy['error'] is None
+            assert fixture.command('snapshot')['code'] == original
+            superseded = pipe.request('capture_control', paused=False, revision=2)
+            assert superseded['retry'] is True and superseded['paused'] is True
+            assert fixture.command('join-threads') == {'results': [2123] * 4}
+            resumed = pipe.request('capture_control', paused=False, revision=2)
+            assert resumed['paused'] is False and resumed['retry'] is False and resumed['error'] is None
+            # Native capture did stop, although its first pause could not commit
+            # immediately. The superseding resume must retain both boundaries.
+            assert resumed['capture_generation'] == 2
+            assert fixture.command('snapshot')['code'] != original
+            records = pipe.request('mark')['records']
+            assert len(records) == 8 and all(record['name'] == 'Slow' for record in records)
+            assert fixture.command('call')['integer'] == 650
+            stopped = pipe.request('stop')
+            assert stopped['native_quiet'] is True and fixture.command('snapshot')['code'] == original
+            receipt.update(busy_is_retry_without_disconnect=True, original_inflight_calls_drain=True,
+                           superseding_resume_preserves_pause_gap=True)
         finally:
             if pipe is not None:
                 pipe.close()
@@ -904,6 +1053,7 @@ def main():
     result['authenticated_diagnostics'] = check_diagnostics(args.binary)
     result['oversized_response'] = check_oversized_response(args.binary)
     result['quiet_mark_boundaries'] = check_quiet_mark_boundaries(args.binary)
+    result['capture_control'] = check_capture_control(args.binary)
     if args.dual_hook:
         result['dual_hook_comparator'] = check_dual_hook(args.binary)
     if args.output:

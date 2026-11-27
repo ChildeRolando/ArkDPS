@@ -31,7 +31,7 @@ internal static class Program
     }
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         // Host real product resource dictionaries without launching its Application.
         System.Reflection.Assembly.SetEntryAssembly(null);
@@ -57,6 +57,11 @@ internal static class Program
         timings.Enabled=false;
         timingReads=0;
         Check("disabled timer stops reading clock again",timings.Begin()==0 && timingReads==0);
+        if (args is ["--event-capture-pause"])
+        {
+            EventCapturePauseTests.Run();
+            return;
+        }
         var normal = new NativePcWindowResolver(_ => Birth, _ => new[] { Window() });
         Check("unique suitable window", normal.Resolve(Diagnostic(), Config(), 0) is
             { State: NativePcWindowState.Available, Handle: 100 });
@@ -159,6 +164,7 @@ internal static class Program
         NativeHookReleaseEvidenceTests.Run();
         SamplingRejectionTests.Run();
         GameFpsSidebarTests.Run();
+        EventCapturePauseTests.Run();
         RefreshBudgetTests.Run();
         DesktopLogTests.Run();
         BridgeStartupTests.Run();

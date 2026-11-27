@@ -12,9 +12,14 @@ MuMu 与官服 PC 的探针负责采集和证明事件；它们将相同口径�
 
 ArkPie 声明 `can_restart_in_process=False`：已经交给会话的原生输入无论暂时拒收还是实际失效，都不能通过自动“先 stop 再新建”恢复。失效状态保持失效，清理所有权仍在原观察器；显式关闭、重连释放或已确认的进程变化沿用既有停钩和排空证明。可重建且确已失效的其他传输仍只在确认新战局后重试一次。普通日志记录 `observer_recovery_deferred` 的世代、传输状态和决策代码，不开启逐事件调试。
 
+临时事件暂停通过可选 `capture_pause_version:1` 能力和 `set_capture_paused(paused, revision)` 控制；ArkPie 另要求原生 hello 同版本，不能仅凭新 JS 的能力声明启用旧 DLL。线协议为 `capture_control {paused:bool,revision:1..2147483647}`。确认回复含 `capture_pause_version/paused/revision/capture_generation/sequence/epoch/active/active_hooks/retry/error/stopped`；暂停须回调排空、无错误、同编号且状态匹配。`retry:true` 只表示等待，不改变宿主确认状态；过期或冲突编号拒绝。`capture_generation` 仅记录控制转换，不替代原生战局世代。
+
+Frida 暂停时撤销事件 listener，恢复相同回调；ArkPie 在 VM 锁外实际禁用／启用非永久 detached 的 MinHook 钩子，排空后才提交 JS 边界，保留 QuickJS 与认证管道。暂停不调用永久 `stop`，不重置事件序号、epoch、队列或 ACK。继续前清除跨漏采区间的结算、技能调用、HP 合并及终局临时上下文；已排队记录及其结算 provenance 保留。永久撤销的可选钩子不能被继续操作复活。忙碌、无回复和错误均不能证明已经暂停。
+
 | 接口 | 职责 |
 | --- | --- |
 | `EventProbe.start / mark / read_through / commit_events / stop` | 建立观察、同帧标记、有界读取、宿主确认和清理；保留既有资源所有权。 |
+| `EventProbe.set_capture_paused` | 可选的同进程事件暂停；不更换观察器或消费游标。 |
 | `ProbeContract.validate_binding / validate_batch` | 验证已确认身份、有界前缀及一致重放。 |
 | `ProbeContract.normalize_quality` | 解释声明版本和质量标记，不改事件量或原始证明。 |
 | `ProbeContract.ack_scope / validate_ack_mark / terminal_identity_matches` | 限定确认和终局证据所属的战局。 |
