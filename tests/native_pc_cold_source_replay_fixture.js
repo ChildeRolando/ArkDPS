@@ -5,6 +5,8 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const {world}=require('./native_pc_autochess_context_fixture.js');
 const f=world({fixtureOptions:{roundResetMethod:true,settlement:true,enemyHpState:true}}),P=f.ptr(0).constructor,c=f.context;
+const ordinary=process.env.ARKDPS_COLD_ORDINARY==='1';
+if(ordinary)f.write(f.level.add(0x18),f.text('Obt/Hard/level_hard_07-04'));
 f.write(f.character.add(0x58),f.unitClass);f.write(f.unitClass.add(0x58),f.entity);f.write(f.entity.add(0x58),f.bObject);f.write(f.bObject.add(0x58),f.ptr(0));
 f.klass('BattleCharacterData','Torappu.Battle',36,[[4,'prefabKey',0x50,14],[8,'uniqueId',0x6c,9],[14,'isToken',0x90,2],[15,'isPredefined',0x91,2],[18,'tokenOrHostKey',0x98,14],[19,'tokenOrHostUniqueId',0xa0,9]],f.ptr(0),f.characterData);
 for(const data of f.roleData)f.write(data,f.characterData);
@@ -17,7 +19,7 @@ for(const [name,size] of [['readPointer',8],['readU16',2],['readU32',4]])P.proto
  if(size===8)v.setBigUint64(0,BigInt(value.value),true);else if(size===2)v.setUint16(0,value,true);else v.setUint32(0,value,true);
  metadata.set(this.toString()+':'+size,b);return value;
 };
-const baseline=f.mark();assert.equal(baseline.native_autochess_context.status,'available');
+const baseline=f.mark();assert(ordinary?baseline.native_autochess_context===undefined:baseline.native_autochess_context.status==='available');
 for(const name of methods)P.prototype[name]=original[name];
 c.ArrayBuffer=ArrayBuffer;c.NativePointer=P;c.NativeInteger=class{};c.__read=()=>{late++;throw Error('live read during replay');};
 const bridge=fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8');
@@ -84,9 +86,78 @@ P.prototype.readUtf16String=function(n){if(!replaying)return original.readUtf16S
 P.prototype.readCString=function(){if(replaying){late++;throw Error('metadata live read');}return original.readCString.call(this);};
 for(const[name,native]of Object.entries(f.metadataExports))f.metadataExports[name]=(...args)=>{if(replaying){if(name==='il2cpp_class_is_assignable_from')return c.__arkdpsCapturedAssignable(...args);late++;throw Error('NativeFunction in replay');}return native(...args);};
 function reduce(record){c.ownedRecord=record;replaying=true;try{return vm.runInContext('__arkdpsReplayBegin(ownedRecord);try{globalThis.binding=prepareCapturedColdBinding(ownedRecord);}finally{globalThis.summary=__arkdpsReplayEnd();}binding;',c);}finally{replaying=false;}}
+const publishedScopes=[],publishedPublications=[];
+if(ordinary){
+ c.__publishCaptureScope=graph=>publishedScopes.push(graph);
+ c.__publishCapturePublication=graph=>publishedPublications.push(graph);
+ c.planMetadata={...c.metadata,clock:vm.runInContext('clock',c),skill_offsets:{},immutable_class_parents:true};
+ vm.runInContext('arkdpsNativeAsyncCapture=true;nativeCaptureMetadata=planMetadata;nativeAutoStage=null;nativeAutoCache=null;nativeLastBinding=null;',c);
+}
 const record=capture(),binding=reduce(record);
 assert.equal(c.summary.complete,true,JSON.stringify(c.summary));
 assert(binding,vm.runInContext('JSON.stringify(nativeAutoBindingDiagnostic)',c));
+if(ordinary){
+ assert.equal(binding.native_autochess_context,undefined);
+ assert.equal(publishedScopes.length,1,'verified ordinary cold tree must publish its scope graph');
+ assert.equal(publishedPublications.length,1,'verified cold binding must publish future sampling geometry');
+ const scope=publishedScopes[0];assert(scope.available);assert.equal(scope.context.autochess,false);
+ assert.equal(scope.context.stage_id,'Obt/Hard/level_hard_07-04');
+ // Publication must not accept a copied binding, another record or a binding
+ // that has not passed the complete cold root/clock/stage closing witnesses.
+ const rejectPublish=(candidate,owner)=>{
+  c.candidate=candidate;c.owner=owner;c.ownedRecord=record;replaying=true;
+  try{vm.runInContext('__arkdpsReplayBegin(ownedRecord);try{publishNativeCapturePublication(candidate,owner);}finally{globalThis.summary=__arkdpsReplayEnd();}',c);}finally{replaying=false;}
+  assert.equal(c.summary.complete,true);assert.equal(publishedScopes.length,1);assert.equal(publishedPublications.length,1);
+ };
+ rejectPublish(JSON.parse(JSON.stringify(binding)),record);rejectPublish(binding,{...record});rejectPublish(binding,null);
+ const changed=capture(),link=changed.segments.find(s=>s.role==='cold.root_close'&&s.address===f.controller.add(0xe0).toString());
+ assert(link);link.bytes=new ArrayBuffer(8);assert.equal(reduce(changed),null);assert.equal(c.summary.complete,true);
+ assert.equal(publishedScopes.length,1);assert.equal(publishedPublications.length,1);
+ // Rebuild the accepted stage after the deliberately failed cold tree.
+ reduce(capture());const warmScope=publishedScopes.at(-1);
+ const {ownedFields}=require('./native_pc_owned_field_fixture.js');
+ for(const name of methods)P.prototype[name]=original[name];
+ const harness=ownedFields(f,c.planMetadata,{reuseBridge:true});
+ const plans=['Entity.ApplyModifier','Unit.OnTakeDamage'].map(name=>{c.hookName=name;return vm.runInContext('nativeCapturePlan(hookName,ptr(1),planMetadata)',c);});
+ const apply=f.callback('ApplyModifier',f.entity),take=f.callback('OnTakeDamage',f.unitClass);
+ const group=JSON.parse(fs.readFileSync('tests/fixtures/event_probe_business/2206-native-callback-fields.json','utf8')).nested_kill_groups[0],entry=group.raw_child_entry.record,returned=group.raw_child_return.record;
+ const fixed=value=>BigInt(Math.round(value*4294967296));
+ let nextInvocation=1000;
+ function nested(useScope){
+  f.clock(entry.frame,fixed(entry.game_time));
+  const before=vm.runInContext('sequence',c),source=f.unit(entry.parent_source,10),target=f.unit(entry.target,useScope?21:20);
+  f.write(source.add(0x148),f.text(entry.parent_source));f.write(target.add(0x148),f.text(entry.target));
+  f.write(source.add(0x538).readPointer().add(0x6c),entry.parent_source_character_uid);
+  const parent=f.modifier(source,target,entry.parent_amount,0,group.parent_type),child=f.modifier(f.ptr(0),target,entry.child_amount,0,entry.child_type);
+  const barEvent=group.canonical_records_same_frame.map(x=>x.event).find(x=>x.kind==='elemental_bar'),bar=f.modifier(source,target,barEvent.amount,0,0);f.write(bar.add(0x60),5);
+  const outer={threadId:1,nativeCaptureInvocation:String(nextInvocation++)},hit={threadId:1,nativeCaptureInvocation:String(nextInvocation++)},elemental={threadId:1,nativeCaptureInvocation:String(nextInvocation++)},inner={threadId:1,nativeCaptureInvocation:String(nextInvocation++)};
+  function invoke(index,edge,call,args,parents=[]){
+   const body=harness.captureFields(plans[index].fields.filter(x=>x.phase===edge),args,args,[]);
+   const guards=useScope?harness.captureFields(warmScope.fields.map((x,i)=>({...x,field_id:1000+i})),args,args,[]):{segments:[],fields:[]};
+   const point={version:1,edge,checkpoint:0,invocation_id:call.nativeCaptureInvocation,thread_id:1,segments:[...body.segments,...guards.segments],fields:[...body.fields,...guards.fields],facts:{mode_epoch:0,scope_mode_epoch:0,...(useScope?{scope_revision:warmScope.revision}:{}),parent_checkpoints:[]}};
+   for(let i=0;i<parents.length;i++){
+    const parent=parents[i],checkpoint=i+1,cp=harness.captureFields(plans[0].fields.filter(x=>x.phase==='checkpoint'),args,args,[null,parent.mod],checkpoint);
+    point.segments.push(...cp.segments);point.fields.push(...cp.fields);point.facts.parent_checkpoints.push({invocation_id:parent.call.nativeCaptureInvocation,checkpoint});
+   }
+   harness.replay(point,()=> (edge==='entry'?[apply,take][index].onEnter:[apply,take][index].onLeave).call(call,...(edge==='entry'?[args]:[])));
+   assert.equal(c.fixtureSummary.complete,true,JSON.stringify(c.fixtureSummary));
+  }
+  f.write(target.add(0x40),fixed(entry.parent_target_hit_hp_before));
+  invoke(0,'entry',outer,[target,parent]);invoke(1,'entry',hit,[target,parent],[{call:outer,mod:parent}]);invoke(1,'leave',hit,[target,parent],[{call:outer,mod:parent}]);
+  f.write(parent.add(0x48),fixed(entry.parent_real_delta));f.write(target.add(0x40),fixed(entry.target_hp));
+  invoke(0,'entry',elemental,[target,bar],[{call:outer,mod:parent}]);invoke(0,'entry',inner,[target,child],[{call:outer,mod:parent},{call:elemental,mod:bar}]);
+  f.write(child.add(0x48),fixed(returned.child_real_delta));f.write(target.add(0x40),fixed(returned.target_hp));
+  invoke(0,'leave',inner,[target,child],[{call:outer,mod:parent},{call:elemental,mod:bar}]);invoke(0,'leave',elemental,[target,bar],[{call:outer,mod:parent}]);invoke(0,'leave',outer,[target,parent]);
+  return JSON.parse(vm.runInContext('JSON.stringify(queue)',c)).filter(event=>event.sequence>before);
+ }
+ const missingGraph=nested(false),complete=nested(true);
+ assert(missingGraph.some(event=>event.kind==='damage_settlement'&&event.source===entry.parent_source&&event.settlement_complete===false),JSON.stringify({missingGraph,complete,quality:vm.runInContext('damageSettlementQuality()',c)}));
+ const settlements=complete.filter(event=>event.kind==='damage_settlement');assert.equal(settlements.length,2);
+ assert(settlements.every(event=>event.settlement_complete===true),JSON.stringify(complete));
+ assert(complete.every(event=>event.native_autochess_scope===undefined),'ordinary events have no AutoChess scope');
+ assert.equal(harness.late(),0);harness.restore();assert.equal(late,0);
+ console.log('PASS_NORMAL_COLD_SCOPE verified cold publication -> owned ordinary nested settlement; forged/cross-record/changed-root rejected; zero live replay reads');
+}else{
 assert.equal(binding.native_autochess_context.status,'available');assert.equal(binding.native_autochess_context.memberships.length,4);
 assert.deepEqual(JSON.parse(JSON.stringify(binding.native_autochess_context.players)),JSON.parse(JSON.stringify(baseline.native_autochess_context.players)));
 // One failed Chess branch must preserve the other players/memberships.
@@ -188,3 +259,4 @@ dispatch(finalRecord,()=>{destroyHook.onLeave.call(destroyCall);},true);
 assert(c.finalProjection,vm.runInContext('JSON.stringify(terminalDiagnostics)',c));assert.equal(c.finalProjection.terminal_read.terminal_only,true);assert.equal(c.finalProjection.terminal_read.events.length,actorEvents.length+badForm.length+badToken.length);assert.equal(vm.runInContext('eventStore.readThrough',c),0);
 assert.equal(late,0);
 console.log(JSON.stringify({status:'PASS_COLD_SOURCE_REPLAY',fields:record.fields.length,segments:record.segments.length,late_reads:late,scope:binding.native_autochess_context.scope_key}));
+}

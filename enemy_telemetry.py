@@ -851,6 +851,10 @@ class EnemyTelemetry:
                     new_identities[uid] = eid
                     row = self._event_row(observed['eid'], observed['instance_uid'])
                     row.update(name=observed['name'], code=observed['code'], hp=observed['hp'])
+                    # Current membership certifies this HP even though it does
+                    # not certify dynamic MaxHP or the lifecycle state. Keep
+                    # the capacity lower bound after later damage/finish.
+                    row = _remember_capacity_floor(row, _finite(observed['hp']))
                     point = hp_points.get((uid, eid))
                     if observed['hp'] is not None and (point is None or observed_frame >= point[0]):
                         hp_points[(uid, eid)] = observed_frame, observed['hp']
