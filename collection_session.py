@@ -444,7 +444,7 @@ class CollectionSession:
         would destroy a still-owned one-shot source. Unknown health fails closed.
         """
         from event_probe import StreamGap
-        from native_pc.native_hook_source import NativeHookEventProbe, NativePipe
+        from native_pc.native_hook_source import NativeHookEventProbe
         observer = self.observer
         if (not isinstance(error, StreamGap) or self.closed or not self._is_native_pc()
                 or not isinstance(observer, NativeHookEventProbe)
@@ -452,22 +452,7 @@ class CollectionSession:
                 or observer.status != ObserverStatus.READY
                 or observer.can_restart_in_process is not False):
             return False
-        pipe = observer._pipe
-        if (not isinstance(pipe, NativePipe) or pipe._poisoned is not False
-                or pipe.handle is None):
-            return False
-        process = self.collector.process
-        owned = observer._owned_process_instance
-        instance = getattr(process, 'process_instance', None)
-        if (type(owned) is not tuple or len(owned) != 2
-                or any(type(value) is not int or value <= 0 for value in owned)
-                or type(instance) not in (tuple, list) or tuple(instance) != owned
-                or getattr(process, 'pid', None) != owned[0]):
-            return False
-        try:
-            return process.process_alive() is True
-        except Exception:
-            return False
+        return observer.has_live_owned_transport()
 
     def _read_lifecycle(self):
         from snapshot_adapter import FrameMismatch
@@ -578,7 +563,9 @@ class CollectionSession:
         sample['enemy'] = dict(enemy, non_team_native_damage=other_damage) if other_damage else enemy
 
     def _drain_archives(self):
-        archives = self.runtime.sessions.pop_archives()
+        pending = getattr(self.runtime, 'pending_terminal_archive', None)
+        archives = (self.runtime.sessions.pop_archives(pending_terminal=pending)
+                    if pending is not None else self.runtime.sessions.pop_archives())
         if self.history is not None:
             # Claim the entire batch before diagnostic I/O can interrupt handoff.
             self._pending_history.extend(archives)
@@ -620,6 +607,7 @@ class CollectionSession:
                     self._drain_archives()
                     if self.capture is not None:
                         self.runtime.disconnected('capture_stopped')
+                        self._drain_archives()
                         self.audit('lifecycle_summary', self.runtime.sessions.live())
                 if self.capture is not None:
                     self.capture.close()

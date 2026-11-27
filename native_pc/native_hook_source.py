@@ -775,6 +775,24 @@ class NativeHookEventProbe:
     request_timeout = 5.0
     terminal_mark_timeout = .5
 
+    def has_live_owned_transport(self):
+        """Read existing process/pipe ownership without a request or restart."""
+        pipe, owned = self._pipe, self._owned_process_instance
+        if (self.status != ObserverStatus.READY or not isinstance(pipe, NativePipe)
+                or pipe._poisoned is not False or pipe.handle is None
+                or type(owned) is not tuple or len(owned) != 2
+                or any(type(value) is not int or value <= 0 for value in owned)):
+            return False
+        process = getattr(self.collector, 'process', None)
+        instance = getattr(process, 'process_instance', None)
+        if (type(instance) not in (tuple, list) or tuple(instance) != owned
+                or getattr(process, 'pid', None) != owned[0]):
+            return False
+        try:
+            return process.process_alive() is True
+        except Exception:
+            return False
+
     def __init__(self, collector, remote=None, *, root=None, runtime_dir=None,
                  loader_factory=WindowsDllLoader, pipe_factory=NativePipe, prepared=None):
         if remote is not None:

@@ -53,7 +53,8 @@ class _RejectedPendingPrefix:
     cursor_lifetime: object
     generation: int
     anchor_sequence: int
-    through: int
+    through: int | None
+    departure: tuple | None = None
 
     def __deepcopy__(self, memo):
         # Terminal reducer copies must retain the actual source identity, not
@@ -1020,6 +1021,19 @@ class BattleFeed:
         rejected = getattr(published_capture, 'rejected_pending_prefix', None)
         if (isinstance(rejected, _RejectedPendingPrefix) and observer is rejected.observer
                 and cursor_lifetime is rejected.cursor_lifetime):
+            if rejected.departure is not None:
+                # Absence retired the observed empty interval, not the source
+                # tail. Only the same strict empty-successor proof can establish
+                # that no unseen record was skipped between those scopes.
+                anchor, latest = rejected.departure
+                successor = pending_scope_successor(sample, evidence)
+                mode = _verified_pending_empty_handoff(anchor, latest, successor)
+                result = self._drain(observer, evidence, sample, capture=capture)
+                if result is None or result.get('error'):
+                    return result, False
+                result['pending_scope_superseded'] = dict(version=1, anchor=deepcopy(anchor),
+                    latest=deepcopy(latest), successor=successor, mode=mode)
+                return result, False
             # A new scope/baseline is not proof that the failed old prefix was
             # consumed. Keep this observer's rejected source range unacked.
             return {'error': 'rejected pending prefix remains unacknowledged'}, False
@@ -1923,8 +1937,8 @@ class BattleSessions:
                 if (not isinstance(superseded, dict)
                         or set(superseded) != {'version', 'anchor', 'latest', 'successor', 'mode'}
                         or type(superseded.get('version')) is not int or superseded['version'] != 1
-                        or superseded['mode'] != 'reset'
-                        or _verified_pending_empty_handoff(superseded['anchor'], superseded['latest'], superseded['successor']) != 'reset'
+                        or superseded['mode'] not in ('reset', 'scope_end')
+                        or _verified_pending_empty_handoff(superseded['anchor'], superseded['latest'], superseded['successor']) != superseded['mode']
                         or pending_scope_successor(observation.sample, observation.events) != superseded['successor']):
                     raise StreamGap('invalid pending scope supersession transaction')
                 previous_stream = self.adapter.event_stream if self.adapter is not None else None
@@ -2122,8 +2136,24 @@ class BattleSessions:
             result['multiplayer'] = self._multiplayer_result()
         return deepcopy(result)
 
-    def pop_archives(self):
+    def pop_archives(self, *, pending_terminal=None):
         # _archive already detached the complete record from live state.
+        # An unresolved ACK can still revise its exact final-prefix record.
+        # Keep that record here until confirmation or cancellation, rather
+        # than saving an immutable pending version before its result arrives.
+        if pending_terminal is not None:
+            battle_id, final = pending_terminal
+            ready, retained = deque(), deque()
+            for archive in self._archives:
+                metadata = archive['metadata']
+                if (archive['battle_id'] == battle_id
+                        and metadata.get('terminal_ack_status') == 'pending'
+                        and metadata.get('event_source_final_watermark') == final):
+                    retained.append(archive)
+                else:
+                    ready.append(archive)
+            self._archives = retained
+            return ready
         # Transfer ownership of the list and its records to the caller.
         archives = self._archives
         self._archives = []
@@ -2163,17 +2193,53 @@ class BattleRuntime:
         self._pending_event_ack = None
         self._accepted_event_observer = None
 
+    @property
+    def pending_terminal_archive(self):
+        pending = self._pending_event_ack
+        if (pending is not None and pending[3] is not None
+                and self.sessions.metadata.get('terminal_ack_status') == 'pending'
+                and self.sessions.metadata.get('event_source_prefix_complete') is True
+                and self.sessions.metadata.get('event_source_final_watermark') == pending[3]):
+            from event_observer import FridaEventObserver, ObserverStatus
+            observer = pending[0]
+            if (getattr(observer, 'status', None) != ObserverStatus.READY
+                    or probe_cursor_lifetime(observer) is not pending[4]
+                    or getattr(observer, '_ack_error', None) is not None):
+                return None
+            if isinstance(observer, FridaEventObserver):
+                if (len(pending) < 6 or not observer.can_retry_accepted_terminal_ack(
+                        pending[1], pending[3], pending[5])):
+                    return None
+            else:
+                from native_pc.native_hook_source import NativeHookEventProbe
+                if (not isinstance(observer, NativeHookEventProbe)
+                        or not observer.has_live_owned_transport()):
+                    return None
+            return self.sessions.battle_id, pending[3]
+        return None
+
     def _retry_accepted_frida_ack(self, observer):
         """Retry only an already-ingested, source-issued unknown Frida ACK."""
         pending = self._pending_event_ack
         if (pending is None or len(pending) < 6 or pending[5] is None
-                or pending[0] is not observer or pending[3] is not None
+                or pending[0] is not observer
                 or probe_cursor_lifetime(observer) is not pending[4]):
             return None
         from event_observer import FridaEventObserver
         if not isinstance(observer, FridaEventObserver):
             return None
-        confirmed = observer.retry_accepted_ack(pending[1], pending[5])
+        final = pending[3]
+        if final is not None:
+            # The source capability covers only an actually read and consumed
+            # final prefix. A busy later mark cannot revoke its ACK retry.
+            if (self.sessions.metadata.get('event_source_prefix_complete') is not True
+                    or self.sessions.metadata.get('event_source_final_watermark') != final):
+                return None
+            confirmed = observer.retry_accepted_terminal_ack(pending[1], final, pending[5])
+            if confirmed is True:
+                self.sessions.terminal_acknowledged(True)
+        else:
+            confirmed = observer.retry_accepted_ack(pending[1], pending[5])
         if confirmed is True and self._pending_event_ack is pending:
             self._pending_event_ack = None
         return confirmed
@@ -2293,12 +2359,31 @@ class BattleRuntime:
                 self.record(observation)
             pending = self.feed._pending_scope
             evidence = observation.events or {}
+            rejected = getattr(self.sessions.capture, 'rejected_pending_prefix', None)
+            superseded = evidence.get('pending_scope_superseded')
+            if (consumed and isinstance(rejected, _RejectedPendingPrefix)
+                    and rejected.departure is not None and isinstance(superseded, dict)
+                    and (superseded['anchor'], superseded['latest']) == rejected.departure
+                    and self.sessions.event_status == 'recording'
+                    and not self.sessions.capture.closed):
+                # Sessions accepted the original empty interval and its strict
+                # successor proof. A failed candidate must retain the seal.
+                del self.sessions.capture.rejected_pending_prefix
             if consumed and pending is not None and ('pending_scope_start' in evidence or 'pending_scope_superseded' in evidence):
                 stream = self.sessions.adapter.event_stream if self.sessions.adapter is not None else None
                 if (stream is not None and stream.sequence == evidence['sequence']
                         and stream.frame == observation.sample['frame']
                         and (not self.sessions.capture.closed or 'pending_scope_exit' in evidence
                              or 'pending_scope_end' in evidence)):
+                    if 'pending_scope_end' in evidence:
+                        # The last empty endpoint is not proof about records
+                        # produced after it. Preserve that unresolved departure
+                        # across new baselines, with an explicitly unknown tail.
+                        self.sessions.capture.rejected_pending_prefix = _RejectedPendingPrefix(
+                            observer=pending['observer'], cursor_lifetime=pending['cursor_lifetime'],
+                            generation=observation.generation, through=None,
+                            anchor_sequence=pending['anchor']['sequence'],
+                            departure=(deepcopy(pending['anchor']), deepcopy(pending['latest'])))
                     self.feed._pending_scope = None
                 elif ('pending_scope_start' in evidence
                         and observation.generation == pending['generation']
@@ -2425,11 +2510,12 @@ class BattleRuntime:
                     # source capability from its own current capture. This ACK
                     # belongs solely to the replacement, never the rejected tail.
                     del self.sessions.capture.rejected_pending_prefix
-        if (pending_ack is not None and retry_ack and not confirmed
-                and pending_ack[3] is None):
+        if pending_ack is not None and retry_ack and not confirmed:
             from event_observer import FridaEventObserver
             if isinstance(pending_ack[0], FridaEventObserver):
-                receipt = pending_ack[0].accepted_ack_receipt(pending_ack[1])
+                receipt = (pending_ack[0].accepted_ack_receipt(pending_ack[1])
+                           if pending_ack[3] is None else
+                           pending_ack[0].accepted_terminal_ack_receipt(pending_ack[1], pending_ack[3]))
                 if receipt is not None:
                     pending_ack = (*pending_ack[:5], receipt)
         self._pending_event_ack = pending_ack

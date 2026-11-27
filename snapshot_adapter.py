@@ -47,6 +47,7 @@ class OwnerMap:
     unknown_token_cids: set[str] = field(default_factory=set)
     ambiguous_cids: set[str] = field(default_factory=set)
     roster_entries: dict[str, CharacterEntry] = field(default_factory=dict)
+    unresolved_token_entries: dict[str, set[CharacterEntry]] = field(default_factory=dict)
 
     def lookup(self, cid: str) -> str | None:
         return self.owners.get(cid)
@@ -86,6 +87,7 @@ def build_owner_map(roster: RosterSnapshot) -> OwnerMap:
         cids = {h.cid for h in hosts}
         if len(hosts) != 1 or len(cids) != 1 or not token.host_key:
             result.unknown_token_cids.add(token.cid)
+            result.unresolved_token_entries.setdefault(token.cid, set()).add(token)
             continue
         owner = hosts[0].cid
         previous = result.owners.get(token.cid)
@@ -778,26 +780,57 @@ class BattleStatisticsAdapter:
             return AdapterUpdate(self.session, game_time, self.result(roster),
                                  missing_fields=('native_player_counters',), roster_frame=roster.frame)
         roster_map = _character_counter_map(sample) if self._character_counters else build_owner_map(roster)
-        if self.source_attribution or source_attribution:
-            self._update_event_sources(roster, roster_map, source_events, settlement_version)
-        # New roster evidence can map tokens that were not attributable when
-        # the session started. Never change an existing mapping in-place.
+        # Prepare only the small ownership index. A rejected cumulative frame
+        # must not publish unknown/conflict state or stop the accepted stream.
+        ownership = OwnerMap(
+            owners=dict(self.owner_map.owners),
+            unknown_token_cids=set(self.owner_map.unknown_token_cids),
+            ambiguous_cids=set(self.owner_map.ambiguous_cids),
+            roster_entries=dict(self.owner_map.roster_entries),
+            unresolved_token_entries={cid: set(entries) for cid, entries
+                                      in self.owner_map.unresolved_token_entries.items()})
+        conflicts = set(self.mapping_conflicts)
         for cid, owner in roster_map.owners.items():
-            if cid in self.owner_map.owners and self.owner_map.owners[cid] != owner:
-                self.mapping_conflicts.add(cid)
+            if cid in ownership.owners and ownership.owners[cid] != owner:
+                conflicts.add(cid)
                 continue
-            self.owner_map.owners.setdefault(cid, owner)
-        self.owner_map.unknown_token_cids |= roster_map.unknown_token_cids
-        self.owner_map.ambiguous_cids |= roster_map.ambiguous_cids
-        self.mapping_conflicts.update(
-            entry.cid for entry in roster.entries
-            if entry.is_predefined and not entry.is_token
-            and entry.cid in roster_map.ambiguous_cids)
-        self.owner_map.roster_entries.update(roster_map.roster_entries)
+            ownership.owners.setdefault(cid, owner)
+            unresolved = ownership.unresolved_token_entries.get(cid)
+            if unresolved and cid not in roster_map.ambiguous_cids:
+                # A new deployment with the same prefab cannot explain an old
+                # unresolved cumulative contribution. Only the exact retained
+                # token/host witness may resolve temporary missing-host data.
+                current = {entry for entry in roster.entries if entry.cid == cid and entry.is_token}
+                if unresolved <= current:
+                    ownership.unknown_token_cids.discard(cid)
+                    ownership.unresolved_token_entries.pop(cid, None)
+        ownership.unknown_token_cids |= roster_map.unknown_token_cids
+        for cid, entries in roster_map.unresolved_token_entries.items():
+            ownership.unresolved_token_entries.setdefault(cid, set()).update(entries)
+        ownership.ambiguous_cids |= roster_map.ambiguous_cids
+        conflicts.update(entry.cid for entry in roster.entries
+                         if entry.is_predefined and not entry.is_token
+                         and entry.cid in roster_map.ambiguous_cids)
+        ownership.roster_entries.update(roster_map.roster_entries)
+        blocked = ownership.unknown_token_cids | ownership.ambiguous_cids | conflicts
+        attribution = self.source_attribution or source_attribution
+        if sample.get('rows') and not attribution and not any(
+                isinstance(row.get('id'), str)
+                and (owner := ownership.owners.get(row['id'], self.source_aliases.get(row['id']))) is not None
+                and row['id'] not in blocked and owner not in blocked
+                and _counter(row) is not None for row in sample['rows']):
+            # Missing a host is provisional; contradictory positive ownership
+            # is not. A rejected counter frame cannot erase a verified clash
+            # and later reuse the same cumulative key as if it never occurred.
+            self.mapping_conflicts.update(conflicts)
+            self.owner_map.ambiguous_cids.update(roster_map.ambiguous_cids)
+            raise MappingUnavailable('统计条目存在但无法可靠归属；拒绝发布')
+        self.owner_map, self.mapping_conflicts = ownership, conflicts
+        if attribution:
+            self._update_event_sources(roster, roster_map, source_events, settlement_version)
+            blocked = (self.owner_map.unknown_token_cids | self.owner_map.ambiguous_cids
+                       | self.mapping_conflicts)
         self.last_roster_frame = roster.frame
-
-        blocked = (roster_map.unknown_token_cids | roster_map.ambiguous_cids
-                   | self.mapping_conflicts)
         if self.event_stream is not None and blocked and not self.source_attribution:
             self.event_stream.stop()
         counters: dict[str, dict[str, float]] = {}

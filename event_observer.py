@@ -1,4 +1,5 @@
 """Frida event transports sharing bounded reads and commit acknowledgements."""
+from copy import deepcopy
 from enum import Enum
 from dataclasses import dataclass
 import json
@@ -43,6 +44,7 @@ class _FridaAcceptedAck:
     lifetime: object
     process_identity: tuple
     sequence: int
+    terminal_key: str | None = None
 
 
 class FridaEventObserver:
@@ -69,6 +71,7 @@ class FridaEventObserver:
         self._request_id = 0
         self._pending_request = None
         self._accepted_ack_receipt = None
+        self._verified_terminal_read = None
         reset_probe_cursor(self)
         self._autochess_enabled = None
 
@@ -292,11 +295,57 @@ class FridaEventObserver:
     def retry_accepted_ack(self, sequence, receipt):
         if (type(sequence) is not int or not isinstance(receipt, _FridaAcceptedAck)
                 or receipt is not self._accepted_ack_receipt or receipt.observer is not self
-                or receipt.sequence != sequence or sequence > self._committed_sequence):
+                or receipt.sequence != sequence or sequence > self._committed_sequence
+                or receipt.terminal_key is not None):
             return None
         state = self._accepted_ack_state()
         if (state is None or state[0] is not receipt.script or state[1] is not receipt.session
                 or state[2] is not receipt.lifetime or state[3] != receipt.process_identity):
+            return None
+        return self.commit_events(sequence)
+
+    @staticmethod
+    def _terminal_ack_key(final_mark):
+        if type(final_mark) is not dict:
+            return None
+        try:
+            return json.dumps(final_mark, sort_keys=True, separators=(',', ':'), allow_nan=False)
+        except (TypeError, ValueError):
+            return None
+
+    def accepted_terminal_ack_receipt(self, sequence, final_mark):
+        """Authorize only a consumed final prefix from this source's real tail read."""
+        verified = self._verified_terminal_read
+        state = self._accepted_ack_state()
+        if (type(sequence) is not int or verified is None or state is None
+                or not self._acknowledged_sequence < sequence
+                or sequence != self._committed_sequence
+                or verified[0] != sequence or not NativePcBinding._same(verified[1], final_mark)
+                or state[0] is not verified[2][0] or state[1] is not verified[2][1]
+                or state[2] is not verified[2][2] or state[3] != verified[2][3]):
+            return None
+        key = self._terminal_ack_key(final_mark)
+        if key is None:
+            return None
+        receipt = _FridaAcceptedAck(self, *state, sequence, terminal_key=key)
+        self._accepted_ack_receipt = receipt
+        return receipt
+
+    def can_retry_accepted_terminal_ack(self, sequence, final_mark, receipt):
+        if (type(sequence) is not int or not isinstance(receipt, _FridaAcceptedAck)
+                or receipt is not self._accepted_ack_receipt or receipt.observer is not self
+                or receipt.sequence != sequence or sequence != self._committed_sequence
+                or receipt.terminal_key is None
+                or receipt.terminal_key != self._terminal_ack_key(final_mark)):
+            return False
+        state = self._accepted_ack_state()
+        if (state is None or state[0] is not receipt.script or state[1] is not receipt.session
+                or state[2] is not receipt.lifetime or state[3] != receipt.process_identity):
+            return False
+        return True
+
+    def retry_accepted_terminal_ack(self, sequence, final_mark, receipt):
+        if not self.can_retry_accepted_terminal_ack(sequence, final_mark, receipt):
             return None
         return self.commit_events(sequence)
 
@@ -306,6 +355,7 @@ class FridaEventObserver:
             mismatch='observer acknowledgement did not match the committed watermark')
 
     def _release(self):
+        self._verified_terminal_read = None
         self._accepted_ack_receipt = None
         # Both releases must be attempted. Keep failed handles available for a
         # retry; clearing a Python reference is not evidence of remote release.
@@ -395,7 +445,12 @@ class NativePcFridaObserver(FridaEventObserver):
         return self.binding.bind_terminal_mark(raw)
 
     def read_terminal_tail(self, after, *, deadline=None):
-        return acquire_native_terminal_tail(self, super()._request, after, deadline=deadline)
+        self._verified_terminal_read = None
+        result = acquire_native_terminal_tail(self, super()._request, after, deadline=deadline)
+        state = self._accepted_ack_state()
+        if state is not None:
+            self._verified_terminal_read = result['sequence'], deepcopy(result['after']), state
+        return result
 
     def stop(self):
         self.binding.reset()
