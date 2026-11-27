@@ -2670,11 +2670,12 @@ function installEnemyPhaseHook() {
 }
 function installEnemyStateHooks() {
  if(!enemyEntryReady||!enemyStateMethods)return;
+ const trackHp=globalThis.arkdpsEnemyHpEvents!==false;
  const installed=[];
  try{
-  const writes=[['Entity.SetHpInternal',enemyStateMethods.hp],
-   ['Entity.SetHpInternalDirectly',enemyStateMethods.directHp]];
-  if(enemyStateMethods.attributes)writes.push(['Entity.OnAttributeDirty',enemyStateMethods.attributes]);
+  const writes=trackHp?[['Entity.SetHpInternal',enemyStateMethods.hp],
+   ['Entity.SetHpInternalDirectly',enemyStateMethods.directHp]]:[];
+  if(trackHp&&enemyStateMethods.attributes)writes.push(['Entity.OnAttributeDirty',enemyStateMethods.attributes]);
   for(const [label,address] of writes){
    const attributeChange=label==='Entity.OnAttributeDirty';
    const callbacks={
@@ -2818,7 +2819,8 @@ function installEnemyStateHooks() {
    }catch(e){cfg.stageObjectFinishError=String(e);}
   }
   hooks.push(...installed);
-  enemyStateReady=true;
+  enemyStateReady=trackHp;
+  if(!trackHp)cfg.enemyStateError='continuous enemy HP observation disabled';
  }catch(e){
   for(const hook of installed)hook.detach();
   enemyMaxHpReady=false;

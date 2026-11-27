@@ -7,6 +7,24 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_disabling_enemy_hp_callbacks_preserves_damage_and_marks_partial_coverage():
+    run = subprocess.run(['node', str(ROOT / 'tests/native_pc_settlement_order_fixture.js'),
+                          '--enemy-hp-opt-out'], cwd=ROOT, capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stderr
+    result = json.loads(run.stdout)
+    default, disabled = result['default'], result['disabled']
+    events = default['batch']['events']
+    assert [event['kind'] for event in events] == ['enemy_enter', 'enemy_hp', 'damage_settlement']
+    kept = [event for event in events if event['kind'] != 'enemy_hp']
+    assert disabled['batch']['events'] == [dict(event, sequence=i) for i, event in enumerate(kept, 1)]
+    for field in ('mark', 'batch'):
+        assert default[field]['enemy_state_ready'] is True
+        assert disabled[field]['enemy_state_ready'] is False
+        assert disabled[field]['enemy_max_hp_ready'] is False
+        assert disabled[field]['enemy_damage_ready'] is True
+        assert disabled[field]['enemy_state_error'] == 'continuous enemy HP observation disabled'
+
+
 def test_actual_callback_order_and_identity_failures_keep_source_certificates_honest():
     result = subprocess.run(["node", str(ROOT / "tests/native_pc_settlement_order_fixture.js")],
                             cwd=ROOT, text=True, capture_output=True, timeout=30)

@@ -143,16 +143,36 @@ def test_material_rejects_captured_paths_outside_its_real_owner_root(portable, m
         module.prepare_native_hook_material(portable['root'])
 
 
-def test_material_rejects_effective_environment_change_during_validation(portable, monkeypatch):
+@pytest.mark.parametrize('key,index', [('ARKDPS_COALESCE_ENEMY_HP', 2), ('ARKDPS_ENEMY_HP_EVENTS', 3)])
+def test_material_rejects_effective_environment_change_during_validation(portable, monkeypatch, key, index):
     original = module.native_hook_binary
     before = module._effective_native_environment()
     def changed(root, **kwargs):
         result = original(root, **kwargs)
-        monkeypatch.setenv('ARKDPS_COALESCE_ENEMY_HP', '0' if before[2] else '1')
+        monkeypatch.setenv(key, '0' if before[index] else '1')
         return result
     monkeypatch.setattr(module, 'native_hook_binary', changed)
     with pytest.raises(RuntimeError, match='环境参数在完整校验期间改变'):
         module.prepare_native_hook_material(portable['root'])
+
+
+def test_native_enemy_hp_observation_is_opt_out(monkeypatch):
+    root = Path(module.__file__).resolve().parents[1]
+    flag = 'globalThis.arkdpsEnemyHpEvents = false;'
+    monkeypatch.delenv('ARKDPS_ENEMY_HP_EVENTS', raising=False)
+    assert not module._native_source(root)[1].startswith(flag)
+    monkeypatch.setenv('ARKDPS_ENEMY_HP_EVENTS', '0')
+    assert module._native_source(root)[1].startswith(flag)
+    assert not module._native_source(root, enemy_hp_events=True)[1].startswith(flag)
+    monkeypatch.delenv('ARKDPS_ENEMY_HP_EVENTS')
+    assert module._native_source(root, enemy_hp_events=False)[1].startswith(flag)
+
+
+def test_prepared_material_includes_connection_hp_preference(portable, monkeypatch):
+    monkeypatch.delenv('ARKDPS_ENEMY_HP_EVENTS', raising=False)
+    material = module.prepare_native_hook_material(portable['root'], enemy_hp_events=False)
+    assert material.effective_env == module._effective_native_environment(False)
+    assert material.source.startswith('globalThis.arkdpsEnemyHpEvents = false;')
 
 
 def test_relative_collector_root_uses_the_same_fixed_portable_layout(portable, monkeypatch):

@@ -1819,7 +1819,8 @@ def test_native_connection_apply_keeps_mumu_preferences_and_replaces_cli_source(
             pass
     worker = Worker()
     native = dict(version=1, platform='native_pc', native_game_root='game',
-                  adb_path='saved-adb', serial=None, auto_detect=False)
+                  adb_path='saved-adb', serial=None, auto_detect=False,
+                  native_pc_event_backend='native', native_enemy_hp_events=False)
     commands = [dict(version=1, op='hello'),
                 dict(version=1, op='connection_apply', config=native, events=True),
                 dict(version=1, op='rescan'), dict(version=1, op='quit')]
@@ -1828,6 +1829,7 @@ def test_native_connection_apply_keeps_mumu_preferences_and_replaces_cli_source(
     replies = [json.loads(line) for line in output.getvalue().splitlines()]
     assert all(reply['ok'] for reply in replies)
     config = ConnectionConfig.from_dict(native)
+    assert config.native_enemy_hp_events is False
     assert worker.requests == [(config, True), (config, True)]
     snapshot = replies[1]['state']
     assert snapshot['connection_config'] == config.to_dict()

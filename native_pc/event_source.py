@@ -48,10 +48,10 @@ def _native_pc_frida_runtime(game_root, runtime_dir, *, startup_trace=None):
     return NativePcFridaRuntime(game_root, runtime_dir=runtime_dir, startup_trace=startup_trace)
 
 
-def _native_pc_hook_runtime(game_root, runtime_dir, *, collector_root, startup_trace=None):
+def _native_pc_hook_runtime(game_root, runtime_dir, *, collector_root, startup_trace=None, enemy_hp_events=None):
     from native_pc.native_hook_runtime import NativeHookRuntime
     return NativeHookRuntime(game_root, runtime_dir=runtime_dir, collector_root=collector_root,
-                             startup_trace=startup_trace)
+                             startup_trace=startup_trace, enemy_hp_events=enemy_hp_events)
 
 
 class PcEventSourceCleanupError(RuntimeError):
@@ -68,14 +68,17 @@ class PcEventSource:
         self.runtime = None
         self.game_root = None
         self.backend = None
+        self.enemy_hp_events = None
 
     def select(self, *, enabled, game_root=None, backend='frida', feed_path=None, explicit_retry=False, startup_trace=None,
-               admission=None, cancelled=lambda: False, on_start_error=None):
+               admission=None, cancelled=lambda: False, on_start_error=None, enemy_hp_events=None):
         use_default = enabled and backend == 'frida' and game_root and self.observer_factory is None
         use_native = enabled and backend == 'native' and not feed_path and game_root and self.observer_factory is None
         use_runtime = use_default or use_native
         key = Path(game_root).expanduser().resolve() if use_runtime else None
-        if self.runtime is not None and (not use_runtime or key != self.game_root or backend != self.backend):
+        hp_setting = enemy_hp_events if use_native else None
+        if self.runtime is not None and (not use_runtime or key != self.game_root or backend != self.backend
+                                         or hp_setting != self.enemy_hp_events):
             self.close()
         if enabled and self.observer_factory is not None:
             return self.observer_factory
@@ -105,12 +108,15 @@ class PcEventSource:
             return self.observer_factory if enabled else None
         if self.runtime is None:
             options = {} if startup_trace is None else dict(startup_trace=startup_trace)
+            if hp_setting is not None:
+                options['enemy_hp_events'] = hp_setting
             candidate = (_native_pc_hook_runtime(game_root, self.runtime_dir,
                          collector_root=self.collector_root, **options) if use_native
                          else _native_pc_frida_runtime(game_root, self.runtime_dir, **options))
             with (admission if admission is not None else nullcontext()):
                 # Publish ownership before starting, under the caller's shutdown gate.
                 self.runtime, self.game_root, self.backend = candidate, key, backend
+                self.enemy_hp_events = hp_setting
                 if cancelled():
                     self.close()
                     raise InterruptedError('采集器在启动运行时创建期间关闭')
@@ -131,3 +137,4 @@ class PcEventSource:
             except Exception as exc:
                 raise PcEventSourceCleanupError(f'PC 启动加载器清理失败：{exc}') from exc
             self.runtime, self.game_root, self.backend = None, None, None
+            self.enemy_hp_events = None

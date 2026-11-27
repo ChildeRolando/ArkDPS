@@ -37,9 +37,9 @@ _TRACE_CODES = {'cleanup_pending', 'native_build_changed', 'native_not_ready', '
                 'startup_failed', 'restart_required', 'preparation_expired', 'watcher_start_failed'}
 
 
-def _prepare_native_hook_material(root):
+def _prepare_native_hook_material(root, **options):
     from native_pc.native_hook_source import prepare_native_hook_material
-    return prepare_native_hook_material(root)
+    return prepare_native_hook_material(root, **options)
 
 
 def _trace_number(value, *, maximum=None):
@@ -124,7 +124,8 @@ class NativeHookRuntime:
     failure_states = frozenset(('failed', 'process_failed', 'cleanup_pending'))
 
     def __init__(self, game_root, *, runtime_dir, collector_root=None, api=None, admin_check=None,
-                 clock=None, prepared_factory=None, material_factory=None, build_check=None, startup_trace=None):
+                 clock=None, prepared_factory=None, material_factory=None, build_check=None, startup_trace=None,
+                 enemy_hp_events=None):
         self.game_root = Path(game_root).expanduser().resolve()
         self.runtime_dir = Path(runtime_dir).resolve() / 'native-hook-sessions'
         self.collector_root = Path(collector_root).resolve() if collector_root else Path(__file__).resolve().parents[1]
@@ -133,6 +134,7 @@ class NativeHookRuntime:
         self.clock = clock or time
         self.prepared_factory = prepared_factory or PreparedNativeHooks
         self.material_factory = material_factory or _prepare_native_hook_material
+        self._hp_options = {} if enemy_hp_events is None else dict(enemy_hp_events=enemy_hp_events)
         self.build_check = build_check or access.verify_build
         self.startup_trace = startup_trace
         self.status, self.code, self.error = RuntimeState.STOPPED, None, None
@@ -280,7 +282,7 @@ class NativeHookRuntime:
             raise RuntimeFailure('native_build_changed', 'PC 客户端文件正在变化，请完成更新后重试')
         material_started = time.perf_counter()
         try:
-            material = self.material_factory(self.collector_root)
+            material = self.material_factory(self.collector_root, **self._hp_options)
         finally:
             duration = max(0.0, time.perf_counter() - material_started)
             with self._condition:
@@ -448,7 +450,7 @@ class NativeHookRuntime:
             self._attempted.add(birth)
             self._lease = dict(pid=birth[0], created=birth[1], source_build=self._source_build)
             candidate = self.prepared_factory(self.game_root, root=self.collector_root, runtime_dir=self.runtime_dir,
-                                              material=self._material)
+                                              material=self._material, **self._hp_options)
             self._prepared = candidate  # Publish ownership before any mutation-capable call.
             candidate.cancelled, candidate.commit = self._cancel.is_set, self._commit
             self._state(RuntimeState.LOADING)

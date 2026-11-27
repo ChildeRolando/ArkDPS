@@ -298,13 +298,17 @@ class ConnectionConfig:
     native_game_root: str | None = None
     native_pc_event_backend: str = 'frida'
     native_pc_event_feed: str | None = None
+    native_enemy_hp_events: bool | None = None
 
     def to_dict(self) -> dict:
-        return {'version': CONFIG_VERSION, 'adb_path': self.adb_path,
+        values = {'version': CONFIG_VERSION, 'adb_path': self.adb_path,
                 'serial': self.serial, 'auto_detect': bool(self.auto_detect),
                 'platform': self.platform, 'native_game_root': self.native_game_root,
                 'native_pc_event_backend': self.native_pc_event_backend,
                 'native_pc_event_feed': self.native_pc_event_feed}
+        if self.native_enemy_hp_events is not None:
+            values['native_enemy_hp_events'] = self.native_enemy_hp_events
+        return values
 
     @classmethod
     def from_dict(cls, raw: object) -> 'ConnectionConfig':
@@ -316,6 +320,7 @@ class ConnectionConfig:
         platform = raw.get('platform', 'mumu')
         native_root = raw.get('native_game_root')
         backend = raw.get('native_pc_event_backend', 'frida')
+        enemy_hp_events = raw.get('native_enemy_hp_events')
         if adb is not None and not isinstance(adb, str):
             raise ValueError('adb_path 必须是字符串或 null')
         if serial is not None and not isinstance(serial, str):
@@ -328,9 +333,12 @@ class ConnectionConfig:
             raise ValueError('native_game_root 必须是字符串或 null')
         if backend not in PC_EVENT_BACKENDS:
             raise ValueError('PC 事件内核必须是 frida 或 native')
+        if enemy_hp_events is not None and type(enemy_hp_events) is not bool:
+            raise ValueError('连续敌人血量监听必须为布尔值')
         return cls(adb_path=adb or None, serial=serial or None, auto_detect=auto,
                    platform=platform, native_game_root=native_root or None, native_pc_event_backend=backend,
-                   native_pc_event_feed=native_event_feed_path(raw.get('native_pc_event_feed')))
+                   native_pc_event_feed=native_event_feed_path(raw.get('native_pc_event_feed')),
+                   native_enemy_hp_events=enemy_hp_events)
 
 
 @dataclass

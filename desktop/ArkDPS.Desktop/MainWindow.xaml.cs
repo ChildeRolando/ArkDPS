@@ -674,6 +674,12 @@ public partial class MainWindow : Window
         AdbPath.Text=config.Text("adb_path");Serial.Text=config.Text("serial");EventsEnabled.IsChecked=State.Get("layout").Bool("event_observation");
         NativeGameRoot.Text=config.Text("native_game_root");
         NativeEventBackend.SelectedIndex=config.Text("native_pc_event_backend")=="native" ? 1 : 0;
+        NativeEnemyHpEvents.IsChecked=config.Get("native_enemy_hp_events").ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => Environment.GetEnvironmentVariable("ARKDPS_ENEMY_HP_EVENTS") != "0",
+        };
         NativeEventFeed.Text=config.Text("native_pc_event_feed");
         ConnectionPlatform.SelectedIndex=config.Text("platform")=="native_pc" ? 1 : 0;
         UpdateConnectionForm();
@@ -714,6 +720,7 @@ public partial class MainWindow : Window
         NativeEventNotes.Visibility=native ? Visibility.Visible : Visibility.Collapsed;
         FridaEventNotes.Visibility=useFrida ? Visibility.Visible : Visibility.Collapsed;
         NativeHookNotes.Visibility=useFrida ? Visibility.Collapsed : Visibility.Visible;
+        NativeEnemyHpEvents.IsEnabled=string.IsNullOrWhiteSpace(NativeEventFeed.Text);
         NativeEventFeedFields.Visibility=!useFrida && (App.CooperativeEventPackage || NativeEventFeed.Text.Length > 0)
             ? Visibility.Visible : Visibility.Collapsed;
         if (App.NativeHookCandidate)
@@ -1588,6 +1595,7 @@ public partial class MainWindow : Window
         var config=new{adb_path=ConfiguredAdbPath,serial=ConfiguredSerial,auto_detect=AutoDetect.IsChecked==true,
             platform=SelectedConnectionPlatform,
             native_pc_event_backend=SelectedNativeEventBackend,
+            native_enemy_hp_events=NativeEnemyHpEvents.IsChecked==true,
             native_pc_event_feed=string.IsNullOrWhiteSpace(NativeEventFeed.Text) ? null : NativeEventFeed.Text.Trim(),
             native_game_root=string.IsNullOrWhiteSpace(NativeGameRoot.Text) ? null : NativeGameRoot.Text.Trim()};
         await Command("connection_apply",new(){["config"]=config,["events"]=EventsEnabled.IsChecked==true});
