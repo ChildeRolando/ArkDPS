@@ -69,7 +69,7 @@ def run(stage, output, count=10000, source_root=ROOT, native_root=ROOT, bridge_r
         for control,treatment in zip(report['results'],report['same_binary_direct']['results']):
             assert control['business_events_sha256']==treatment['business_events_sha256'], 'business event sequence differs'
         report['direct_command']=direct_command
-    artifacts=[source_root/n for n in ['event_probe_runtime.js','event_probe_autochess.js','event_probe_native_pc.js']]
+    artifacts=[source_root/n for n in ['event_probe_store.js','event_probe_runtime.js','event_probe_autochess.js','event_probe_native_pc.js']]
     artifacts+=[(bridge_root or source_root)/'native_pc/native_event_runtime/bridge.js',native/'owned_replay_view.h',native/'owned_replay_js.h',native/'native_capture.h',native/'native_capture.cpp',native/'engine_capture_plan.h',native/'engine_capture_pipeline.h',native/'engine_capture_config.h',native/'engine_capture_lane.h',native/'capture_spill_pool.h',ROOT/'tests/production_hp_queue.h',ROOT/'tests/production_hp_quickjs.cpp',ROOT/'tests/production_hp_quickjs_bundle.py',ROOT/'tests/run_production_hp_quickjs.py',ROOT/'tests/native_pc_frida_probe_fixture.js',ROOT/'tests/native_pc_autochess_context_fixture.js',*dependencies]
     report['provenance']={str(p):sha256(p.read_bytes()).hexdigest() for p in artifacts}
     report['ascii_disabled']=disable_ascii

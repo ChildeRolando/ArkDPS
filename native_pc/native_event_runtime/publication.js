@@ -9,25 +9,34 @@ class ArkdpsPublicationJournal {
   this.maxMarks=options.maxMarks??256;
   for(const n of [this.maxEvents,this.maxBytes,this.maxMarks])
    if(!Number.isSafeInteger(n)||n<=0)throw new Error('invalid publication budget');
-  this.events=[];this.contexts=[];this.marks=[];this.bytes=0;
-  this.acknowledged=0;this.readThrough=0;this.publishedThrough=0;
+  this.store=null;this.marks=[];this.metadataBytes=0;this.publishedThrough=0;
+  if(options.store)this.bindStore(options.store);
   this.rawClosed=0n;this.samplingSerial=0n;this.serial=0;this.failure=null;this.latest=null;
  }
+ bindStore(store){
+  if(this.store){if(this.store!==store)throw Error('publication event store already bound');return;}
+  if(!store||store.version!==1||typeof store.state!=='function'||typeof store.snapshot!=='function'||typeof store.served!=='function')
+   throw Error('publication event store unavailable');
+  const state=store.state();
+  if(!this.integer(state.acknowledged)||!this.integer(state.readThrough)||!this.integer(state.sequence)
+     ||state.acknowledged>state.readThrough||state.readThrough>state.sequence||!this.integer(state.retainedBytes))
+   throw Error('invalid publication event store');
+  this.store=store;this.publishedThrough=state.acknowledged;
+ }
+ get acknowledged(){return this.store?.state().acknowledged??0;}
+ get readThrough(){return this.store?.state().readThrough??0;}
+ get events(){return this.store?this.store.snapshot(this.acknowledged,Math.max(this.acknowledged,this.publishedThrough)).events:[];}
+ get contexts(){return this.store?this.store.snapshot(this.acknowledged,Math.max(this.acknowledged,this.publishedThrough)).hp_context:[];}
+ get bytes(){return this.metadataBytes+(this.store?.state().retainedBytes??0);}
  integer(value){return Number.isSafeInteger(value)&&value>=0;}
  raw(value){
   if(typeof value!=='string'||!/^(0|[1-9][0-9]{0,19})$/.test(value))throw new Error('invalid raw capture ticket');
   const n=BigInt(value);if(n>0xffffffffffffffffn)throw new Error('raw capture ticket overflow');return n;
  }
  own(value){
-  const text=JSON.stringify(value,(_key,item)=>{
-   if(typeof item==='number'&&!Number.isFinite(item))throw new Error('non-finite publication value');
-   return item;
-  });
-  if(typeof text!=='string')throw new Error('invalid publication value');
-  // Three bytes per UTF-16 code unit bounds UTF-8, including escaped surrogates.
-  const bytes=text.length*3;
-  if(bytes>this.maxBytes)throw new Error('publication value exceeds byte budget');
-  return {value:JSON.parse(text),bytes};
+  const owned=ownProbeValue(value);
+  if(owned.bytes>this.maxBytes)throw Error('publication value exceeds byte budget');
+  return owned;
  }
  retry(reason){return {retry:true,error:null,stopped:false,events:[],hp_context:[],
   mark_retry_reason:reason,native_publication_version:1};}
@@ -79,19 +88,24 @@ class ArkdpsPublicationJournal {
   if(m.sequence<this.publishedThrough||p.events.length!==m.sequence-p.events_after)
    throw new Error('publication event prefix is incomplete');
   if(this.latest&&m.epoch<this.latest.mark.epoch)throw new Error('publication event epoch regressed');
-  const delta=[],contexts=[];
+  if(!this.store)throw Error('publication event store unavailable');
+  const retained=this.store.snapshot(this.publishedThrough,m.sequence);
+  if(retained.events.length!==p.events.length||retained.events.some((event,i)=>event!==p.events[i]||!Object.isFrozen(event)))
+   throw Error('publication does not reference canonical events');
+  if(retained.hp_context.length!==p.hp_context.length||retained.hp_context.some((item,i)=>item!==p.hp_context[i]))
+   throw Error('publication does not reference canonical contexts');
   let cost=0;
   for(let seq=this.publishedThrough+1;seq<=m.sequence;seq++){
    const event=p.events[seq-p.events_after-1];
    if(event?.sequence!==seq)throw new Error('publication event sequence gap');
-   const owned=this.own(event);delta.push(owned);cost+=owned.bytes;
+
   }
   // Repeated publications may have the same event sequence. Late diagnostic
   // contexts must be assigned to a future sequence by the shared producer.
   for(const item of p.hp_context){
    if(!this.integer(item?.eventSequence))throw new Error('invalid publication context sequence');
    if(item.eventSequence<=this.publishedThrough)continue;
-   if(item.eventSequence<=m.sequence){const owned=this.own(item);contexts.push(owned);cost+=owned.bytes;}
+
   }
   const terminal_verified=this.terminalVerified(m,p.terminal_read,p.acknowledged);
   const token=ticket.toString()+':'+(this.serial+1);
@@ -99,7 +113,7 @@ class ArkdpsPublicationJournal {
    activity_end:end.toString(),sequence:m.sequence,epoch:m.epoch,terminal_verified,
    ...(sampling?{kind:'sampling_checkpoint',sampling_serial:sample.toString(),sample_request:record.publication_request}:{})};
   const mark=this.own({...m,native_publication:fence}),fields=this.own(p.read_fields);
-  // The event journal is the sole owner of retained normalized events.
+  // The source store owns normalized events and ACK. Retain only certificates.
   // Terminal metadata must not duplicate the entire unacknowledged prefix.
   const terminal=p.terminal_read==null?null:this.own({...p.terminal_read,events:[],hp_context:[]});
   cost+=mark.bytes+fields.bytes+(terminal?.bytes??0);
@@ -107,15 +121,13 @@ class ArkdpsPublicationJournal {
   for(let i=0;i<retire;i++)evicted+=this.marks[i].bytes;
   while(this.bytes+cost-evicted>this.maxBytes&&retire<this.marks.length)
    evicted+=this.marks[retire++].bytes;
-  if(this.events.length+delta.length>this.maxEvents||this.bytes+cost-evicted>this.maxBytes)
+  if(this.store.state().eventCount>this.maxEvents||this.bytes+cost-evicted>this.maxBytes)
    throw new Error('native publication retention budget exceeded');
   const published={token,mark:mark.value,fields:fields.value,terminal:terminal?.value??null,
    bytes:mark.bytes+fields.bytes+(terminal?.bytes??0)};
-  for(const item of delta)this.events.push(item);
-  for(const item of contexts)this.contexts.push(item);
-  this.bytes+=cost;
+  this.metadataBytes+=cost;
   this.marks.push(published);
-  for(let i=0;i<retire;i++){const old=this.marks.shift();this.bytes-=old.bytes;}
+  for(let i=0;i<retire;i++){const old=this.marks.shift();this.metadataBytes-=old.bytes;}
   this.latest=published;this.rawClosed=ticket;if(sampling)this.samplingSerial=sample;this.publishedThrough=m.sequence;this.serial++;
   // The native worker only needs this bounded certificate. It never serves
   // this return value to a host: mark/read still use owned journal snapshots.
@@ -142,20 +154,19 @@ class ArkdpsPublicationJournal {
   const terminal=command.operation==='terminal_read';
   if(terminal&&(!pub.terminal||through!==pub.mark.sequence||pub.terminal.retry||pub.terminal.error
      ||pub.terminal.terminal_boundary?.sequence!==through))return this.retry('native_terminal_publication_not_ready');
-  const entries=this.events.slice(after-this.acknowledged,through-this.acknowledged);
-  if(entries.length!==through-after||entries.some((entry,i)=>entry.value.sequence!==after+i+1))
+  const retained=this.store.snapshot(after,through),entries=retained.events;
+  if(entries.length!==through-after||entries.some((entry,i)=>entry.sequence!==after+i+1))
    return this.fail('native publication retained prefix is incomplete');
   const base=terminal?pub.terminal:pub.fields;
   const result=this.copy(base);
   Object.assign(result,{error:null,retry:false,stopped:false,active:0,active_hooks:[],after,through,
-   events:entries.map(entry=>this.copy(entry.value)),hp_context:this.contexts
-    .filter(entry=>after<entry.value.eventSequence&&entry.value.eventSequence<=through)
-    .map(entry=>this.copy(entry.value.context)),native_publication:this.copy(pub.mark.native_publication)});
+   events:entries.map(entry=>this.copy(entry)),hp_context:retained.hp_context.map(entry=>this.copy(entry.context)),native_publication:this.copy(pub.mark.native_publication)});
   if(terminal)Object.assign(result,{terminal_only:true,terminal_read_version:1});
   // Construct the entire owned reply before advancing the producer's served
   // watermark. A publication alone can never authorize ACK.
   if(typeof served!=='function')throw new Error('missing publication served callback');
-  served(through);this.readThrough=Math.max(this.readThrough,through);
+  served(through);
+  if(this.store.state().readThrough<through)throw Error('publication served owner did not commit');
   return result;
  }
  ack(sequence,commit){
@@ -166,13 +177,8 @@ class ArkdpsPublicationJournal {
   if(typeof commit!=='function')throw new Error('missing publication acknowledgement callback');
   const result=commit(sequence);
   if(result?.error||result?.acknowledged!==sequence)return result;
-  const removed=this.events.splice(0,sequence-this.acknowledged);
-  for(const entry of removed)this.bytes-=entry.bytes;
-  this.contexts=this.contexts.filter(entry=>{
-   if(entry.value.eventSequence>sequence)return true;
-   this.bytes-=entry.bytes;return false;
-  });
-  this.acknowledged=sequence;return {acknowledged:sequence,error:null};
+  if(this.acknowledged!==sequence)return {acknowledged:this.acknowledged,error:'event store acknowledgement was not committed'};
+  return {acknowledged:this.acknowledged,error:null};
  }
 }
 const __arkdpsPublicationJournal=new ArkdpsPublicationJournal();

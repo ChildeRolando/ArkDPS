@@ -27,7 +27,8 @@ int main(int argc,char** argv){
  CaptureLanes::Config limits;limits.lane_queue={16,65536};limits.spill={16,65536};r.lanes=std::make_unique<CaptureLanes>(limits);
  arkdps::owned_js::install(c,[]()noexcept{state().lanes->poison(LaneFault::replay_structure);});
  auto global=JS_GetGlobalObject(c);function(c,global,"__pid",js_pid,0);function(c,global,"__nativeActive",js_active,0);function(c,global,"__nativeReplayHealthy",js_replay_healthy,0);function(c,global,"__nativeSamplingCheckpoint",js_sampling_checkpoint,1);
- script(c,file("native_pc/native_event_runtime/bridge.js"));script(c,file("native_pc/native_event_runtime/publication.js"));
+ script(c,file("native_pc/native_event_runtime/bridge.js"));script(c,file("event_probe_store.js"));script(c,file("native_pc/native_event_runtime/publication.js"));
+ script(c,"const ownedEventStore=new ArkdpsEventStore();__arkdpsPublicationJournal.bindStore(ownedEventStore.view());");
  std::array<std::byte,12> clock{};set_frame(clock,30);const auto address=std::to_string(reinterpret_cast<std::uintptr_t>(clock.data()));
  Json fields=Json::array();for(unsigned i=0;i<2;++i)fields.push_back({{"field_id",i+1},{"phase","checkpoint"},{"role",i?"clock_close":"clock_open"},{"root","global_slot"},{"root_index",0},{"pointer_offsets",Json::array()},{"offset",0},{"bytes",12},{"kind","bytes"},{"guard_id",1},{"guard_side",i?"after":"before"},{"required",true}});
  Json plan{{"schema_version",1},{"complete",true},{"address","0x0"},{"profile","owned_checkpoint_test"},{"abi","win64-gp"},{"arg_count",0},{"arg_mask",0},{"max_bytes",1024},{"max_reads",16},{"globals",Json::array({address})},{"fields",fields},{"required_projections",Json::array()}};
@@ -94,6 +95,9 @@ int main(int argc,char** argv){
  assert(!reset_mode.value("retry",false)&&reset_mode.at("frame")==43&&r.lanes->failure.load()==0);
 
  // Even a real checkpoint cannot publish a copied terminal without live fence proof.
+ const auto before_terminal_attempts=r.sampling_attempts;const auto before_terminal_published=r.completed_sample_token;
+ const auto nonterminal=Json::parse(arkdps::request_on_worker("{\"operation\":\"mark\",\"sampling\":\"terminal\"}"));
+ assert(nonterminal.at("retry")==true&&r.sampling_attempts==before_terminal_attempts&&r.completed_sample_token==before_terminal_published);
  script(c,"terminalTest=true;");const auto before_terminal=r.completed_sample_token;assert(!sample_checkpoint(r,44));assert(r.completed_sample_token==before_terminal);
  // A genuine quiet terminal fence permits the complete terminal endpoint.
  std::uintptr_t singleton=0;const auto* singleton_bytes=reinterpret_cast<const std::byte*>(&singleton);
@@ -104,9 +108,32 @@ int main(int argc,char** argv){
  JS_FreeValue(c,r.prefix_projection);r.prefix_projection=JS_GetPropertyStr(c,global,"checkpointProjection");
  assert(sample_checkpoint(r,44));assert(r.completed_sample_token!=before_terminal);
  script(c,"if(__arkdpsPublicationJournal.latest.mark.native_publication.terminal_verified!==true)throw Error('terminal endpoint not verified');");
+ const auto before_fast_attempts=r.sampling_attempts,before_fast_requests=r.lanes->request_serial.load();
+ const auto fast=Json::parse(arkdps::request_on_worker("{\"operation\":\"mark\",\"sampling\":\"terminal\"}"));
+ assert(fast.at("native_publication").at("terminal_verified")==true&&fast.at("native_publication").at("token")==r.completed_sample_token);
+ assert(r.sampling_attempts==before_fast_attempts&&r.lanes->request_serial.load()==before_fast_requests);
+ // A newly verified destroy fence cannot authorize an older retained terminal
+ // point merely because its mode and witness bytes happen to be unchanged.
+ const auto previous_terminal=r.published_token;const auto before_new_fence_attempts=r.sampling_attempts;
+ r.lanes->reserved.store(2);r.processed_ticket=2;r.closed_ticket=2;
+ r.activity_generation.store(r.terminal_fence.activity+2);
+ r.terminal_fence.ticket=2;r.terminal_fence.activity=r.activity_generation.load();
+ const auto next_terminal=Json::parse(arkdps::request_on_worker("{\"operation\":\"mark\",\"sampling\":\"terminal\"}"));
+ assert(next_terminal.at("native_publication").at("closed_ticket")=="2");
+ assert(next_terminal.at("native_publication").at("token")!=previous_terminal);
+ assert(r.sampling_attempts>before_new_fence_attempts);
  const auto terminal_token=r.completed_sample_token;singleton=1;
  assert(!sample_checkpoint(r,45));assert(r.completed_sample_token==terminal_token);
+ const auto invalid_terminal=Json::parse(arkdps::request_on_worker("{\"operation\":\"mark\",\"sampling\":\"terminal\"}"));
+ assert(invalid_terminal.at("retry")==true&&r.completed_sample_token==terminal_token);
  r.terminal_fence.clear();script(c,"terminalTest=false;");
+ const auto before_control=r.lanes->request_serial.load();r.desired_mode=0;
+ const auto control=Json::parse(arkdps::request_on_worker("{\"operation\":\"configure_mode\",\"autochess_enabled\":false}"));
+ assert(control.at("applied")==true&&control.at("desired_mode")=="local"&&r.lanes->request_serial.load()==before_control);
+ bool legacy_rejected=false;try{arkdps::request_on_worker("{\"operation\":\"mark\"}");}catch(const std::exception& error){legacy_rejected=std::string(error.what())=="native mark requires a sampling transaction";}
+ assert(legacy_rejected&&r.lanes->request_serial.load()==before_control);
+ bool preference_rejected=false;try{arkdps::request_on_worker("{\"operation\":\"mark\",\"sampling\":\"fresh\",\"autochess_enabled\":false}");}catch(const std::exception& error){preference_rejected=std::string(error.what())=="native preference requires mode control";}
+ assert(preference_rejected&&r.lanes->request_serial.load()==before_control);
  // Ordinary objects cannot mint checkpoint evidence or publish a forged kind.
  script(c,"if(__arkdpsVerifiedSamplingCheckpoint(lastRecord))throw Error('lease escaped');const reused=new ArkdpsPublicationJournal();if(!reused.publish(lastRecord,{}).native_publication_failure)throw Error('brand reused');globalThis.__arkdpsConsumeSamplingCheckpoint=()=>true;if(__arkdpsVerifiedSamplingCheckpoint({kind:'sampling_checkpoint'}))throw Error('forged brand');const bad=new ArkdpsPublicationJournal();const failure=bad.publish({version:1,kind:'sampling_checkpoint',edge:'checkpoint',ticket:'0',sampling_serial:'99',activity_begin:'0',activity_end:'0',closed_after:true,active_after:0},{});if(!failure.native_publication_failure)throw Error('forged publication accepted');");
  // Structural capture faults poison rather than become an endless busy retry.

@@ -142,7 +142,11 @@ function run(platform,row,fault=null){
   f.write(target.add(0x40),fixed(hpAfter));
   apply.onLeave.call(invocation);
   if(bar)apply.onLeave.call(barCall);
-  if(last&&fault==='child_record_changed'&&invocation.settlementRecord)invocation.settlementRecord.amount++;
+  if(last&&fault==='child_record_changed'){
+   if(!invocation.settlementRecord)throw Error('child record fault was not reached');
+   invocation.settlementRecord=f.context.corruptQueuedEvent(invocation.settlementRecord,
+    {amount:invocation.settlementRecord.amount+1});
+  }
   if(last&&fault==='child_target_cid')f.write(target.add(0x148),f.managedString('enemy_9029_acfnc_2'));
   if(last&&fault==='child_target_class')f.write(target,f.enemyClass);
   expectedChildren.push({source:cid,source_character_uid:cid===null?null:cid===row.actor?301:101,amount:hpBefore-hpAfter,

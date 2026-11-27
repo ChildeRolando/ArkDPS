@@ -218,7 +218,7 @@ check('cold_roster_crossing_a_frame_can_progress_without_accepting_the_crossed_r
   assert.equal(rejected.retry,true);
   assert.equal(rejected.autochess_binding_diagnostic.guard,'clock_changed');
   assert.equal(rejected.native_autochess_context,undefined);
-  assert.equal(vm.runInContext('acknowledgedSequence',f.context),0);
+  assert.equal(vm.runInContext('eventStore.acknowledged',f.context),0);
   assert.equal(f.stamp({frame:30,game_time:1}).native_autochess_scope.status,'unknown');
   if(transition==='owner')f.write(f.players[2][1].add(0x18),f.text('replacement-owner'));
   if(transition==='round')f.write(f.center.add(0x3c),2);

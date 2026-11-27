@@ -42,16 +42,18 @@ assert.deepEqual(Object.keys(ordinary), ['sequence', 'frame', 'game_time', 'sour
 
 // Exercise the actual coalescer too: changing phase without advancing the
 // shared clock must flush the old tail before admitting the next phase's HP.
-const runtime = fs.readFileSync(path.join(__dirname, '..', 'event_probe_runtime.js'), 'utf8');
+const runtime = require('./experiments/hp_research_assembly.js').assembleResearchRuntime(
+ fs.readFileSync(path.join(__dirname, '..', 'event_probe_runtime.js'), 'utf8'));
 const recordFrom = runtime.indexOf('function record(source,');
 const recordTo = runtime.indexOf('function recordHpContext(', recordFrom);
 assert(recordFrom >= 0 && recordTo > recordFrom, 'production coalescer functions missing');
 function coalesced(useNativeScope) {
  const context = {};
  vm.createContext(context);
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'..','event_probe_store.js'),'utf8'),context);
  vm.runInContext(`
   let sequence=0,stopped=false,fatal=null;
-  const queue=[],queueSettlementScopes=new WeakMap(),EVENT_BUFFER_LIMIT=100,coalesceEnemyHp=true;
+  const eventStore=new ArkdpsEventStore(),queue=eventStore.events,queueSettlementScopes=new WeakMap(),EVENT_BUFFER_LIMIT=100,coalesceEnemyHp=true;
   let enemyMaxHpReady=true;
   ${runtime.slice(recordFrom, recordTo)}
   const when=phase=>({frame:10,game_time:1,...(${useNativeScope} ? {

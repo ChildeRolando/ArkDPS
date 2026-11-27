@@ -17,11 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from native_pc.native_event_runtime.smoke import Fixture, export_offsets
 from native_pc.native_hook_source import NativePipe
+from native_owned_event_store import empty_store_source
 
 
 def source(binary, case):
     offset = export_offsets(binary)['ArkDpsTestInteger']
-    return r'''
+    return empty_store_source() + r'''
 const mode=CASE,owned=Memory.alloc(64);
 for(const [offset,bits]of [[0,251n],[8,65000n],[16,0xfedcba98n],[24,0xfffe1dc0n],
  [32,0xfedcba9876543210n],[40,0x8000000000000001n],[48,0xc1540000n]])owned.add(offset).writeU64(bits);
@@ -70,7 +71,7 @@ const hook=Interceptor.attach(address,{arkdpsName:'owned.native-view',arkdpsCapt
    __nativeOwnedScalar('body',0,-1,owned.value,0);
   }
  }});
-globalThis.__arkdpsPublicationServed=through=>served=Math.max(served,through);
+globalThis.__arkdpsPublicationServed=through=>{ownedCanonicalStore.served(through);served=Math.max(served,through);};
 globalThis.__arkdpsOnClosedRecord=record=>({mark:{sequence:0,epoch:entries,frame:leaves,game_time:leaves/30,
  active:0,active_hooks:[],error:null,stopped:false,entries,leaves,checks,source_assertion_errors:assertionErrors.slice(),scalar_debug:scalarDebug,native_numeric_address:globalThis.__nativeOwnedNumericAddress===true,owned_native_view:record.native_view,
  native_capture_scope_mode_epoch:record.facts.scope_mode_epoch??record.facts.mode_epoch},acknowledged:0,

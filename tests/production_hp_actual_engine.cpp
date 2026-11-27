@@ -42,6 +42,7 @@ static JSValue actual_callbacks(JSContext* c,JSValueConst,int n,JSValueConst* ar
 });}
 #include "production_hp_paced_engine.h"
 #include "production_sampling_engine.h"
+#include "production_terminal_engine.h"
 static JSValue actual_run(JSContext* c,JSValueConst,int n,JSValueConst* args){return guarded(c,[&]{
  if(n!=1||!fixture_configured)throw std::runtime_error("actual run setup");
  const auto options=J::parse(string(c,args[0]));
@@ -85,7 +86,8 @@ int main(int argc,char** argv){
  CaptureLanes::Config capacity;capacity.lane_queue={2048,2*1024*1024};capacity.spill={32768,32*1024*1024};r.lanes=std::make_unique<CaptureLanes>(capacity);
  arkdps::owned_js::install(c,[]()noexcept{state().lanes->poison(LaneFault::replay_structure);},true,!legacy_hp_io);auto g=JS_GetGlobalObject(c);
  for(auto pair:std::array<std::pair<const char*,JSCFunction*>,4>{{{"print",print},{"__monotonicMs",timer},{"__ownedPut",put},{"__sealReadonlyPlans",seal_plans}}})function(c,g,pair.first,pair.second,1);
- function(c,g,"__nativeSamplingCheckpoint",js_sampling_checkpoint,1);function(c,g,"__ownedConfigureSampler",production_sampling_configure,1);function(c,g,"__ownedSamplingRun",production_sampling_run,1);function(c,g,"__ownedConfigure",actual_configure,1);function(c,g,"__ownedGraphPublish",actual_graph_publish,2);function(c,g,"__ownedSetCallbacks",actual_callbacks,3);function(c,g,"__ownedEngineRun",actual_run,1);function(c,g,"__nativeReplayHealthy",js_replay_healthy,0);function(c,g,"__nativeActive",js_active,0);function(c,g,"__pid",js_pid,0);install_controlled_advance(c,g);r.batch_advance=JS_GetPropertyStr(c,g,"__nativeBoundedReplayAdvance");if(legacy_boundary)JS_SetPropertyStr(c,g,"__nativeBoundedReplayAdvance",JS_UNDEFINED);JS_FreeValue(c,g);
+ function(c,g,"__ownedTerminalRequest",production_terminal_request,1);
+ function(c,g,"__nativeSamplingCheckpoint",js_sampling_checkpoint,1);function(c,g,"__ownedConfigureSampler",production_sampling_configure,1);function(c,g,"__ownedSamplingRun",production_sampling_run,1);function(c,g,"__ownedDestroyRun",production_terminal_run,2);function(c,g,"__ownedConfigure",actual_configure,1);function(c,g,"__ownedGraphPublish",actual_graph_publish,2);function(c,g,"__ownedSetCallbacks",actual_callbacks,3);function(c,g,"__ownedEngineRun",actual_run,1);function(c,g,"__nativeReplayHealthy",js_replay_healthy,0);function(c,g,"__nativeActive",js_active,0);function(c,g,"__pid",js_pid,0);install_controlled_advance(c,g);r.batch_advance=JS_GetPropertyStr(c,g,"__nativeBoundedReplayAdvance");if(legacy_boundary)JS_SetPropertyStr(c,g,"__nativeBoundedReplayAdvance",JS_UNDEFINED);JS_FreeValue(c,g);
  std::ifstream stream(argv[1]);std::string source((std::istreambuf_iterator<char>(stream)),{});auto answer=JS_Eval(c,source.data(),source.size(),"actual-engine-production-hp.js",JS_EVAL_TYPE_GLOBAL);
  if(JS_IsException(answer)){std::cerr<<exception(c)<<'\n';
  return 1;}JS_FreeValue(c,answer);

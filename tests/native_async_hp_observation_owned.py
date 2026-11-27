@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from native_pc.native_event_runtime.smoke import Fixture, export_offsets
 from native_pc.native_hook_source import NativePipe
+from native_owned_event_store import empty_store_source
 
 
 def production_plan(source_root, layout, directory):
@@ -52,7 +53,7 @@ process.stdout.write(JSON.stringify(plan));
 
 
 def source(binary, layout, plan, hostile=False):
-    return r'''
+    return empty_store_source() + r'''
 const address=Process.getModuleByName('ArkDPS.NativeEvents.dll').base.add(OFFSET);
 const contract=PLAN;contract.address=address.toString();contract.mode_epoch=0;
 function freeze(value){if(value&&typeof value==='object'){for(const key of Object.keys(value))freeze(value[key]);Object.freeze(value);}return value;}
@@ -97,7 +98,7 @@ const hook=Interceptor.attach(address,{arkdpsName:'hp.Entity.SetHpInternal',arkd
   leaves++;records.push({edge:'leave',mode:epoch,checkpoint:__arkdpsReplayRecord().checkpoint,uid:closing[0],hp:closing[1].toString()});
  }
 });
-globalThis.__arkdpsPublicationServed=n=>{served=Math.max(served,n);};
+globalThis.__arkdpsPublicationServed=n=>{ownedCanonicalStore.served(n);served=Math.max(served,n);};
 globalThis.__arkdpsOnClosedRecord=record=>{
  const proof=__arkdpsOwnedGraphCheck('publication',publication);
  if(__arkdpsVerifiedGraphProof(proof,'publication',publication)!==true)throw Error('owned publication proof missing');

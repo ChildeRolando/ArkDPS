@@ -83,3 +83,35 @@ def test_zero_raw_prefix_is_valid_only_for_a_proven_checkpoint_fence_shape():
     value=mark();assert NativeHookEventProbe._validated_publication_token(value)=='0:1'
     value['native_publication'].pop('kind')
     with pytest.raises(RuntimeError):NativeHookEventProbe._validated_publication_token(value)
+
+
+def test_scheduler_terminal_requests_keep_a_separate_retry_and_never_request_fresh():
+    probe,calls=probe_with([dict(retry=True,native_sample_request='7'),mark(request='7')])
+    probe._sampling_scheduler_supported=True
+    probe.binding.bind_terminal_mark=lambda raw: raw
+    pending=probe.read_terminal_mark()
+    assert pending['retry'] and probe._terminal_sample_request=='7'
+    final=probe.read_terminal_mark()
+    assert final['native_publication']['token']=='0:1'
+    assert [item[1]['sampling'] for item in calls]==['terminal','terminal']
+    assert calls[1][1]['sample_request']=='7' and probe._terminal_sample_request is None
+
+
+def test_scheduler_terminal_tail_uses_terminal_for_both_marks(monkeypatch):
+    import native_pc.native_hook_source as module
+    probe,calls=probe_with([mark(),mark(2)])
+    probe._sampling_scheduler_supported=True
+    def acquire(observer,request,after,**kwargs):
+        request('mark',timeout=.2)
+        request('mark',timeout=.2)
+        return {'done':True}
+    monkeypatch.setattr(module,'acquire_native_terminal_tail',acquire)
+    assert probe.read_terminal_tail(0)=={'done':True}
+    assert [item[1]['sampling'] for item in calls]==['terminal','terminal']
+
+
+def test_old_sampling_capability_keeps_terminal_compatibility_at_the_capability_boundary():
+    probe,calls=probe_with([mark()])
+    probe.binding.bind_terminal_mark=lambda raw: raw
+    probe.read_terminal_mark()
+    assert 'sampling' not in calls[0][1]

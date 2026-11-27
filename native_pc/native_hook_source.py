@@ -99,7 +99,7 @@ PROTOCOL = 1
 RUNTIME_SOURCES = ('engine.cpp', 'engine.h', 'engine_worker.h', 'engine_capture_lane.h',
                    'engine_capture_plan.h', 'engine_capture_config.h', 'engine_capture_pipeline.h', 'engine_terminal_fence.h', 'engine_capture_timing.h',
                    'capture_queue.h', 'capture_spill_pool.h', 'native_capture.cpp', 'native_capture.h',
-                   'owned_replay_view.h', 'owned_replay_js.h', 'owned_role_index.h', 'owned_hp_leaf_facts.h',
+                   'owned_replay_view.h', 'owned_replay_js.h', 'owned_role_index.h',
                    'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'cold_plan.js', 'build.py')
 NATIVE_HOOK_LICENSES = {
     'quickjs-LICENSE': '598fd7fc928e4350abce36e337ba5a1346923c5c692f5be92c3d8e29ddd7c18d',
@@ -129,7 +129,7 @@ NATIVE_HOOK_REQUIRED_SOURCES = (
     'native_pc/native_hook_runtime.py', 'native_pc/windows_dll_loader.py',
     'native_pc/probe_native_pc.py', 'native_pc/probe_native_pc_battle.py',
     'native_pc/probe_native_pc_rows.py',
-    'event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js',
+    'event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js', 'event_probe_store.js',
 )
 _SHA256 = re.compile(r'[0-9a-f]{64}')
 
@@ -789,6 +789,9 @@ class NativeHookEventProbe:
         self._native_timing_confirmed = False
         self._publication_token = None
         self._sampling_supported = False
+        self._sampling_scheduler_supported = False
+        self._configured_options = None
+        self._terminal_sample_request = None
         self._sample_request = None
         self._sample_options = None
         self._sampling_anchor = None
@@ -908,6 +911,13 @@ class NativeHookEventProbe:
                 raise RuntimeError('ArkPie 实时组件握手或架构不匹配')
             if not process.process_alive():
                 raise RuntimeError('游戏进程在原生组件初始化期间退出')
+            sampling_version = hello['ready'].get('native_sampling_version')
+            self._sampling_supported = type(sampling_version) is int and sampling_version == 1
+            scheduler = hello.get('native_mark_scheduler_version')
+            self._sampling_scheduler_supported = type(scheduler) is int and scheduler == 1
+            if self._sampling_scheduler_supported and (not self._sampling_supported
+                    or type(hello.get('mode_control_version')) is not int or hello['mode_control_version'] != 1):
+                raise RuntimeError('native sampling scheduler lacks mode control capability')
             if self._autochess_enabled is not None:
                 options = self._mark_options()
                 if type(options['autochess_enabled']) is not bool:
@@ -915,14 +925,16 @@ class NativeHookEventProbe:
                 # The bridge applies the preference before trying to acquire a
                 # watermark. A retry (e.g. no battle in the lobby) is harmless:
                 # this is only a control request, never a baseline, read or ACK.
-                initial = self._pipe.request('mark', timeout=self.request_timeout, **options)
+                initial = self._pipe.request('configure_mode' if self._sampling_scheduler_supported else 'mark',
+                                             timeout=self.request_timeout, **options)
                 if initial.get('error') or initial.get('stopped'):
                     raise RuntimeError(initial.get('error') or 'native observer stopped before applying preferences')
+                if self._sampling_scheduler_supported:
+                    self._validate_mode_control(initial, options)
+                    self._configured_options = tuple(sorted(options.items()))
                 if not process.process_alive():
                     raise RuntimeError('游戏进程在原生组件偏好初始化期间退出')
             self.probe_modes = ready_probe_modes(hello['ready'])
-            sampling_version = hello['ready'].get('native_sampling_version')
-            self._sampling_supported = type(sampling_version) is int and sampling_version == 1
             if type(hello.get('capture_pause_version')) is int and hello['capture_pause_version'] == 1:
                 self.probe_modes['native_capture_pause_version'] = 1
             self.probe_modes['probe_source'] = dict(assembled.audit(), provider=PROVIDER, protocol=PROTOCOL,
@@ -1100,9 +1112,31 @@ class NativeHookEventProbe:
     def _mark_options(self):
         return {} if self._autochess_enabled is None else dict(autochess_enabled=self._autochess_enabled())
 
+    @staticmethod
+    def _validate_mode_control(result, options):
+        if (result.get('mode_control_version') != 1 or type(result.get('mode_control_version')) is not int
+                or result.get('applied') is not True or type(result.get('mode_epoch')) is not int
+                or not 0 <= result['mode_epoch'] <= 9007199254740991
+                or result.get('desired_mode') != ('all' if options['autochess_enabled'] else 'local')):
+            raise RuntimeError('native mode control did not confirm the requested preference')
+
+    def _scheduled_options(self, options):
+        if not self._sampling_scheduler_supported:
+            return options
+        current = tuple(sorted(options.items()))
+        if options and current != self._configured_options:
+            if type(options['autochess_enabled']) is not bool:
+                raise ValueError('autochess_enabled must be boolean')
+            self._validate_mode_control(self._raw_request('configure_mode', **options), options)
+            self._configured_options = current
+            self._sample_request = self._terminal_sample_request = None
+        return {}
+
     def mark(self):
         options = self._mark_options()
+        wire_options = self._scheduled_options(options)
         self._sampling_anchor = None
+        self._terminal_sample_request = None
         arguments = {}
         if self._sampling_supported:
             current = tuple(sorted(options.items()))
@@ -1112,7 +1146,7 @@ class NativeHookEventProbe:
             arguments['sampling'] = 'fresh'
             if self._sample_request is not None:
                 arguments['sample_request'] = self._sample_request
-        result = self._request('mark', native_publication_version=1, **arguments, **options)
+        result = self._request('mark', native_publication_version=1, **arguments, **wire_options)
         if self._sampling_supported:
             self._sampling_anchor = result, self._cursor_lifetime
         return result
@@ -1129,7 +1163,7 @@ class NativeHookEventProbe:
         # Native confirmation takes new owned evidence at the current prefix;
         # it never waits for a future business hook or retimestamps this mark.
         return self._request('mark', sampling='confirm', publication_token=token,
-                             native_publication_version=1, **self._mark_options())
+                             native_publication_version=1, **self._scheduled_options(self._mark_options()))
 
     @staticmethod
     def _validated_publication_token(result):
@@ -1172,14 +1206,34 @@ class NativeHookEventProbe:
 
     def read_terminal_mark(self):
         self.last_terminal_response = None
-        raw = self._raw_request('mark', timeout=self.terminal_mark_timeout, **self._mark_options())
+        raw = self._terminal_raw_mark(timeout=self.terminal_mark_timeout, **self._mark_options())
         raw.pop('native_async_capture', None)
         self.last_terminal_response = deepcopy(raw)
         return self.binding.bind_terminal_mark(raw)
 
+    def _terminal_raw_mark(self, *, timeout=None, **options):
+        wire_options = self._scheduled_options(options)
+        if not self._sampling_scheduler_supported:
+            return self._raw_request('mark', timeout=timeout, **wire_options)
+        self._sampling_anchor = None
+        self._sample_request = None
+        arguments = dict(sampling='terminal', native_publication_version=1)
+        if self._terminal_sample_request is not None:
+            arguments['sample_request'] = self._terminal_sample_request
+        raw = self._raw_request('mark', timeout=timeout, **arguments, **wire_options)
+        identity = raw.get('native_sample_request')
+        if identity is not None and (not isinstance(identity, str)
+                or re.fullmatch(r'[1-9][0-9]{0,19}', identity) is None or int(identity) > 2**64-1):
+            raise RuntimeError('PC 终局采样请求身份无效')
+        self._terminal_sample_request = identity if raw.get('retry') else None
+        if not any(raw.get(key) for key in ('retry', 'error', 'stopped')):
+            self._publication_token = self._validated_publication_token(raw)
+        return raw
+
     def read_terminal_tail(self, after, *, deadline=None):
         def request(operation, **arguments):
-            result = self._raw_request(operation, **arguments)
+            result = (self._terminal_raw_mark(**arguments) if operation == 'mark'
+                      else self._raw_request(operation, **arguments))
             result.pop('native_async_capture', None)
             return result
         return acquire_native_terminal_tail(self, request, after, deadline=deadline)

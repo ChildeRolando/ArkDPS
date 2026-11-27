@@ -316,7 +316,7 @@ assert.equal(bounded.mark().sequence,513);
 
 // The adapter's baseline method itself must be pure JS queue work: even a
 // native pointer read or a protocol cursor mutation would fail this check.
-const scalarState=vm.runInContext('({sequence,acknowledgedSequence,readThroughSequence})',bounded.context);
+const scalarState=vm.runInContext('({sequence,acknowledgedSequence:eventStore.acknowledged,readThroughSequence:eventStore.readThrough})',bounded.context);
 const queue=vm.runInContext('queue',bounded.context),pointerProto=bounded.ptr(0).constructor.prototype;
 const pointerMethods=['readByteArray','readPointer','readCString','readUtf16String','readU8','readU16','readU32','readS32','readFloat','readS64','readU64'];
 const pointerReads=pointerMethods.map(name=>[name,pointerProto[name]]);
@@ -325,7 +325,7 @@ let pure;
 try{pure=bounded.adapter.baselineEnvelope(boundedMark,queue,0,513);}
 finally{for(const [name,method]of pointerReads)pointerProto[name]=method;}
 assert.equal(pure.baseline_discarded_skill_events.length,512);
-assert.deepEqual(vm.runInContext('({sequence,acknowledgedSequence,readThroughSequence})',bounded.context),scalarState);
+assert.deepEqual(vm.runInContext('({sequence,acknowledgedSequence:eventStore.acknowledged,readThroughSequence:eventStore.readThrough})',bounded.context),scalarState);
 assert.deepEqual(Object.keys(bounded.adapter.baselineEnvelope({},queue,0,513)),[]);
 const waitFalseStart={...queue[0],sequence:1,skill_wait_for_end:false};
 const waitFalse=bounded.adapter.baselineEnvelope(boundedMark,[waitFalseStart],0,1);

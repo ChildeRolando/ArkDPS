@@ -119,7 +119,7 @@ function captureState(edge,cold,sourcePlan=statePlan,args=[f.controller]){
  }
  return r;
 }
-function dispatch(record,fn){c.ownedRecord=record;c.stateCallback=fn;replaying=true;try{vm.runInContext('__arkdpsReplayBegin(ownedRecord);try{__arkdpsReplayPoint("body",stateCallback);}finally{globalThis.summary=__arkdpsReplayEnd();}',c);}finally{replaying=false;}assert.equal(c.summary.complete,true,JSON.stringify(c.summary));}
+function dispatch(record,fn,prefix=false){c.ownedRecord=record;c.stateCallback=fn;c.dispatchPrefix=prefix;replaying=true;try{vm.runInContext('__arkdpsReplayBegin(ownedRecord);try{__arkdpsReplayPoint("body",stateCallback);if(dispatchPrefix)globalThis.finalProjection=__arkdpsOnClosedRecord(ownedRecord);}finally{globalThis.summary=__arkdpsReplayEnd();}',c);}finally{replaying=false;}assert.equal(c.summary.complete,true,JSON.stringify(c.summary));}
 f.write(f.controller.add(0x228),1);const stateHook=f.callback('set_state',f.controllerClass),stateCall={threadId:1};
 dispatch(captureState('entry',false),()=>stateHook.onEnter.call(stateCall,[f.controller,f.ptr(2)]));
 f.write(f.controller.add(0x228),2);dispatch(captureState('leave',true),()=>stateHook.onLeave.call(stateCall));
@@ -165,22 +165,26 @@ const clockFields=hpPlan.fields.filter(field=>field.phase==='leave'&&['clock_ope
 const ignoredRecord=captureState('leave',false,{fields:[...clockFields,...publicationFields]},[ignored]);ignoredRecord.closed_after=true;ignoredRecord.active_after=0;ignoredRecord.facts.scope_revision=1;ignoredRecord.facts.publication_revision=1;
 assert(!ignoredRecord.fields.some(field=>field.role==='body'));
 dispatch(ignoredRecord,()=>{hpHook.onLeave.call(ignoredCall);c.ignoredProjection=c.__arkdpsOnClosedRecord(ignoredRecord);});
-assert(c.ignoredProjection);assert.equal(c.ignoredProjection.mark.sequence,actorEvents.length+badForm.length+badToken.length);assert.equal(vm.runInContext('readThroughSequence',c),0);
+assert(c.ignoredProjection);assert.equal(c.ignoredProjection.mark.sequence,actorEvents.length+badForm.length+badToken.length);assert.equal(vm.runInContext('eventStore.readThrough',c),0);
 const dirtyHook=f.callback('OnAttributeDirty',f.entity),dirtyCall={threadId:1},emptyEntry={version:1,edge:'entry',checkpoint:0,segments:[],fields:[],facts:{mode_epoch:0,scope_mode_epoch:0}};
 dispatch(emptyEntry,()=>dirtyHook.onEnter.call(dirtyCall,[ignored,f.ptr(1),f.ptr(0)]));assert.equal(dirtyCall.write,undefined);
 const dirtyLeave={...ignoredRecord,facts:{...ignoredRecord.facts}};dispatch(dirtyLeave,()=>{dirtyHook.onLeave.call(dirtyCall);c.ignoredDirtyProjection=c.__arkdpsOnClosedRecord(dirtyLeave);});
-assert(c.ignoredDirtyProjection);assert.equal(c.ignoredDirtyProjection.mark.sequence,c.ignoredProjection.mark.sequence);assert.equal(vm.runInContext('readThroughSequence',c),0);
+assert(c.ignoredDirtyProjection);assert.equal(c.ignoredDirtyProjection.mark.sequence,c.ignoredProjection.mark.sequence);assert.equal(vm.runInContext('eventStore.readThrough',c),0);
 
 // Destroy entry owns the full old binding; leave owns the released singleton
 // and independently copied old views. No normal live binding is available.
 f.write(f.controller.add(0x228),3);
 const destroyPlan=vm.runInContext('nativeCapturePlan("BattleController.Destroy",ptr(1),planMetadata)',c),destroyHook=f.callback('OnDestroy',f.controllerClass),destroyCall={threadId:1};
+c.destroyHook=destroyHook;c.destroyColdPlan=plan;
+c.__nativeCaptureCapabilities=()=>({version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys']});
+c.__publishCaptureScope=()=>{};
+vm.runInContext('arkdpsNativeAsyncCapture=true;planMetadata.cold_plan=destroyColdPlan;prepareNativeCaptureHook(ptr(1),destroyHook);if(!destroyHook.arkdpsCaptureContract.complete)throw Error("Destroy contract incomplete");',c);
 const oldLogger=original.readPointer.call(f.controller.add(0xe0)),oldNative=original.readPointer.call(f.controller.add(0x10)),oldStats=original.readPointer.call(oldLogger.add(0x30));
 dispatch(captureState('entry',true,destroyPlan),()=>destroyHook.onEnter.call(destroyCall,[f.controller]));
 const singleton=original.readPointer.call(original.readPointer.call(f.controllerClass.add(0x58)).add(0xb8));f.write(singleton,f.ptr(0));f.write(f.controller.add(0x10),f.ptr(0));
 const refs=[f.controller];refs[8]=oldLogger;refs[9]=f.level;refs[10]=oldNative;refs[11]=oldStats;
 const finalRecord=captureState('leave',false,destroyPlan,refs);finalRecord.closed_after=true;finalRecord.active_after=0;finalRecord.ticket='100';finalRecord.activity_begin='200';finalRecord.activity_end='201';
-dispatch(finalRecord,()=>{destroyHook.onLeave.call(destroyCall);c.finalProjection=c.__arkdpsOnClosedRecord(finalRecord);});
-assert(c.finalProjection,vm.runInContext('JSON.stringify(terminalDiagnostics)',c));assert.equal(c.finalProjection.terminal_read.terminal_only,true);assert.equal(c.finalProjection.terminal_read.events.length,actorEvents.length+badForm.length+badToken.length);assert.equal(vm.runInContext('readThroughSequence',c),0);
+dispatch(finalRecord,()=>{destroyHook.onLeave.call(destroyCall);},true);
+assert(c.finalProjection,vm.runInContext('JSON.stringify(terminalDiagnostics)',c));assert.equal(c.finalProjection.terminal_read.terminal_only,true);assert.equal(c.finalProjection.terminal_read.events.length,actorEvents.length+badForm.length+badToken.length);assert.equal(vm.runInContext('eventStore.readThrough',c),0);
 assert.equal(late,0);
 console.log(JSON.stringify({status:'PASS_COLD_SOURCE_REPLAY',fields:record.fields.length,segments:record.segments.length,late_reads:late,scope:binding.native_autochess_context.scope_key}));

@@ -75,10 +75,10 @@ for(const [change,mutate]of [
  ['fatal',f=>f.vm.runInContext('fatal="owned failure"',f.context)],
  ['stopped',f=>f.context.rpc.exports.stop()],
  ['queue_gap',f=>f.vm.runInContext('queue.splice(2,1)',f.context)],
- ['queue_sequence',f=>f.vm.runInContext('queue[1].sequence=99',f.context)],
+ ['queue_sequence',f=>f.vm.runInContext('queue[1]={...queue[1],sequence:99}',f.context)],
  ['queue_other_scope',f=>f.vm.runInContext('queueSettlementScopes.set(queue[1],damageSettlementScope-1)',f.context)],
  ['queue_unknown_scope',f=>f.vm.runInContext('queueSettlementScopes.delete(queue[1])',f.context)],
- ['queue_future_clock',f=>f.vm.runInContext('queue[1].frame=31',f.context)],
+ ['queue_future_clock',f=>f.vm.runInContext('const old=queue[1];queue[1]={...old,frame:31};queueSettlementScopes.set(queue[1],queueSettlementScopes.get(old))',f.context)],
  ['unreadable_singleton_slot',f=>f.write(f.controllerClass.add(0x58),f.alloc())],
 ]){
  const f=make();destroy(f);mutate(f);const rejected=f.context.rpc.exports.readTerminalEvents(1,4);
@@ -126,21 +126,91 @@ for(const range of [[-1,4],[0.5,4],[1,3],[1,5],[5,4],[1,'4'],[null,4]]){
 }
 console.log(JSON.stringify({owned_terminal_read_cases:cases,live_game:false}));
 
-// The closed publication must use the existing independently validated tail,
-// before attempting a normal live-root binding. Owned-memory oracle only;
-// native snapshot transport is covered separately by replay fixtures.
+// The closed publication must use the same prepared Destroy callback and replay
+// lease as the source prefix. These are strict JS-owned bytes, not native/game.
 {
- const f=make();destroy(f,{afterEnter:()=>{f.write(slot(f),f.ptr(0));f.write(f.controller.add(0x10),f.ptr(0));}});
- const originalReadThrough=f.vm.runInContext('readThroughSequence',f.context);
- f.context.ownedTerminalRecord={version:1,edge:'leave',closed_after:true,facts:{mode_epoch:0,scope_mode_epoch:0}};
- f.vm.runInContext("nativeCaptureModeHistory.set(0,'all');globalThis.__arkdpsReplayActive=()=>true;globalThis.__arkdpsReplayRecord=()=>ownedTerminalRecord;globalThis.__arkdpsReplayOptional=(_role,read)=>({available:true,value:read()});probeAdapter.capturedPublicationBinding=()=>{throw Error('terminal borrowed normal binding');};",f.context);
- const projection=f.vm.runInContext('__arkdpsOnClosedRecord(ownedTerminalRecord)',f.context);
+ const f=make(),hook=f.callback('OnDestroy',f.controllerClass),call={threadId:1};
+ hook.onEnter.call(call,[f.controller]);
+ f.write(slot(f),f.ptr(0));f.write(f.controller.add(0x10),f.ptr(0));
+ const P=f.ptr(0).constructor,names=['readByteArray','readPointer','readU8','readU16','readU32','readS32','readU64','readS64','readFloat','readUtf16String','readCString'];
+ const original=Object.fromEntries(names.map(name=>[name,P.prototype[name]]));
+ const c=f.context;c.ArrayBuffer=ArrayBuffer;c.NativePointer=P;c.NativeInteger=class{};
+ const bridge=fs.readFileSync(path.join(__dirname,'../native_pc/native_event_runtime/bridge.js'),'utf8');
+ vm.runInContext(bridge.slice(bridge.indexOf('function __integer('),bridge.indexOf('class NativeInteger')),c);
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../native_pc/native_event_runtime/cold_plan.js'),'utf8'),c);
+ const classNames=['BattleController','SingletonHost','AutoChessGameManager','AutoChessGameStatus','AutoChessGameStateModel','AutoChessGameStateMachine','AutoChessDataCenter','AutoChessPlayerDataModel','ScenePlayerData','PlayerCard','AutoChessBattleDataModel','ChessInst','BattleCharacterData','UnitManager','Character'];
+ c.terminalClasses=Object.fromEntries(classNames.map(name=>[name,(name==='BattleController'?f.controllerClass:name==='Character'?f.character:f.alloc()).toString()]));
+ const stringClass=f.alloc(),stage=f.level.add(0x18).readPointer();f.write(stage,stringClass);c.terminalStringClass=stringClass.toString();c.destroyCallbacks=hook;
+ vm.runInContext(`
+  __arkdpsSealClassHierarchy(new Map(Object.values(terminalClasses).map(k=>[k,'0x0'])));
+  nativeCaptureMetadata={clock,classes:terminalClasses,string_class:terminalStringClass,cold_metadata_ready:true,immutable_class_parents:true};
+  nativeCaptureMetadata.cold_plan=__arkdpsBuildColdCapturePlan(nativeCaptureMetadata);
+  globalThis.__nativeCaptureCapabilities=()=>({version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys']});
+  globalThis.arkdpsNativeAsyncCapture=true;nativeCaptureModeHistory.set(0,'all');
+  prepareNativeCaptureHook(ptr(0x9000),destroyCallbacks);
+  if(destroyCallbacks.arkdpsCaptureContract.complete!==true)throw Error('incomplete owned Destroy contract');
+  globalThis.ownedBytes=(at,n)=>__arkdpsOwnedRead(BigInt(at),n);
+  probeAdapter.capturedPublicationBinding=()=>{throw Error('terminal borrowed normal binding');};
+ `,c);
+ const plan=json(hook.arkdpsCaptureContract),clock=f.vm.runInContext('clock',c),segments=[],fields=[];
+ const bodyRoots={0:f.controller,8:f.controller.add(0xe0).readPointer(),9:f.level};
+ for(const field of plan.fields.filter(field=>field.phase==='leave')){
+  const add=(at,bytes)=>segments.push({field_id:field.field_id,role:field.role,checkpoint:0,address:at.toString(),bytes,status:'ok',guard_id:field.guard_id});
+  let status='ok';
+  try{
+   let at=field.root==='absolute'?f.ptr(field.absolute_address):field.root==='global_slot'?clock:bodyRoots[field.root_index];
+   if(!at)throw Error('missing owned root');
+   for(const offset of field.pointer_offsets){add(at.add(offset),original.readByteArray.call(at.add(offset),8));at=original.readPointer.call(at.add(offset));if(at.isNull())throw Error('null owned path');}
+   at=at.add(field.offset);
+   if(field.kind==='utf16'){
+    add(at,original.readByteArray.call(at,8));add(at.add(16),original.readByteArray.call(at.add(16),4));
+    const n=original.readS32.call(at.add(16)),text=original.readUtf16String.call(at.add(20),n),bytes=new ArrayBuffer(2*n),view=new DataView(bytes);
+    for(let i=0;i<n;i++)view.setUint16(2*i,text.charCodeAt(i),true);add(at.add(20),bytes);
+   }else add(at,original.readByteArray.call(at,field.bytes));
+  }catch(error){status='field_unreadable';}
+  fields.push({field_id:field.field_id,role:field.role,checkpoint:0,status});
+ }
+ c.ownedTerminalRecord={version:1,edge:'leave',closed_after:true,checkpoint:0,facts:{mode_epoch:0,scope_mode_epoch:0},segments,fields};c.destroyReceiver=call;
+ const originalReadThrough=f.vm.runInContext('eventStore.readThrough',c);
+ for(const name of names)P.prototype[name]=function(...args){
+  if(!vm.runInContext('__arkdpsReplayActive()',c))return original[name].apply(this,args);
+  const size=name==='readByteArray'?args[0]:name==='readUtf16String'?2*args[0]:name==='readU8'?1:name==='readU16'?2:['readU32','readS32','readFloat'].includes(name)?4:8;
+  if(name==='readCString')throw Error('uncaptured terminal metadata read');
+  const bytes=c.ownedBytes(this.toString(),size),v=new DataView(bytes);
+  if(name==='readByteArray')return bytes;
+  if(name==='readPointer')return f.ptr(v.getBigUint64(0,true));
+  if(name==='readUtf16String'){let text='';for(let i=0;i<args[0];i++)text+=String.fromCharCode(v.getUint16(2*i,true));return text;}
+  if(name==='readU64'||name==='readS64'){const n=name==='readU64'?v.getBigUint64(0,true):v.getBigInt64(0,true);return {toString:()=>n.toString(),toNumber:()=>Number(n)};}
+  return name==='readU8'?v.getUint8(0):name==='readU16'?v.getUint16(0,true):name==='readU32'?v.getUint32(0,true):name==='readFloat'?v.getFloat32(0,true):v.getInt32(0,true);
+ };
+ let projection;
+ try{
+  projection=vm.runInContext(`
+   __arkdpsReplayBegin(ownedTerminalRecord);
+   let terminalProjection;
+   try{
+    destroyCallbacks.onLeave.call(destroyReceiver);
+    if(probeAdapter.capturedTerminalRecord({...ownedTerminalRecord}))throw Error('forged record qualified');
+    terminalProjection=__arkdpsOnClosedRecord(ownedTerminalRecord);
+   }
+   finally{globalThis.terminalReplaySummary=__arkdpsReplayEnd();}
+   terminalProjection;
+  `,c);
+ }finally{for(const name of names)P.prototype[name]=original[name];}
  assert(projection,'closed terminal publication unavailable');
+ assert.equal(c.terminalReplaySummary.complete,true,'terminal projection stays inside its owned roles');
  assert.equal(projection.terminal_read.retry,false);assert.equal(projection.terminal_read.terminal_only,true);
  assert.deepEqual(json(projection.mark.terminal_boundary),json(projection.terminal_read.terminal_boundary));
  for(const key of ['sequence','epoch','frame','game_time','damage_settlement_scope'])assert.equal(projection.mark[key],projection.terminal_read[key],key);
  for(const key of Object.keys(projection.mark).filter(x=>x.startsWith('native_')))assert.deepEqual(json(projection.mark[key]),json(projection.terminal_read[key]),key);
- assert.equal(f.vm.runInContext('readThroughSequence',f.context),originalReadThrough,'snapshot must not authorize ACK');
+ assert.equal(f.vm.runInContext('eventStore.readThrough',c),originalReadThrough,'snapshot must not authorize ACK');
  assert(f.context.rpc.exports.ackEvents(4).error);
- f.vm.runInContext('__arkdpsPublicationServed(4)',f.context);assert.equal(f.context.rpc.exports.ackEvents(4).acknowledged,4);
+ // The record loses its private qualification at the end of that exact lease.
+ vm.runInContext(`__arkdpsReplayBegin(ownedTerminalRecord);try{if(probeAdapter.capturedTerminalRecord(ownedTerminalRecord))throw Error('expired Destroy qualification');if(__arkdpsOnClosedRecord(ownedTerminalRecord)!==null)throw Error('expired record published');}finally{globalThis.expiredSummary=__arkdpsReplayEnd();}`,c);
+ assert.equal(c.expiredSummary.complete,true,'expired qualification rejects without reading missing roles');
+ // A different ordinary leave owns identical bytes but has no Destroy callback admission.
+ vm.runInContext(`globalThis.ordinaryLeaveRecord={...ownedTerminalRecord};__arkdpsReplayBegin(ordinaryLeaveRecord);try{if(probeAdapter.capturedTerminalRecord(ordinaryLeaveRecord))throw Error('ordinary leave qualified');if(__arkdpsOnClosedRecord(ordinaryLeaveRecord)!==null)throw Error('ordinary leave published terminal');}finally{globalThis.ordinarySummary=__arkdpsReplayEnd();}`,c);
+ assert.equal(c.ordinarySummary.complete,true,'ordinary leave rejects before any uncaptured terminal read');
+
+ f.vm.runInContext('__arkdpsPublicationServed(4)',c);assert.equal(f.context.rpc.exports.ackEvents(4).acknowledged,4);
 }

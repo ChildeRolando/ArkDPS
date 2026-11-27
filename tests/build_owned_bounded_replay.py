@@ -42,7 +42,8 @@ def main():
         (deps / header).write_text('// Syntax/link declaration only; never executed.\ninline constexpr const char ' + symbol + '[]="";\n')
     binary = output / 'owned-batch-test.exe'
     fixture = {'bounded':'owned_bounded_replay_test.cpp','production-hp':'production_hp_actual_engine.cpp','hp-opaque':'owned_hp_opaque_io_test.cpp','hp-leaf':'owned_hp_leaf_facts_test.cpp','light-hp':'owned_light_hp_test.cpp','sampling':'owned_sampling_checkpoint_test.cpp'}[args.fixture]
-    tracked = [*sorted((ROOT/'native_pc/native_event_runtime').glob('*.h')), ROOT/'native_pc/native_event_runtime/engine.cpp', ROOT/'native_pc/native_event_runtime/native_capture.cpp', ROOT/'native_pc/native_event_runtime/bridge.js', *sorted((ROOT/'tests').glob('owned_*test.cpp')), ROOT/'tests/production_hp_actual_engine.cpp',ROOT/'tests/production_hp_paced_engine.h',ROOT/'tests/production_sampling_engine.h']
+    tracked = [*sorted((ROOT/'tests/experiments').glob('*.h')), *sorted((ROOT/'native_pc/native_event_runtime').glob('*.h')), ROOT/'native_pc/native_event_runtime/engine.cpp', ROOT/'native_pc/native_event_runtime/native_capture.cpp', ROOT/'native_pc/native_event_runtime/bridge.js', *sorted((ROOT/'tests').glob('owned_*test.cpp')), ROOT/'tests/production_hp_actual_engine.cpp',ROOT/'tests/production_hp_paced_engine.h',ROOT/'tests/production_sampling_engine.h']
+    tracked.append(ROOT/'tests/production_terminal_engine.h')
     source_before = {str(p.relative_to(ROOT)):digest(p) for p in tracked}
     command = [args.compiler, '-std=c++17', '-static', '-' + args.optimization, '-pthread', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                '-I', str(ROOT/'native_pc/native_event_runtime'), '-isystem', str(deps),

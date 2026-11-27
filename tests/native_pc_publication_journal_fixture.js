@@ -1,32 +1,37 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
-const source=fs.readFileSync(path.join(__dirname,'../native_pc/native_event_runtime/publication.js'),'utf8');
+const root=process.env.ARKDPS_PROBE_FIXTURE_ROOT||path.join(__dirname,'..');
+const source=fs.readFileSync(path.join(root,'native_pc/native_event_runtime/publication.js'),'utf8');
+const storeSource=fs.readFileSync(path.join(root,'event_probe_store.js'),'utf8');
 const context=vm.createContext({});
-vm.runInContext(source+'\nglobalThis.Journal=ArkdpsPublicationJournal;',context);
-const Journal=context.Journal;
+vm.runInContext(storeSource+'\n'+source+'\nglobalThis.Journal=ArkdpsPublicationJournal;globalThis.Store=ArkdpsEventStore;',context);
+let store;
+class Journal extends context.Journal {constructor(options={}){const own=new context.Store();super({...options,store:own.view()});this.ownerStore=own;store=own;}}
 let checks=0;
 function check(condition){assert.ok(condition);checks++;}
 function plain(value){return JSON.parse(JSON.stringify(value));}
 function record(ticket){return {version:1,edge:'leave',ticket:String(ticket),activity_begin:String(ticket*2),
  activity_end:String(ticket*2+1),closed_after:true,active_after:0};}
-function projection(sequence,ack=0,epoch=sequence+1,after=ack){return {
+function projection(sequence,ack=0,epoch=sequence+1,after=ack){
+ while(store.sequence<sequence){const n=store.sequence+1;store.append({sequence:n,amount:n,frame:n});}
+ const snapshot=store.snapshot(after,sequence);return {
  mark:{sequence,epoch,frame:sequence,game_time:sequence/30,active:0,active_hooks:[],error:null,stopped:false,
   native_generation:1,native_identity:{controller:'0x10000'},native_fixed_time:String(sequence),
   native_autochess_context:{scope_key:'round1',memberships:[{uid:7}]}},
  acknowledged:ack,events_after:after,events_through:sequence,
- events:Array.from({length:sequence-after},(_,i)=>({sequence:after+i+1,amount:after+i+1,frame:after+i+1})),
+ events:snapshot.events.slice(),
  hp_context:[],read_fields:{native_generation:1,frame:sequence,game_time:sequence/30,
   baseline_discarded_skill_events_complete:true,autochess_round_start:{sequence:0}},terminal_read:null};}
 function read(j,p,after,through,operation='read',served=()=>{}){
- return j.read({operation,publication_token:p.native_publication.token,after,through},served);
+ return j.read({operation,publication_token:p.native_publication.token,after,through},n=>{served(n);j.ownerStore.served(n);});
 }
 {
- const j=new Journal(),p=projection(2);p.hp_context=[{eventSequence:2,context:{hp:10}}];
+ const j=new Journal(),p=projection(2);j.ownerStore.appendContext(2,{hp:10});p.hp_context=j.ownerStore.snapshot(0,2).hp_context;
  const m=j.publish(record(1),p);
  check(!m.retry&&m.native_publication.closed_ticket==='1');
  check(j.ack(2,()=>{throw Error('must not commit');}).error!=null);
  // A hostile old mutable reducer buffer cannot alter an already published fact.
- p.events[1].amount=900;p.mark.native_autochess_context.memberships[0].uid=999;p.hp_context[0].context.hp=0;
+ assert.throws(()=>{p.events[1].amount=900;});p.mark.native_autochess_context.memberships[0].uid=999;assert.throws(()=>{p.hp_context[0].context.hp=0;});
  const served=[],first=read(j,m,0,2,'read',n=>served.push(n));
  check(first.events[1].amount===2&&first.hp_context[0].hp===10);
  check(j.mark().native_autochess_context.memberships[0].uid===7);
@@ -36,7 +41,7 @@ function read(j,p,after,through,operation='read',served=()=>{}){
  check(j.ack(3,()=>{throw Error('must not commit');}).error!=null);
  const wrong=j.ack(2,()=>({acknowledged:1,error:'source rejected'}));
  check(wrong.error&&j.acknowledged===0&&j.events.length===2);
- check(j.ack(2,n=>({acknowledged:n,error:null})).acknowledged===2&&j.events.length===0);
+ check(j.ack(2,n=>j.ownerStore.ack(n)).acknowledged===2&&j.events.length===0);
  // Cumulative ACK retries must not call the reducer again.
  check(j.ack(2,()=>{throw Error('duplicate ACK');}).acknowledged===2);
  check(read(j,m,0,2).retry===true);
@@ -75,7 +80,7 @@ function read(j,p,after,through,operation='read',served=()=>{}){
  check(read(j,m,0,1,'terminal_read').retry===true);
  const batch=read(j,m,0,2,'terminal_read');
  check(batch.terminal_only&&batch.terminal_read_version===1&&batch.events.length===2&&batch.terminal_boundary.scope==='old');
- check(j.ack(2,n=>({acknowledged:n,error:null})).acknowledged===2);
+ check(j.ack(2,n=>j.ownerStore.ack(n)).acknowledged===2);
 }
 {
  const j=new Journal(),p=projection(0);
@@ -89,8 +94,8 @@ function read(j,p,after,through,operation='read',served=()=>{}){
  check(j.marks.length===2);
 }
 for(const mutate of [
- p=>p.events.splice(0,1),p=>p.events[1].sequence=1,p=>p.acknowledged=1,p=>p.mark.active=1,
- p=>p.mark.epoch=-1,p=>p.mark.game_time=Infinity,p=>p.events[1].amount=NaN,
+ p=>p.events.splice(0,1),p=>p.events[1]={...p.events[1],sequence:1},p=>p.acknowledged=1,p=>p.mark.active=1,
+ p=>p.mark.epoch=-1,p=>p.mark.game_time=Infinity,p=>p.events[1]={...p.events[1],amount:NaN},
  p=>p.mark.sequence=3,p=>p.hp_context=[{eventSequence:-1,context:{}}]
  ,p=>p.events_after=1,p=>p.events_through=1
 ]){
@@ -116,9 +121,9 @@ for(const mutate of [
  check(read(j,m,1,2).mark_retry_reason==='native_publication_unserved_prefix');
  check(j.ack(2,()=>{throw Error('must not skip unserved prefix');}).error!=null&&j.events.length===2);
  check(read(j,m,2,2).retry===true);
- const baseline=j.read({operation:'read',publication_token:m.native_publication.token,after:2,through:2,baseline:true},()=>{});
+ const baseline=j.read({operation:'read',publication_token:m.native_publication.token,after:2,through:2,baseline:true},n=>j.ownerStore.served(n));
  check(baseline.events.length===0&&j.readThrough===2);
- check(j.ack(2,n=>({acknowledged:n,error:null})).acknowledged===2);
+ check(j.ack(2,n=>j.ownerStore.ack(n)).acknowledged===2);
 }
 {
  const j=new Journal(),m=j.publish(record(1),projection(1));

@@ -225,8 +225,11 @@ bool equal_token(const std::string& left, const std::string& right) {
 }
 
 Json hello() {
-    return Json{{"provider", "arkdps-native-hooks"}, {"protocol", 1}, {"capture_pause_version", 1},
-        {"ready", parse(arkdps::readiness())}};
+    auto ready=parse(arkdps::readiness());
+    Json reply{{"provider", "arkdps-native-hooks"}, {"protocol", 1}, {"capture_pause_version", 1},{"ready",ready}};
+    if(ready.value("native_mark_scheduler_version",Json())==1&&ready.value("mode_control_version",Json())==1)
+        reply.update({{"native_mark_scheduler_version",1},{"mode_control_version",1}});
+    return reply;
 }
 
 std::string safe_diagnostic(const char* message, const char* phase) {
@@ -306,6 +309,9 @@ std::string safe_diagnostic(const char* message, const char* phase) {
             "sampling publication failed",
             "sampling publication certificate mismatch",
             "invalid sampling transaction operation",
+            "native mark requires a sampling transaction",
+            "native preference requires mode control",
+            "mode control requires a preference",
             "invalid sample request identity",
             "sample request no longer active",
             "sample request transaction binding changed",
@@ -432,7 +438,7 @@ DWORD WINAPI worker(void* argument) {
                     phase = "readiness";
                     result = hello();
                 } else {
-                    for (const char* known : {"mark", "read", "ack", "stop", "capture_control", "capture_status"})
+                    for (const char* known : {"mark", "read", "ack", "stop", "capture_control", "capture_status", "configure_mode"})
                         if (operation == known) phase = known;
                     request.erase("id");
                     const auto response = arkdps::request(request.dump());

@@ -12,10 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from native_pc.native_event_runtime.smoke import Fixture, export_offsets
 from native_pc.native_hook_source import NativePipe
+from native_owned_event_store import empty_store_source
 
 
 def source(binary, hostile=False, fixed_check=False):
-    return r'''
+    return empty_store_source() + r'''
 const word=Memory.alloc(8);word.writeU64(42);
 const address=Process.getModuleByName('ArkDPS.NativeEvents.dll').base.add(OFFSET);
 const field=(id,role,phase,side='none',guard=0)=>({field_id:id,role,phase,root:'absolute',absolute_address:word.toString(),
@@ -44,7 +45,7 @@ const hook=Interceptor.attach(address,{arkdpsName:'owned.graph-binding',arkdpsCa
  },
  onLeave(){check('scope',scope);leaves++;}
 });
-globalThis.__arkdpsPublicationServed=n=>{served=Math.max(served,n);};
+globalThis.__arkdpsPublicationServed=n=>{ownedCanonicalStore.served(n);served=Math.max(served,n);};
 globalThis.__arkdpsOnClosedRecord=record=>{
  check('publication',publication);
  return {mark:{sequence:0,epoch:entries,frame:leaves,game_time:leaves/30,active:0,active_hooks:[],error:null,stopped:false,

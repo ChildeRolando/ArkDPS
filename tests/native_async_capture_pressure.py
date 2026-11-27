@@ -19,11 +19,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from native_pc.native_event_runtime.smoke import Fixture, export_offsets
 from native_pc.native_hook_source import NativePipe
+from native_owned_event_store import empty_store_source
 
 
 def source(binary, pause_ms, control=False):
     offset = export_offsets(binary)['ArkDpsTestInteger']
-    return r'''
+    return empty_store_source() + r'''
 const base=Process.getModuleByName('ArkDPS.NativeEvents.dll').base,address=base.add(OFFSET);
 const owned=Memory.alloc(128);for(let i=0;i<16;i++)owned.add(i*8).writeU64(i+1);
 const fields=['entry','leave'].map((phase,index)=>({field_id:index+1,phase,role:'body',root:'absolute',root_index:0,
@@ -36,7 +37,7 @@ const hook=Interceptor.attach(address,{arkdpsName:'owned.pressure',arkdpsCapture
   if(typeof __arkdpsReplayRole==='function')__arkdpsReplayRole('body',0,1);if(owned.readU64().toNumber()!==1||args[0].toInt32()!==1)throw Error('owned entry corrupted');
   entries++;if(entries===1){const end=Date.now()+PAUSE;while(Date.now()<end){}}
  },onLeave(){if(typeof __arkdpsReplayRole==='function')__arkdpsReplayRole('body',0,2);if(owned.readByteArray(128).byteLength!==128)throw Error('owned leave corrupted');leaves++;}});
-globalThis.__arkdpsPublicationServed=through=>{served=Math.max(served,through);};
+globalThis.__arkdpsPublicationServed=through=>{ownedCanonicalStore.served(through);served=Math.max(served,through);};
 globalThis.__arkdpsOnClosedRecord=record=>{
  if(record.publication_request===lastRequest)return null;lastRequest=record.publication_request;
  return {mark:{sequence:0,epoch:entries,frame:leaves,game_time:leaves/30,active:0,active_hooks:[],

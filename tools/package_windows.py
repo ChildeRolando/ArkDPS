@@ -53,7 +53,7 @@ BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'bat
            'character_catalog.py', 'enemy_telemetry.py', 'layout_store.py', 'metrics.py', 'panel_model.py',
            'roster.py', 'snapshot_adapter.py', 'source_classification.py',
            'stage_names.py', 'stats_core.py', 'native_pc_collector.py',
-           'event_probe_android2791.js', 'event_probe_native_pc.js', 'event_probe_autochess.js', 'event_probe_runtime.js',
+           'event_probe_store.js', 'event_probe_android2791.js', 'event_probe_native_pc.js', 'event_probe_autochess.js', 'event_probe_runtime.js',
            'multiplayer_battle.py', 'autochess_context.py')
 
 

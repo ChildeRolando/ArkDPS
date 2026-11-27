@@ -28,19 +28,21 @@ function run(platform,group,index,fault=null){
   f.context.fixtureFault=fault;
   f.vm.runInContext(`{
    const original=damageSettlement;
-   damageSettlement=function(...args){const event=original(...args);
+   damageSettlement=function(...args){let event=original(...args);
     if(event?.damage_type===5){
-     if(fixtureFault==='child_incomplete')event.settlement_complete=false;
-     if(fixtureFault==='child_settlement_amount')event.amount+=1;
-     if(fixtureFault==='child_settlement_uid')event.target_uid='999';
-     if(fixtureFault==='child_settlement_instance')event.target_instance='0xdead';
-     if(fixtureFault==='child_settlement_clock')event.frame++;
+     const changes={};
+     if(fixtureFault==='child_incomplete')changes.settlement_complete=false;
+     if(fixtureFault==='child_settlement_amount')changes.amount=event.amount+1;
+     if(fixtureFault==='child_settlement_uid')changes.target_uid='999';
+     if(fixtureFault==='child_settlement_instance')changes.target_instance='0xdead';
+     if(fixtureFault==='child_settlement_clock')changes.frame=event.frame+1;
+     event=corruptQueuedEvent(event,changes);args[0].settlementRecord=event;
     }return event;};
   }`,f.context);
  }
  if(fault==='child_certificate_delta')f.vm.runInContext(`{
   const original=record;record=function(...args){const event=original(...args);
-   if(event?.kind==='damage_settlement'&&event.damage_type===5)event.real_delta+=1;return event;};
+   if(event?.kind==='damage_settlement'&&event.damage_type===5)return corruptQueuedEvent(event,{real_delta:event.real_delta+1});return event;};
  }`,f.context);
  const apply=f.callback('ApplyModifier',f.entity),take=f.callback('OnTakeDamage',f.unitClass);
  const outer={threadId:1},hit={threadId:1},elemental={threadId:1},inner={threadId:1};

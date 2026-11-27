@@ -195,11 +195,41 @@ class Pipe:
         self.closed = True
 
 
+def test_scheduler_startup_and_preference_changes_are_control_only(setup_probe):
+    make, _, pipes = setup_probe
+    probe = make()
+    selected = [False]
+    probe.set_autochess_setting(lambda: selected[0])
+    factory = probe.pipe_factory
+    def scheduler_pipe(name, pid):
+        pipe = factory(name, pid)
+        pipe.hello.update(native_mark_scheduler_version=1, mode_control_version=1)
+        pipe.hello['ready']['native_sampling_version']=1
+        original = pipe.request
+        def request(operation, **arguments):
+            if operation == 'configure_mode':
+                pipe.calls.append((operation, arguments))
+                return dict(mode_control_version=1, applied=True, mode_epoch=1,
+                            desired_mode='all' if arguments['autochess_enabled'] else 'local')
+            return original(operation, **arguments)
+        pipe.request=request
+        return pipe
+    probe.pipe_factory=scheduler_pipe
+    probe.start()
+    assert [op for op,_ in pipes[0].calls]==['initialize','configure_mode']
+    assert probe._committed_sequence==probe._acknowledged_sequence==0
+    selected[0]=True
+    probe.mark()
+    assert [op for op,_ in pipes[0].calls][-2:]==['configure_mode','mark']
+    assert pipes[0].calls[-1][1]['sampling']=='fresh'
+    assert 'autochess_enabled' not in pipes[0].calls[-1][1]
+
+
 @pytest.fixture
 def setup_probe(tmp_path, monkeypatch):
     source_root = tmp_path / 'source-root'
     source_root.mkdir()
-    for name in ('event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js'):
+    for name in ('event_probe_store.js', 'event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js'):
         (source_root / name).write_bytes((ROOT / name).read_bytes())
     binary = source_root / 'source.dll'
     binary.write_bytes(b'controlled-not-an-executable')

@@ -24,20 +24,25 @@ class AssembledProbeSource:
     context_file: str
     context_sha256: str
     context_source_sha256: str
+    store_file: str
+    store_sha256: str
+    store_source_sha256: str
 
     def audit(self):
-        return dict(assembly_version=2, adapter_file=self.adapter_file,
+        return dict(assembly_version=3, adapter_file=self.adapter_file,
                     runtime_file=self.runtime_file, adapter_sha256=self.adapter_sha256,
                     runtime_sha256=self.runtime_sha256,
                     adapter_source_sha256=self.adapter_source_sha256,
                     runtime_source_sha256=self.runtime_source_sha256,
                     assembled_sha256=self.assembled_sha256, context_file=self.context_file,
                     context_sha256=self.context_sha256,
-                    context_source_sha256=self.context_source_sha256)
+                    context_source_sha256=self.context_source_sha256,
+                    store_file=self.store_file, store_sha256=self.store_sha256,
+                    store_source_sha256=self.store_source_sha256)
 
 
 def assemble_probe_source(platform, *, directory=None, read_file=None):
-    """Compose the fixed adapter/runtime boundary; never rewrite source tokens.
+    """Compose the fixed store/context/adapter/runtime boundary; never rewrite source tokens.
 
     A caller may supply its already-verified immutable file snapshot. Both
     compilation and provenance then use that snapshot, not a second disk read.
@@ -63,12 +68,16 @@ def assemble_probe_source(platform, *, directory=None, read_file=None):
     context_name = 'event_probe_autochess.js'
     context_bytes = read(directory / context_name)
     context = normalize(context_bytes)
-    source = '\n'.join((context, adapter, runtime))
+    store_name = 'event_probe_store.js'
+    store_bytes = read(directory / store_name)
+    store = normalize(store_bytes)
+    source = '\n'.join((store, context, adapter, runtime))
     digest = lambda text: sha256(text.encode('utf-8')).hexdigest()
     return AssembledProbeSource(source, adapter_name, runtime_name,
                                 sha256(adapter_bytes).hexdigest(), sha256(runtime_bytes).hexdigest(),
                                 digest(adapter), digest(runtime), digest(source),
-                                context_name, sha256(context_bytes).hexdigest(), digest(context))
+                                context_name, sha256(context_bytes).hexdigest(), digest(context),
+                                store_name, sha256(store_bytes).hexdigest(), digest(store))
 
 
 class ObserverReadRetry(RuntimeError):

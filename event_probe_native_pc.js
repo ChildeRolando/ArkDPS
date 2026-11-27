@@ -105,6 +105,16 @@ function captureNativeTerminalBinding(identity,stamp){
  Object.freeze(frozen.native_identity);return Object.freeze(frozen);
 }
 function validateNativeTerminalBinding(candidate){
+ // Closed-record projection runs after the callback's body wrapper has
+ // returned. Terminal root witnesses belong to this captured body, while the
+ // clock and optional stage text keep their own independent roles below.
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()){
+  if(!capturedNativeTerminalRecord(__arkdpsReplayRecord()))return false;
+  return __arkdpsReplayPoint('body',()=>validateNativeTerminalBindingPoint(candidate));
+ }
+ return validateNativeTerminalBindingPoint(candidate);
+}
+function validateNativeTerminalBindingPoint(candidate){
  if(candidate.native_process_pid!==Process.id||candidate.native_generation!==nativeGeneration)return false;
  const keys=['controller','native','logger','stats','level'],identity=candidate.native_identity;
  if(!identity||keys.some(key=>candidate[key]!==identity[key]))return false;
@@ -144,6 +154,12 @@ function validateNativeTerminalBinding(candidate){
 }
 let nativeCaptureMetadata=null,nativeCaptureModeEpoch=0;
 const nativeCaptureModeHistory=new Map();
+const nativeTerminalReplayRecords=new WeakMap();
+function capturedNativeTerminalRecord(record){
+ return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&record===__arkdpsReplayRecord()
+  &&record.edge==='leave'&&typeof __arkdpsReplayModeRecord==='function'
+  &&nativeTerminalReplayRecords.get(record)===__arkdpsReplayModeRecord();
+}
 let nativeActiveHpContract=null;
 function captureNativeHpObservation(edge,enemy){
  if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive()||__arkdpsReplayRecord().native_view!==true)return null;
@@ -319,12 +335,18 @@ function prepareNativeCaptureHook(address,callbacks){
    try{return withCapturedMode(__arkdpsReplayActive()?__arkdpsReplayRecord():null,()=>__arkdpsReplayPoint('body',()=>callback.apply(this,args)));}
    finally{nativeActiveHpContract=previous;}
   }:function(...args){
+   if(edge==='onLeave'&&contract.name==='BattleController.Destroy'&&contract.complete===true&&__arkdpsReplayActive()){
+    const record=__arkdpsReplayRecord();
+    if(record.edge==='leave'&&typeof __arkdpsReplayModeRecord==='function')
+     nativeTerminalReplayRecords.set(record,__arkdpsReplayModeRecord());
+   }
    return withCapturedMode(__arkdpsReplayActive()?__arkdpsReplayRecord():null,()=>__arkdpsReplayPoint('body',()=>callback.apply(this,args)));
   };
  }
 
 }
 const probeAdapter={
+ capturedTerminalRecord:capturedNativeTerminalRecord,
  verifiedSamplingCheckpoint(record){
   return typeof __arkdpsVerifiedSamplingCheckpoint==='function'&&__arkdpsVerifiedSamplingCheckpoint(record)===true;
  },

@@ -4,13 +4,14 @@ import json,time,sys,tempfile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from native_pc.native_event_runtime.smoke import Fixture,fixture_source,FULL_ARGUMENT_VALUES
 from native_pc.native_hook_source import NativePipe
+from native_owned_event_store import empty_store_source
 import argparse
 parser=argparse.ArgumentParser()
 parser.add_argument('--binary',type=Path,required=True)
 parser.add_argument('--receipt',type=Path,required=True)
 options=parser.parse_args()
 binary=options.binary.resolve()
-source=fixture_source(binary,slow=True)
+source=empty_store_source()+fixture_source(binary,slow=True)
 source=source.replace("hooks.push(Interceptor.attach(base.add(offset), {",r"""
  const address=base.add(offset),argCount={Integer:12,FullArguments:16,Sret:3,Nested:1,Float:0,Slow:1}[name];
  const fields=name==='Sret'?[{field_id:1,phase:'leave',role:'leave',root:'return_value',root_index:0,pointer_offsets:[],offset:0,bytes:32,kind:'bytes',guard_id:0,guard_side:'none',required:true}]:[];
@@ -23,7 +24,11 @@ source=source.replace("const record={phase:'leave',name,serial:this.serial};","c
 source=source.replace('this.serial = ++serial;',"this.serial = ++serial; this.modeEpoch=this.nativeCaptureModeEpoch; if(serial===1){const until=Date.now()+400;while(Date.now()<until){}}")
 source=source.replace("if(name==='Sret')record.values=", "if(name==='Sret')__arkdpsReplayRole('leave',0,1); if(name==='Sret')record.values=")
 source += r"""
-let lastClosedRecord=null,ownedAcknowledged=0,servedThrough=0;
+let lastClosedRecord=null,servedThrough=0;
+// Produce the canonical event when the source callback records it. Publication
+// later borrows these frozen objects; it never imports records into the store.
+const diagnosticPush=records.push.bind(records);
+records.push=function(record){ownedCanonicalStore.append({...record,sequence:ownedCanonicalStore.sequence+1});return diagnosticPush(record);};
 // API stub tests only engine epoch handoff. Real shared mode-history behavior
 // is independently covered by the native captured-publication JS fixture.
 let ownedMode={version:1,mode_epoch:0,desired_mode:'all',effective_mode:null};
@@ -34,9 +39,9 @@ globalThis.__arkdpsInstallCaptureMode=(enabled,barrier)=>{
  ownedMode={...ownedMode,mode_epoch:barrier.mode_epoch,desired_mode:enabled?'all':'local'};
  return {...ownedMode};
 };
-globalThis.__arkdpsPublicationServed=through=>{servedThrough=Math.max(servedThrough,through);};
+globalThis.__arkdpsPublicationServed=through=>{ownedCanonicalStore.served(through);servedThrough=Math.max(servedThrough,through);};
 const originalAck=rpc.exports.ackEvents;
-rpc.exports.ackEvents=sequence=>{const answer=originalAck(sequence);ownedAcknowledged=answer.acknowledged;return answer;};
+rpc.exports.ackEvents=sequence=>{const answer=ownedCanonicalStore.ack(sequence);if(!answer.error){const old=originalAck(sequence);if(old.acknowledged!==answer.acknowledged)throw Error('fixture ACK differs from canonical owner');}return answer;};
 globalThis.__arkdpsOnClosedRecord=record=>{
  if(record.edge!=='leave'||record.closed_after!==true||record.active_after!==0
     ||BigInt(record.activity_end)!==BigInt(record.activity_begin)+1n
@@ -45,12 +50,12 @@ globalThis.__arkdpsOnClosedRecord=record=>{
   throw new Error('invalid owned closed record fence');
  lastClosedRecord=Object.freeze({ticket:record.ticket,activity_begin:record.activity_begin,
   activity_end:record.activity_end,active_after:record.active_after,closed_after:record.closed_after});
- const events=records.map((record,index)=>({...record,sequence:index+1}));
+ const retained=ownedCanonicalStore.snapshot(__arkdpsPublicationJournal.publishedThrough,ownedCanonicalStore.sequence);
  return Object.freeze({mark:{sequence:records.length,epoch:serial,active:0,active_hooks:[],
   frame:records.length,game_time:records.length/30,error:null,retry:false,stopped:false,mode_epoch:record.facts.mode_epoch,native_capture_scope_mode_epoch:record.facts.scope_mode_epoch,
   records:records.slice(),retained_arguments:retainedArgumentProof(),owned_closed_record:lastClosedRecord},
-  acknowledged:ownedAcknowledged,events_after:__arkdpsPublicationJournal.publishedThrough,events_through:records.length,events:events.filter(e=>e.sequence>__arkdpsPublicationJournal.publishedThrough),
-  hp_context:[],read_fields:{error:null,stopped:false},terminal_read:null});
+  acknowledged:ownedCanonicalStore.acknowledged,events_after:__arkdpsPublicationJournal.publishedThrough,events_through:records.length,events:retained.events,
+  hp_context:retained.hp_context,read_fields:{error:null,stopped:false},terminal_read:null});
 };
 // The production engine must route these through the journal, never back here.
 rpc.exports.mark=()=>{throw new Error('legacy live mark was called');};

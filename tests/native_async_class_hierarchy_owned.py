@@ -17,10 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from native_async_owned_view import fresh_mark
 from native_pc.native_event_runtime.smoke import Fixture, export_offsets
 from native_pc.native_hook_source import NativePipe
+from native_owned_event_store import empty_store_source
 
 
 def source(binary, case):
-    return r"""
+    return empty_store_source() + r"""
 const mode=CASE,parents=new Map([['0x1','0x0']]);
 for(let i=2;i<=40;i++)parents.set(ptr(i).toString(),ptr(i-1).toString());
 if(mode==='cycle')parents.set('0x1','0x28');
@@ -36,7 +37,7 @@ const hook=Interceptor.attach(address,{arkdpsName:'owned.class-hierarchy',arkdps
   if(__arkdpsCapturedAssignable(ptr(1),owned.readPointer())){childReads++;if(owned.add(8).readU32()!==73)errors.push('child');}
  });}catch(ignored){/* A caught hierarchy error MUST remain sticky. */}},
  onLeave(){leaves++;}});
-globalThis.__arkdpsPublicationServed=through=>served=Math.max(served,through);
+globalThis.__arkdpsPublicationServed=through=>{ownedCanonicalStore.served(through);served=Math.max(served,through);};
 globalThis.__arkdpsOnClosedRecord=record=>({mark:{sequence:0,epoch:entries,frame:leaves,game_time:leaves/30,active:0,active_hooks:[],error:null,stopped:false,entries,leaves,childReads,source_assertion_errors:errors.slice(),native_capture_scope_mode_epoch:record.facts.scope_mode_epoch??record.facts.mode_epoch},acknowledged:0,events_after:0,events_through:0,events:[],hp_context:[],read_fields:{sequence:0,epoch:entries},terminal_read:null});
 rpc.exports={mark(){throw Error('legacy mark');},readEvents(){throw Error('legacy read');},ackEvents:sequence=>({acknowledged:0,error:sequence<=served?null:'unserved'}),stop(){hook.detach();return {stopped:true};}};
 send({ready:true,fixture:'owned-complete-class-hierarchy'});

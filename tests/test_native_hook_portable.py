@@ -20,7 +20,7 @@ FIXTURE_REQUIRED = (
     'native_pc/native_hook_runtime.py', 'native_pc/windows_dll_loader.py',
     'native_pc/probe_native_pc.py', 'native_pc/probe_native_pc_battle.py',
     'native_pc/probe_native_pc_rows.py',
-    'event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js',
+    'event_probe_store.js', 'event_probe_native_pc.js', 'event_probe_runtime.js', 'event_probe_autochess.js',
 )
 
 
@@ -40,6 +40,7 @@ def portable(tmp_path, monkeypatch):
         path.write_bytes(('owned file fixture: ' + name).encode())
     for name in module.RUNTIME_SOURCES:
         (source_dir / name).write_bytes(('owned native source fixture: ' + name).encode())
+    (root / 'event_probe_store.js').write_bytes((Path(__file__).parents[1] / 'event_probe_store.js').read_bytes())
     (root / 'event_probe_native_pc.js').write_bytes(b'// ArkDPS event probe adapter v1; loaded with event_probe_runtime.js.\n// owned adapter\n')
     (root / 'event_probe_runtime.js').write_bytes(b'// owned runtime\n')
     (root / 'event_probe_autochess.js').write_bytes(b'// owned AutoChess\n')
@@ -102,6 +103,7 @@ def test_material_uses_exact_validated_payload_and_js_not_post_validation_disk_r
         result = original(root, **kwargs)
         portable['binary'].write_bytes(b'changed after validation')
         (root / 'event_probe_runtime.js').write_bytes(b'// changed after validation\n')
+        (root / 'event_probe_store.js').write_bytes(b'// changed store after validation\n')
         return result
     monkeypatch.setattr(module, 'native_hook_binary', changed_after_validation)
     material = module.prepare_native_hook_material(portable['root'])
@@ -120,12 +122,14 @@ def test_material_is_frozen_and_assembly_provenance_comes_from_the_verified_js(p
     assert material.assembled.runtime_sha256 == hashed(portable['root'] / 'event_probe_runtime.js')
     assert material.assembled.adapter_sha256 == hashed(portable['root'] / 'event_probe_native_pc.js')
     assert material.assembled.context_sha256 == hashed(portable['root'] / 'event_probe_autochess.js')
+    assert material.assembled.store_sha256 == hashed(portable['root'] / 'event_probe_store.js')
+    assert material.assembled.audit()['assembly_version'] == 3
     with pytest.raises(FrozenInstanceError):
         material.image = b'forbidden mutation'
     assert 'controlled-not-a-DLL' not in repr(material) and '// owned runtime' not in repr(material)
 
 
-@pytest.mark.parametrize('file', ['event_probe_runtime.js', 'native_pc/native_event_runtime/engine.cpp'])
+@pytest.mark.parametrize('file', ['event_probe_store.js', 'event_probe_runtime.js', 'native_pc/native_event_runtime/engine.cpp'])
 def test_material_does_not_skip_existing_portable_full_inventory_hashes(portable, file):
     (portable['root'] / file).write_bytes(b'changed before preflight')
     with pytest.raises(RuntimeError):

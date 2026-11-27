@@ -1,5 +1,5 @@
 #pragma once
-#include "owned_replay_js.h"
+#include "../../native_pc/native_event_runtime/owned_replay_js.h"
 
 namespace arkdps::owned_js {
 // Mechanical facts only. These helpers neither advance replay watermarks nor

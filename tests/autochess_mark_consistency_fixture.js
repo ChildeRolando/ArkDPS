@@ -35,7 +35,7 @@ function verifyPostClosingStampConsistency(){
   assert.equal(vm.runInContext('nativeAutoScope.round',f.context),observed.round);
   assert.equal(vm.runInContext('nativeAutoEpoch',f.context),Number(observed.scope_key.split(':').at(-1)));
   assert.equal(vm.runInContext('sequence',f.context),1);
-  assert.equal(vm.runInContext('acknowledgedSequence',f.context),0);
+  assert.equal(vm.runInContext('eventStore.acknowledged',f.context),0);
   assert.deepEqual(plain(vm.runInContext('queue',f.context)),original);
   if(platform==='mumu'){
    assert.equal(rejected.autochess_binding_diagnostic.step,'clock_stamp');

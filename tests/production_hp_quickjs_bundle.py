@@ -5,11 +5,15 @@ publication journal. Bounded FIFO/IPC remain a separate required acceptance.
 """
 from pathlib import Path
 import argparse,json
+from experiments.hp_research_assembly import assemble_research_runtime
 ROOT=Path(__file__).resolve().parents[1]
 
 def bundle(count, owned=False, source_root=ROOT, bridge_root=None, full_scope=False, pub_every=1000, queue=None, light=False):
-    files={name:(source_root/name).read_text(encoding='utf-8') for name in ['event_probe_native_pc.js','event_probe_runtime.js','event_probe_autochess.js']}
+    files={name:(source_root/name).read_text(encoding='utf-8') for name in ['event_probe_store.js','event_probe_native_pc.js','event_probe_runtime.js','event_probe_autochess.js']}
+    if not light:
+        files['event_probe_runtime.js']=assemble_research_runtime(files['event_probe_runtime.js'])
     fixture=(ROOT/'tests/native_pc_frida_probe_fixture.js').read_text(encoding='utf-8')
+    fixture=fixture.replace("if(researchHp)runtime=require('./experiments/hp_research_assembly.js').assembleResearchRuntime(runtime);",'// Research source is explicitly assembled by this Python generator.')
     if light:
         fixture=fixture.replace('arkdpsCollectEnemyHpChanges: true', 'arkdpsCollectEnemyHpChanges: false')
     if full_scope:
@@ -96,7 +100,7 @@ const write=f.write;f.write=(p,value)=>{write(p,value);if(p.equals(enemy.add(0x4
 if(FULL_SCOPE){globalThis.__arkdpsColdAssignable=f.vm.runInContext('__arkdpsColdAssignable',f.context);globalThis.__arkdpsColdClassLineage=f.vm.runInContext('__arkdpsColdClassLineage',f.context);}else __arkdpsSealClassHierarchy(new Map([[f.enemyClass.toString(),f.entity.toString()],[f.entity.toString(),f.bObject.toString()],[f.bObject.toString(),'0x0']]));
 f.context.arkdpsNativeAsyncCapture=true;globalThis.__nativeCaptureCapabilities=()=>caps;f.context.testSetter=setter;f.vm.runInContext('nativeCaptureModeHistory.set(0,nativeAutoDesiredMode);prepareNativeCaptureHook(ptr(0x9000),testSetter)',f.context);__sealReadonlyPlans();
 const argBytes=new ArrayBuffer(8);new DataView(argBytes).setBigUint64(0,enemy.value,true);
-if(FULL_SCOPE){globalThis.__arkdpsPublicationServed=f.vm.runInContext('__arkdpsPublicationServed',f.context);globalThis.rpc=f.context.rpc;}
+if(FULL_SCOPE){f.context.__arkdpsPublicationJournal=__arkdpsPublicationJournal;__arkdpsPublicationJournal.bindStore(f.vm.runInContext('eventStore.view()',f.context));globalThis.__arkdpsPublicationServed=f.vm.runInContext('__arkdpsPublicationServed',f.context);globalThis.rpc=f.context.rpc;}
 let publicationCount=0;const rawPrefix=FULL_SCOPE?f.vm.runInContext('__arkdpsOnClosedRecord',f.context):undefined;const sourcePrefix=FULL_SCOPE?record=>{const start=__monotonicMs();pubActive=true;try{return rawPrefix(record);}finally{pubActive=false;prefixMs+=__monotonicMs()-start;}}:undefined;function dispatch(edge,receiver,claim=false){const header=__ownedEdge(edge,claim);reading=true;try{const methods=typeof setter.arkdpsDirectHpEntry==='function'&&typeof setter.arkdpsDirectHpLeave==='function';const reason=typeof __ownedDirectReason==='function'?__ownedDirectReason(methods):1;const direct=globalThis.__ownedDirectEnabled===true&&reason===0;if(globalThis.__ownedDirectEnabled===true&&typeof __ownedDirectReason!=='function')throw Error('direct helper unavailable');const labels=['eligible','unsupported_plan','methods_unavailable','argument_contract','missing_root','parent_or_nested','concurrent','cold_or_publication'];if(!direct){const label=globalThis.__ownedDirectEnabled===true?labels[reason]:'disabled';dispatchCounters.fallback_reasons[label]=(dispatchCounters.fallback_reasons[label]??0)+1;}const prepared=direct?__ownedPrepareHp():undefined;if(direct&&(!prepared||typeof prepared!=='object'))throw Error('native issue unavailable');const result=__arkdpsReplayDispatch(header,direct?(edge?setter.arkdpsDirectHpLeave:setter.arkdpsDirectHpEntry):(edge?setter.onLeave:setter.onEnter),receiver,direct?enemy.value:(edge?0n:argBytes),1,claim?sourcePrefix:undefined,direct?undefined:0x1234n,prepared,direct?setter.arkdpsCaptureContract:undefined);assertion.equal(result[2],true,'fused replay must be complete');assertion(result[3]&&typeof result[3]==='object');if(edge)assertion(result[3]===receiver,'receiver identity');if(claim){assertion(result[1],'actual captured publication unavailable');const journalStart=__monotonicMs();const journal=__arkdpsPublishClosedRecord(result[0],result[1],true);journalMs+=__monotonicMs()-journalStart;assertion(journal&&journal.retry!==true&&!journal.error&&journal.native_publication?.version===1&&journal.native_publication.closed_ticket===result[0].ticket,'actual journal rejected publication');publicationCount++;}return result[3];}finally{reading=false;}}
 
 """.replace('COLD',json.dumps(json.loads((ROOT/'tests/fixtures/native_capture/cold-plan-450a0c9.json').read_text(encoding='utf-8')))) if owned else ''
@@ -117,7 +121,7 @@ if(queueReport.failure_code===0){const state=f.vm.runInContext('flushCoalescedEn
 '''.replace('OPTIONS',json.dumps(json.dumps(queue)))
     bench=bench.replace('QUEUE_CODE',queue_code)
     bridge=((bridge_root or source_root)/'native_pc/native_event_runtime/bridge.js').read_text(encoding='utf-8')
-    bridge=(bridge[:bridge.index('const Memory=')]+'\n'+(source_root/'native_pc/native_event_runtime/cold_plan.js').read_text(encoding='utf-8')+('\n'+(source_root/'native_pc/native_event_runtime/publication.js').read_text(encoding='utf-8') if full_scope else '')) if owned else ''
+    bridge=(bridge[:bridge.index('const Memory=')]+'\n'+(source_root/'native_pc/native_event_runtime/cold_plan.js').read_text(encoding='utf-8')+('\n'+(source_root/'event_probe_store.js').read_text(encoding='utf-8')+'\n'+(source_root/'native_pc/native_event_runtime/publication.js').read_text(encoding='utf-8') if full_scope else '')) if owned else ''
     factory=''
     if full_scope:
         world=(ROOT/'tests/native_pc_autochess_context_fixture.js').read_text(encoding='utf-8')

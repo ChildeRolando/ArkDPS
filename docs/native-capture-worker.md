@@ -58,7 +58,8 @@ flowchart LR
 ```
 
 原生层只复制字段合同要求的参数、现场值、对象身份、调用关系、时钟与作用域证据。
-玩家归属、嵌套结算、回血归并、技能和生命周期仍由同一份 JS 事实归约器处理。
+玩家归属、嵌套结算、技能和生命周期仍由同一份 JS 事实归约器处理。
+产品只生产轻量敌方 HP 事实；全量回血归并与叶子压缩仅在显式研究装配中使用。
 Python 仍负责统计与历史，WPF 仍只消费展示状态。Android/Frida 使用既有适配器进入共用归约器。
 
 游戏回调不进入 QuickJS，不等待消费者，不经过宿主 mailbox，不做 JSON、日志或 IPC。
@@ -152,6 +153,62 @@ HP 进入记录907字节、回血退出6208字节；每秒3万次 setter、暂�
 只有完整终局 DTO、序号、时钟、作用域与原生绑定一致，才标记 `terminal_verified`。
 游戏线程不为归档同步等待后台。
 
+## 2026-11-27 重构收口变更控制
+
+本轮承接 `948137d` 的冷类型门禁、轻量采集和结算证据修复。没有改变伤害核实条件、
+跨平台业务口径或终局证明。侧会话的架构审计是删除冗余路径的依据，不是这些路径已造成
+实机掉帧或数据损坏的证明。
+
+| 原有并行路径 | 当前唯一所有者与边界 |
+| --- | --- |
+| 未接入的 `applyHpLeafFacts` 与原生 leaf helper | 从产品 runtime、引擎 include 和构建清单移除；`tests/experiments` 显式装配保留原研究断言，不参与打包 |
+| 轻量模式仍维护全量回血 coalescer | 产品不分配出生索引/run、不维护或 flush 空合并状态；出生、MaxHP、离场与结算仍经共享 HP owner |
+| source queue 与 publication 各自保留事件、read/ACK | `ArkdpsEventStore` 唯一拥有规范化事件、context、字节预算、served/ACK 与释放；journal 持发布证书、发布边界和必要快照元数据 |
+| 启动偏好和终局仍走未来回调 mark | 新能力通过 `configure_mode` 控制偏好，fresh/confirm/terminal 使用同一采样调度器；旧 provider 兼容只在能力边界内 |
+
+规范化事件进入 store 时复制一次并递归冻结。publication 验证 canonical 对象身份，
+不再复制事件留存；读取时才生成传输回复。事件 sequence、raw ticket、完整闭合前缀、
+published token 和实际交付水位保持不同含义。journal 的 ACK 委托 source store 提交，
+没有另一份 ACK 游标；提交前失败不释放，提交后回复丢失的重试按唯一游标幂等完成。
+诊断 context 按事件序号单调追加，拒绝回退，确保 ACK 释放连续前缀。
+
+源业务归约器仍唯一决定结算、归属、技能和生命周期；C++ 只拥有原始 lane、拓扑与
+捕获/消费/闭合前缀，Python 拥有统计与归档。四者不是四套伤害账本。
+Frida/MuMu 与 native 是同一 store 的互斥运输视图。四段产品 source 按 store、
+AutoChess、adapter、runtime 装配，assembly v3 分别固定文件与源码哈希，缺文件拒绝启动。
+
+terminal 调度保留 Destroy 的真实完成边界及可靠端点快速路径。普通 fresh 点不能冒充
+终局；confirm 仍绑定原请求及 token，模式控制不能隐式触发发布。
+新 provider 拒绝没有 sampling 的 mark，避免意外回到旧未来回调等待。
+独立审查以手动改变内部 fence/raw 状态构造了旧 token 对抗负例；生产中 fence 只在
+Destroy 成功发布的同一 worker 操作内建立，未证明该不变量破坏正常可达。因此 tuple
+绑定属于防御加固，不作为实际故障根因。快速路径要求证书与当前 raw ticket、活动世代
+和模式相符。原负例输出保存在 `runtime/terminal-certificate-review/repro.log`。
+
+修改局限于 source 装配、事件保留、原生请求调度和研究隔离。回退须整体恢复对应源码及
+DLL，不能只换 JS 或使两份存储同时写入。旧历史读取兼容不依赖旧实时 coalescer。
+研究装配以明确插入点验证共享源码，插入点漂移直接失败，避免悄悄测试旧算法。
+
+门禁包括单一 store 所有权、预算、canonical 身份、不可变回复、served/ACK 提交前后
+故障、遗失回复重试、终局、来源装配哈希及 PC/MuMu 业务对照。独立审查补入 context
+序号回退负例。最终版本的全量、实际 DLL、吞吐与打包回执保存在
+`runtime/refactor-closeout`；这些离线结果均不代替首局和高负载实机验收。
+
+终局实机故障修复后最终门禁：全量 Python/JS 回归 6513 passed、29 skipped；实际 DLL 的 direct
+五场景、light 两场景及 cold 失败/恢复四次请求通过。真实引擎的冷类型门禁与完整 scope
+采样通过，研究装配六组逐笔/批量输出一致。纯轻量负载结果如下（均暂停消费者 500ms）：
+
+| 请求负载 | 完整 setter 数 | 实际供给/秒 | 追平耗时 | 缺口码 |
+| --- | ---: | ---: | ---: | ---: |
+| 30k/s，10秒 | 300000 | 29989 | 53.8ms | 0 |
+| 45k/s，10秒 | 450000 | 44977 | 88.3ms | 0 |
+| 30k/s，60秒 | 1800000 | 29997 | 57.5ms | 0 |
+
+对应 `final-30k-10s`、`final-45k-10s`、`final-30k-60s` 回执固定编译输入、
+执行 bundle、原始进入/退出计数及完整闭合/发布水位。纯负载没有混合伤害/Buff、真实
+detour/IPC 或逐事实发布延迟 p99，不能替代这些条件与实机 FPS。初跑的装配缺 helper、
+轻量夹具错误调用研究 flush 等失败日志同目录保留；修正的是夹具装配，没有放宽门禁。
+
 ## 验证入口
 
 - `tests/native_capture_queue_test.cpp`：有界队列、半发布、回绕、满队列和跨线程拥有权。
@@ -163,6 +220,29 @@ HP 进入记录907字节、回血退出6208字节；每秒3万次 setter、暂�
 
 自有进程吞吐、队列年龄、回调现场成本和真实对局 FPS 分开报告。
 现有嵌套普通/元素、首笔回血、死亡、协防、第0帧、空卫戍端点、最终水位和 observer 恢复回归继续有效。
+
+### 948137d 实机终局回放中断
+
+`runtime/refactor-closeout/live-948-incident.json` 固定实际捕获前1712行及 SHA-256。
+北京时间 2026-11-27 18:39:07，hook33（按实际安装次序为 Destroy）leave、ticket4408040
+触发 `native_replay_gap`、code6。故障前最后完整原始水位4408038，队列落后0；此故障
+不是 queue_full。角色0、字段0、两次 structural 分类及内嵌 bridge 标量读取行号对应以下链：
+
+Destroy callback 在 `body` 证据域运行，返回后桥恢复默认 `leave`；随后独立执行的
+prefix 调用终局核验，核验在时钟见证返回后从 `leave` 读取 singleton。合同中的这些字节
+属于 `body`，因此被正确拒收。旧夹具将 callback 与 prefix 一起包在 `body`，掩盖了
+真实引擎边界。修复须在实际 Destroy 记录资格内绑定核验域，并把夹具的 prefix 移出
+callback 域；普通记录、普通 checkpoint 或伪造记录不能借用该权限。
+
+终局证书唯一来自真实 Destroy 完成点。普通 sampling checkpoint 不含终局 body，
+遇到保留的终局状态返回未就绪；终局请求交付已验证、tuple 匹配的 Destroy token。
+不以旧根缓存或普通对象布尔替代现场证明，不放宽旧 stage 替换等拒收条件。
+
+`runtime/terminal-destroy-prefix/final-broken/receipt.json` 用同一 O2 引擎二进制与冻结的
+旧 JS source 复现默认角色0/字段0、status9 和 `10.10` 缺口；`final-fixed/receipt.json`
+记录释放/保留 singleton 的成功、Destroy 期间 stage 替换拒收、缺 body/singleton 的
+结构拒收五个场景。原生 `request_on_worker` 获取真实 Destroy token 时不增加请求与
+采样计数；终局读取和 ACK 门禁通过。该夹具操作的全是自有进程内存，不是实机验收。
 
 
 ## Packed 元数据的引用所有权

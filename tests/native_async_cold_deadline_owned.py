@@ -16,10 +16,11 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from native_pc.native_event_runtime.smoke import Fixture, export_offsets
 from native_pc.native_hook_source import NativePipe
+from native_owned_event_store import empty_store_source
 
 
 def source(binary):
-    return r'''
+    return empty_store_source() + r'''
 const owned=Memory.alloc(8);owned.writeU64(42);
 const address=Process.getModuleByName('ArkDPS.NativeEvents.dll').base.add(OFFSET);
 function field(id,role,phase,side='none',guard=0){return {field_id:id,role,phase,root:'absolute',absolute_address:owned.toString(),root_index:0,pointer_offsets:[],offset:0,bytes:8,kind:'bytes',guard_id:guard,guard_side:side,required:true};}
@@ -33,7 +34,7 @@ let entries=0,coldAttempts=0,warmFailures=0,acceptedCold=false,served=0;
 const candidates=[];
 const hook=Interceptor.attach(address,{arkdpsName:'owned.deadline-cold',arkdpsCaptureContract:plan,
  onEnter(){entries++;if(entries===1){const end=Date.now()+220;while(Date.now()<end){}}},onLeave(){}});
-globalThis.__arkdpsPublicationServed=n=>{served=Math.max(served,n);};
+globalThis.__arkdpsPublicationServed=n=>{ownedCanonicalStore.served(n);served=Math.max(served,n);};
 globalThis.__arkdpsOnClosedRecord=record=>{
  const isCold=record.facts.cold_revision!==undefined;
  candidates.push({request:record.publication_request,ticket:record.ticket,cold:isCold});
