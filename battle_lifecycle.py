@@ -2269,8 +2269,7 @@ class BattleRuntime:
         # reducers and event prefix remain uncommitted until a complete retry.
         retirement = replace(observation, kind='preparing', events=None,
                              reason='awaiting_generation_install')
-        if sessions.consume(retirement):
-            self.record(retirement)
+        self._consume(retirement)
 
     @timed('event_consume')
     def _consume(self, observation):
@@ -2280,12 +2279,18 @@ class BattleRuntime:
         if receipt is not None and receipt[0] == observation.sequence and receipt[1] is not None:
             check_cursor_lifetime(receipt[1], receipt[2])
         self.sessions.preflight_event_window(observation)
+        installing = observation.kind == 'sample' and observation.generation > self.sessions.generation
+        if not installing:
+            # Existing prefixes, especially terminal tails, retain their
+            # journal -> consume -> ACK ordering.
+            self.record(observation)
         try:
             consumed = self.sessions.consume(observation)
-            # A typed retry has not committed this observation. Recording it
-            # before consume lets replay install a generation that live rolled
-            # back, then reject the real retry as a duplicate pending start.
-            self.record(observation)
+            if installing:
+                # A retried new generation has not committed this observation.
+                # Recording it earlier lets replay install a generation that
+                # live rolled back, then reject its real pending-start retry.
+                self.record(observation)
             pending = self.feed._pending_scope
             evidence = observation.events or {}
             if consumed and pending is not None and ('pending_scope_start' in evidence or 'pending_scope_superseded' in evidence):
