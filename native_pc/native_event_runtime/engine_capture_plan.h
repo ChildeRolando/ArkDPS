@@ -8,8 +8,9 @@
 #include <stdexcept>
 
 namespace arkdps::capture {
-inline constexpr std::array<const char*,6> capture_projection_names{{"live_scope_guards","same_point_class_ancestry",
-    "open_parent_checkpoint","token_host_and_character_form","full_native_binding","current_buff_and_blackboard_keys"}};
+inline constexpr std::array<const char*,7> capture_projection_names{{"live_scope_guards","same_point_class_ancestry",
+    "open_parent_checkpoint","token_host_and_character_form","full_native_binding","current_buff_and_blackboard_keys",
+    "consumer_edge_evidence"}};
 inline nlohmann::json capture_capabilities(bool product_ready=false) {
     nlohmann::json names=nlohmann::json::array();
     if(product_ready)for(const auto* name:capture_projection_names)names.push_back(name);
@@ -57,6 +58,8 @@ struct CompiledPlan {
     bool hp_observations_ready=false;std::uintptr_t hook_address=0;
     // Initialized once; callback dispatch never reads the mutable role registry.
     std::array<std::uint8_t,max_fields> field_stage{};
+    std::array<bool,max_fields> publication_fields{};
+    std::uint8_t ordinary_scope_edges=3;
     std::array<SavedEntryRoot, max_roots> entry_roots{};
     std::uint8_t entry_root_count=0;
     std::array<std::uint16_t,3> terminal_guard_fields{};
@@ -223,6 +226,7 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         else if (kind=="utf16_array") field.kind=Kind::utf16_array;
         else if (kind=="projection_tree") field.kind=Kind::projection_tree;
         else throw std::runtime_error("invalid capture kind");
+        result.publication_fields[result.plan->field_count-1]=value.value("tier",std::string())=="publication";
         field.guard_id=plan_uint(value.at("guard_id"), max_guards-1);
         const auto guard=value.at("guard_side").get<std::string>();
         if (guard=="none") field.guard=Guard::none;
@@ -353,7 +357,20 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
     const bool sampling=profile=="sampling_checkpoint";
     const bool production=sampling||profile=="modifier"||profile=="hp"||profile=="lifecycle"||profile=="skill_cast"
         ||profile=="skill_transition"||profile=="buff"||profile=="shield"||profile=="formula"||profile=="boundary";
-    const unsigned mandatory=3u|(sampling?16u:0u)|(profile=="modifier"?12u:0u)|(profile=="boundary"?16u:0u)|(profile=="shield"?32u:0u);
+    const bool consumer_edges=(required_mask&64u)!=0;
+    const auto hook_name=source.value("name",std::string());
+    const bool target_callback=hook_name=="Unit.OnTakeDamage"||hook_name=="Entity.OnTakeDamage";
+    const bool shield_callback=profile=="shield"&&hook_name=="BlockDamage._AssignDynamicVar";
+    if(consumer_edges && !((profile=="buff"&&hook_name=="Buff.OnTakeDamage")
+            ||(profile=="modifier"&&target_callback)||shield_callback||(profile=="formula"&&
+            (hook_name=="BattleFormula.CalculateDamage"||hook_name=="BattleFormula.CalculateDamageNoEvent"
+             ||hook_name=="BattleFormula.CalculateDamageInternal"||hook_name=="AttackInfo.GetFinalAtk"
+             ||hook_name=="Modifier.NewDamageModifierAfterCalculate"))))
+        throw std::runtime_error("consumer edge evidence lacks a supported callback contract");
+    if(consumer_edges&&(required_mask&1u))throw std::runtime_error("conflicting ordinary scope requirements");
+    result.ordinary_scope_edges=consumer_edges?(target_callback||shield_callback?2:0):3;
+    const unsigned mandatory=(consumer_edges?66u:3u)|(sampling?16u:0u)
+        |(profile=="modifier"?(target_callback?4u:12u):0u)|(profile=="boundary"?16u:0u)|(profile=="shield"?32u:0u);
     if(production && (required_mask&mandatory)!=mandatory)
         throw std::runtime_error("production capture requirements were removed");
     if(sampling && (hook_address || result.plan->arg_count || result.plan->arg_mask || required_mask!=19u
@@ -450,15 +467,22 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
             ||cold.fields[2].kind!=Kind::projection_tree || !cold.fields[0].required || cold.fields[1].required
             ||!cold.fields[2].required ||cold.fields[0].projection_root!=cold.fields[2].projection_root)
             throw std::runtime_error("cold native binding is not independently bracketed");
-        unsigned clocks=0;bool gated_class=false,parent=false,host=false,cid=false,flags=false,buff=false,keys=false;
+        unsigned clocks=0,publication_clocks=0;bool gated_class=false,parent=false,host=false,cid=false,flags=false,buff=false,keys=false;
         for(unsigned i=0;i<source.at("fields").size();++i){
             const auto& value=source.at("fields")[i];const auto& field=result.plan->fields[i];
             const auto role=value.at("role").get<std::string>(),name=value.value("name",std::string());
+            if(consumer_edges&&value.contains("tier")&&value.at("tier")!="publication")
+                throw std::runtime_error("unknown consumer field tier");
             if((role=="clock_open"||role=="clock_close") && (field.kind!=Kind::bytes || field.bytes!=12
                 ||field.root!=Root::global_slot||field.root_index||field.depth||field.offset||!(result.globals_valid&1u)))
                 throw std::runtime_error("callback clock is not the native twelve-byte global witness");
             if(role=="clock_open"&&field.guard==Guard::before)clocks|=field.phase==Phase::entry?1:field.phase==Phase::leave?4:16;
             if(role=="clock_close"&&field.guard==Guard::after)clocks|=field.phase==Phase::entry?2:field.phase==Phase::leave?8:32;
+            if(result.publication_fields[i]) {
+                if(!consumer_edges || (role!="clock_open"&&role!="clock_close") || field.phase==Phase::checkpoint)
+                    throw std::runtime_error("publication-only field is not a consumer clock");
+                publication_clocks|=role=="clock_open" ? (field.phase==Phase::entry?1u:4u) : (field.phase==Phase::entry?2u:8u);
+            }
             parent|=field.phase==Phase::checkpoint&&field.root==Root::parent_ref&&field.root_index==1;
             host|=name=="source.data.host"&&field.kind==Kind::utf16;
             cid|=name=="source.data.cid"&&field.kind==Kind::utf16;
@@ -469,6 +493,11 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         for(unsigned i=0;i<cold.projection_count;++i)gated_class|=cold.projections[i].gate!=TypeGate::none&&cold.projections[i].expected_class;
         if((required_mask&1u)&&clocks!=(sampling?48u:15u))
             throw std::runtime_error(sampling?"live sample lacks independent checkpoint clocks":"live scope lacks independent entry/leave clocks");
+        if(consumer_edges) {
+            const unsigned expected=profile=="buff"?12u:hook_name=="BattleFormula.CalculateDamageInternal"?15u:0u;
+            if(clocks!=15u || publication_clocks!=expected)
+                throw std::runtime_error("consumer clocks do not match callback/publication boundaries");
+        }
         if((required_mask&2u)&&!gated_class)throw std::runtime_error("class ancestry lacks immutable typed projection metadata");
         if((required_mask&4u)&&(!result.parent_checkpoint_fields||!parent))throw std::runtime_error("open parent checkpoint recipe absent");
         if((required_mask&8u)&&(!host||!cid||!flags))throw std::runtime_error("token/form recipe absent");

@@ -116,7 +116,7 @@ if(process.argv[2]){
  vm.runInContext(bridge.slice(bridge.indexOf('function __integer('),bridge.indexOf('class NativeInteger')),context);
  vm.runInContext(adapter.slice(adapter.indexOf('function nativeCapturePlan(')),context);
  const names=require('./fixtures/native_capture/hook-names.json');
- const capabilities={version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys']};
+ const capabilities={version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys','consumer_edge_evidence']};
  const plans=[];
  for(const name of names){
   const addresses=name==='Modifier.NewDamageModifierAfterCalculate'?context.adapterMetadata.factory_addresses:['0x700000'];

@@ -15,7 +15,7 @@ const meta={clock,string_class:stringClass.toString(),classes:{BattleController:
 f.context.wireMeta=meta;vm.runInContext('nativeCaptureMetadata=wireMeta',f.context);
 const raw=f.context.nativeCapturePlan('hp.Entity.SetHpInternal',{toString:()=> '0x9000'},meta);
 for(const name of ['__arkdpsReplayPoint','__arkdpsReplayWitness','__arkdpsReplayCheckpoint','__arkdpsReplayOptional','__arkdpsReplayEnd','__arkdpsOwnedRead'])f.context[name]=()=>{};
-const capabilities={version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys']};
+const capabilities={version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys','consumer_edge_evidence']};
 const plan=f.context.finalizeNativeCapturePlan(raw,meta,capabilities);
 const dirty=f.context.finalizeNativeCapturePlan(f.context.nativeCapturePlan('hp.Entity.OnAttributeDirty',{toString:()=> '0x9100'},meta),meta,capabilities);assert.equal(plan.complete,true);assert.deepEqual([...plan.required_projections],[...raw.required_projections]);
 const scope=f.context.nativeCaptureScopeGraph(cache,stage,clock,1),publication=f.context.publicationGuardFields(body.read.guards,stringClass.toString(),1);

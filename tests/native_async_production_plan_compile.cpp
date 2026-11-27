@@ -8,7 +8,7 @@ void check(bool value){if(!value)throw std::runtime_error("production plan capab
 int main(int argc,char** argv){
  if(argc!=2)return 2;
  std::ifstream stream(argv[1]);J fixture;stream>>fixture;
- check(capture_capabilities(false)["lowered_projections"].empty());check(capture_capabilities(true)["lowered_projections"].size()==6);
+ check(capture_capabilities(false)["lowered_projections"].empty());check(capture_capabilities(true)["lowered_projections"].size()==7);
  unsigned accepted=0,rejected=0;
  for(const auto& entry:fixture.at("plans")) {
    const auto& plan=entry.contains("contract")?entry.at("contract"):entry;
@@ -26,8 +26,23 @@ int main(int argc,char** argv){
    if(plan["profile"]=="modifier") {
       bad=plan;auto& fields=bad["fields"];
       fields.erase(std::remove_if(fields.begin(),fields.end(),[](const auto& f){return f.at("phase")=="checkpoint";}),fields.end());reject(bad);
-      bad=plan;auto& form=bad["fields"];
-      form.erase(std::remove_if(form.begin(),form.end(),[](const auto& f){return f.value("name",std::string())=="source.data.host";}),form.end());reject(bad);
+      const auto& requirements=plan.at("required_projections");
+      const bool token_host=std::find(requirements.begin(),requirements.end(),"token_host_and_character_form")!=requirements.end();
+      if(token_host){
+       bad=plan;auto& form=bad["fields"];
+       const auto before=form.size();
+       form.erase(std::remove_if(form.begin(),form.end(),[](const auto& f){return f.value("name",std::string())=="source.data.host";}),form.end());
+       check(form.size()<before);reject(bad);
+      }else{
+       check(plan.at("name")=="Unit.OnTakeDamage"||plan.at("name")=="Entity.OnTakeDamage");
+       bool main_host=false,parent_host=false;
+       for(const auto& field:plan.at("fields")){
+        const auto name=field.value("name",std::string());
+        main_host|=name=="source.data.host";
+        parent_host|=field.at("phase")=="checkpoint"&&name=="parent.source.data.host";
+       }
+       check(!main_host&&parent_host);
+      }
    }
    if(plan["profile"]=="shield") {
       bad=plan;auto& fields=bad["fields"];

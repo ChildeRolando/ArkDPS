@@ -134,11 +134,19 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
             }
         }
     }
+    const bool forced=phase==Phase::entry ? base.force_full_entry
+        : phase==Phase::leave && base.force_cold_leave && (!base.force_cold_conditional
+          || ((context.args_valid&(1u<<base.force_cold_arg)) && context.args[base.force_cold_arg]==base.force_cold_value));
+    const bool cold=base.cold && (forced || request_cold || (header.publication_request
+        && (!config || !config->scope || !config->scope->available)));
+    const bool terminal_leave=phase==Phase::leave && base.terminal_destroy;
+    header.projection_candidate=forced || header.publication_request || terminal_leave;
     bool nochange=false;
     const auto base_stage=[&](unsigned stage) noexcept {
         if(publication_only&&stage==0)return;
         for (std::uint16_t i=0;i<base.plan->field_count;++i)
-            if (base.field_stage[i]==stage && !((nochange || (base.snapshot_hp&&!base.hp_dirty)) && base.hp_field_kind[i]==5)
+            if (base.field_stage[i]==stage && (!base.publication_fields[i]||header.projection_candidate||cold)
+                && !((nochange || (base.snapshot_hp&&!base.hp_dirty)) && base.hp_field_kind[i]==5)
                 && !(phase==Phase::leave && base.hp_profile && invocation && base.hp_field_kind[i]==4) && !(phase==Phase::entry && base.hp_profile && invocation
                 && (base.hp_field_kind[i]==1 || base.hp_field_kind[i]==2 || (hp_id_captured&&base.hp_field_kind[i]==6))))
                 capture_append(*base.plan,phase,context,reader,user,snapshot,i,i+1);
@@ -157,13 +165,6 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
             }
         }
     }
-    const bool forced=phase==Phase::entry ? base.force_full_entry
-        : phase==Phase::leave && base.force_cold_leave && (!base.force_cold_conditional
-          || ((context.args_valid&(1u<<base.force_cold_arg)) && context.args[base.force_cold_arg]==base.force_cold_value));
-    const bool cold=base.cold && (forced || request_cold || (header.publication_request
-        && (!config || !config->scope || !config->scope->available)));
-    const bool terminal_leave=phase==Phase::leave && base.terminal_destroy;
-    header.projection_candidate=forced || header.publication_request || terminal_leave;
     if (cold) {
         header.cold_revision=1;
         capture_append(*base.cold->plan,Phase::checkpoint,context,reader,user,snapshot,0,1);
@@ -173,7 +174,8 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
     const bool deferred_open_scope=phase==Phase::entry && base.hp_defer_scope && invocation
         && invocation->hp_exact_enemy && !header.publication_request;
     const bool snapshot_only_scope=base.snapshot_hp&&!base.hp_dirty&&!header.publication_request;
-    const CaptureGraph* scope=!cold && !snapshot_only_scope && !(nochange && base.hp_defer_scope) && !deferred_open_scope && !terminal_leave && config && config->scope && config->scope->available
+    const bool ordinary_scope=(base.ordinary_scope_edges&(phase==Phase::entry?1:2))!=0;
+    const CaptureGraph* scope=!cold && (ordinary_scope||header.projection_candidate) && !snapshot_only_scope && !(nochange && base.hp_defer_scope) && !deferred_open_scope && !terminal_leave && config && config->scope && config->scope->available
         ? config->scope.get() : nullptr;
     Context graph_context=context;
     if (scope) {

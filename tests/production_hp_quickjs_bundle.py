@@ -80,7 +80,7 @@ const meta=prepared??{clock,string_class:stringClass.toString(),classes:{BattleC
 f.context.wireMeta=meta;f.vm.runInContext('nativeCaptureMetadata=wireMeta',f.context);
 const rawPlan=f.vm.runInContext("nativeCapturePlan('hp.Entity.SetHpInternal',{toString:()=> '0x9000'},wireMeta)",f.context);
 for(const k of ['__arkdpsReplayPoint','__arkdpsReplayWitness','__arkdpsReplayCheckpoint','__arkdpsReplayOptional','__arkdpsReplayEnd','__arkdpsOwnedRead'])f.context[k]=()=>{};
-const caps={version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys']};
+const caps={version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys','consumer_edge_evidence']};
 f.context.rawPlan=rawPlan;f.context.caps=caps;const plan=f.vm.runInContext('finalizeNativeCapturePlan(rawPlan,wireMeta,caps)',f.context),memory=new Map();
 function rawBytes(p,n){if(n===1||n===4){const b=new ArrayBuffer(n),v=new DataView(b);if(n===1)v.setUint8(0,original.readU8.call(p));else v.setInt32(0,original.readS32.call(p),true);return b;}const b=original.readByteArray.call(p,n),at=Number(enemy.add(0x25).value-p.value);if(at>=0&&at<n)new DataView(b).setUint8(at,original.readU8.call(enemy.add(0x25)));return b;}
 function store(p,bytes){const a=BigInt(p.toString());new Uint8Array(bytes).forEach((b,i)=>memory.set(a+BigInt(i),b));}

@@ -1,0 +1,31 @@
+{
+  "kind": "candidate_worktree_source_validation",
+  "base_head": "ef1486640e42146e7a8aaaae22488b1ac0be35f0",
+  "tested_source_bound_by": "product hashes in measurement receipt plus source inventory in DLL build manifest; post-commit delivery receipt binds exact commit",
+  "pytest": {
+    "tests": "6546",
+    "failures": "0",
+    "errors": "0",
+    "skipped": "29",
+    "time": "157.790"
+  },
+  "native_dll_sha256": "66c6db3b9a06b00d1b41ef91399929b9bc0114703a35f36335a1ad1e2d9bff87",
+  "native_build_sha256": "dedd03768724ca69eba6665b14f197af291dd9c239e2694d3a2fa7afcd42c889",
+  "receipts": {
+    "runtime/capture-demand/dll/native_async_cold_deadline_owned.json": "f6c6f7925738b754ed66792cdf726f52c0dbbbe7b234ca31ef3374ea2ca3c302",
+    "runtime/capture-demand/dll/native_async_hp_direct_owned.json": "23f7cc037d51c9576ca50b31d11de6fa8831ed436e6dc946935bd0f055878110",
+    "runtime/capture-demand/dll/native_async_light_hp_owned.json": "c32316f7cff22cf4cb1fc0f496e4e160c2406f839444d02645058f2d950a17cf",
+    "runtime/capture-demand/dll/native_async_owned_view.json": "42feb0d316d1a17034da7560426472742149041be815a077ac403f4248b3abf9",
+    "runtime/capture-demand/engine/hp45000/receipt.json": "eae63d8b9d6a81e6e0cbf50faa840b850a3a7d8b2671505834acf978555a9592",
+    "runtime/capture-demand/engine/production_root_class_run/receipt.json": "69ff307021c6d02176f13eb1e3507784bd9670e307f13c552463c415325913b5",
+    "runtime/capture-demand/engine/production_sampling_run/receipt.json": "f212cf7b68043c84840e7d9a982e55f914ad85a0dd6768edf7537eb19376a858",
+    "runtime/capture-demand/engine/production_terminal_run/receipt.json": "e60d5e649cfbca20efb6169d746dc40cb3cf788db1b10bb4ae841caf6a31055e",
+    "runtime/capture-demand/pytest-final.xml": "ff7780bbf1e60fe9de77381324e7d3337378180ae0dae03db70119a7baac2c8f",
+    "runtime/capture-demand/final/formula-final-review.json": "a083d92725d387ee6456ce1b1fe6777dec24f4fd30d584138d402fad928aa26b",
+    "runtime/capture-demand/final/formula-scope-mutation/mutation.json": "2c0ef4584576944e25865157dcc31fb6c892f36c2e7eb8b76af9c969b8db40fd",
+    "runtime/capture-demand/final-manifest.json": "007c30c244d60801533db0b80a119455aae80ae88325bfef9ce72484f94284d7"
+  },
+  "live_fps_verified": false,
+  "mixed_high_load_steady_state_passed": false,
+  "no_game_or_desktop_interaction": true
+}

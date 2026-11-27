@@ -13,6 +13,7 @@
 - [手动对局性能计时](performance-timings.md) — 低开销开关、原生/宿主/WPF 阶段、日志解释与 rc.43 私有计时包验收。
 - [PC 原生现场采集与单消费者](native-capture-worker.md) — 现场快照、队列、共享归约、采样调度、单一事件存储及重构收口变更控制。
 - [敌方 HP 轻量采集合同](native-hp-lightweight-contract.md) — 按产品需求取消精确敌方回血指标，保留结算、关键事件与快照刷新；计划边界及严格水位。
+- [按业务消费者裁剪原生伤害取证](native-capture-demand.md) — 全伤害/公式钩子字段账、逐边取证合同、计数与混合负载验证。
 - [HP 叶子事实组研究合同](native-hp-leaf-facts-contract.md) — 已移出产品装配的研究原型、原断言与未完成边界。
 
 - [官服 PC Frida 生命周期与恢复约束](native-pc-frida-state-machine.md) — 状态转换、资源所有权、请求世代与覆盖验证。

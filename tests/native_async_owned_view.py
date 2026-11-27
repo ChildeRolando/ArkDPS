@@ -122,7 +122,7 @@ def run(binary, case):
             capabilities = ready['ready']['capture_capabilities']
             assert capabilities == dict(version=1, raw_collection='all', lowered_projections=[
                 'live_scope_guards', 'same_point_class_ancestry', 'open_parent_checkpoint',
-                'token_host_and_character_form', 'full_native_binding', 'current_buff_and_blackboard_keys']), capabilities
+                'token_host_and_character_form', 'full_native_binding', 'current_buff_and_blackboard_keys', 'consumer_edge_evidence']), capabilities
             if case == 'positive':
                 mark = fresh_mark(pipe, fixture)
                 assert mark.get('retry') is not True and mark.get('error') is None, mark

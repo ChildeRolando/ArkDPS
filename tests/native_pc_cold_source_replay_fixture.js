@@ -176,7 +176,7 @@ assert(c.ignoredDirtyProjection);assert.equal(c.ignoredDirtyProjection.mark.sequ
 f.write(f.controller.add(0x228),3);
 const destroyPlan=vm.runInContext('nativeCapturePlan("BattleController.Destroy",ptr(1),planMetadata)',c),destroyHook=f.callback('OnDestroy',f.controllerClass),destroyCall={threadId:1};
 c.destroyHook=destroyHook;c.destroyColdPlan=plan;
-c.__nativeCaptureCapabilities=()=>({version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys']});
+c.__nativeCaptureCapabilities=()=>({version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys','consumer_edge_evidence']});
 c.__publishCaptureScope=()=>{};
 vm.runInContext('arkdpsNativeAsyncCapture=true;planMetadata.cold_plan=destroyColdPlan;prepareNativeCaptureHook(ptr(1),destroyHook);if(!destroyHook.arkdpsCaptureContract.complete)throw Error("Destroy contract incomplete");',c);
 const oldLogger=original.readPointer.call(f.controller.add(0xe0)),oldNative=original.readPointer.call(f.controller.add(0x10)),oldStats=original.readPointer.call(oldLogger.add(0x30));

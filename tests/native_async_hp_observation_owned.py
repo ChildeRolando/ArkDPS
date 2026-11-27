@@ -37,7 +37,7 @@ const a=input.layout.addresses;
 const metadata={clock:a.clock,string_class:a.string_class,classes:{Enemy:a.enemy_class,BObject:a.bobject_class,Character:a.bobject_class},
  skill_offsets:{},skill_wait:null,attack_type_offset:48,factory_addresses:[],immutable_class_parents:true,
  coalesce_enemy_hp:true,cold_metadata_ready:true,cold_plan:input.cold};
-const capabilities={version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys']};
+const capabilities={version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys','consumer_edge_evidence']};
 const raw=context.nativeCapturePlan('hp.Entity.SetHpInternal',{toString:()=> '0x1'},metadata);
 const plan=context.finalizeNativeCapturePlan(raw,metadata,capabilities);
 if(!plan.complete||plan.profile!=='hp'||!plan.cold_plan||!plan.fields.some(f=>f.observation))throw Error('normal production HP contract unavailable');

@@ -37,7 +37,7 @@ console.log('PASS_CAPTURE_FROZEN_LINEAGE modifier '+rawModifier.fields.length+' 
 
 // Fake capability API checks only the source compatibility gate. It is not
 // evidence that the corresponding native producer operations are implemented.
-const required=['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys'];
+const required=['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys','consumer_edge_evidence'];
 const capabilities={version:1,raw_collection:'all',lowered_projections:required};
 const coldMeta={...meta,cold_metadata_ready:true,immutable_class_parents:true,cold_plan:{projections:[{}],fields:[
  {role:'cold.root_open',required:true,guard_side:'before',guard_id:1,projection_root:0},
@@ -53,6 +53,6 @@ const invalidCold=JSON.parse(JSON.stringify(coldMeta.cold_plan));invalidCold.fie
 const witness=context.__arkdpsReplayWitness;delete context.__arkdpsReplayWitness;assert.equal(finish().complete,false);context.__arkdpsReplayWitness=witness;
 assert.throws(()=>finish(coldMeta,{...capabilities,raw_collection:'local'}));assert.throws(()=>finish(coldMeta,{...capabilities,version:2}));
 assert.throws(()=>finish(coldMeta,{...capabilities,lowered_projections:[...required,required[0]]}));
-console.log('PASS_CAPTURE_CAPABILITY_GATE fake API only; six operations/raw-all/cold/owned-points mandatory, requirements retained');
+console.log('PASS_CAPTURE_CAPABILITY_GATE fake API only; seven operations/raw-all/cold/owned-points mandatory, requirements retained');
 
 assert.equal(hp.hp_filter.defer_entry_scope,false);for(const name of ['Entity.SetHpInternal','Entity.SetHpInternalDirectly','Entity.OnAttributeDirty']){const plan=context.nativeCapturePlan(name,{toString:()=> '0x9000'},{...meta,coalesce_enemy_hp:true});assert.equal(plan.hp_filter.defer_entry_scope,name==='Entity.SetHpInternal');}

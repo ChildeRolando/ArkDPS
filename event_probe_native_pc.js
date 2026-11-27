@@ -443,22 +443,24 @@ function nativeCapturePlan(name,address,metadata){
   const field={field_id:next++,phase,role:extra.guard_id?role:(phase==='checkpoint'?'parent.body':'body'),name:role,root,root_index:index,pointer_offsets:[...path],offset,bytes,kind:'bytes',guard_id:0,guard_side:'none',required:true,...extra};
   fields.push(field);return field.field_id;
  };
- const clock=phase=>{
-  add(phase,'clock_open','global_slot',0,[],0,12,{guard_id:1,guard_side:'before'});
-  add(phase,'clock_close','global_slot',0,[],0,12,{guard_id:1,guard_side:'after'});
+ const clock=(phase,publicationOnly=false)=>{
+  const tier=publicationOnly?{tier:'publication'}:{};
+  add(phase,'clock_open','global_slot',0,[],0,12,{guard_id:1,guard_side:'before',...tier});
+  add(phase,'clock_close','global_slot',0,[],0,12,{guard_id:1,guard_side:'after',...tier});
  };
- const entity=(phase,role,index,path=[],optional=false,rootOverride=null,dataProof=true)=>{
+ const entity=(phase,role,index,path=[],optional=false,rootOverride=null,dataProof=true,shape={})=>{
   const root=rootOverride??(phase==='entry'?'arg':'entry_ref'),required=!optional;
   add(phase,role,root,index,path,0,8,{required});
   add(phase,role,root,index,path,0x18,4,{required});
-  add(phase,role,root,index,path,0x25,2,{required});
-  add(phase,role,root,index,path,0x40,8,{required});
+  if(shape.born!==false)add(phase,role,root,index,path,0x25,2,{required});
+  if(shape.hp!==false)add(phase,role,root,index,path,0x40,8,{required});
   add(phase,role,root,index,[...path,0x148],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200,required});
   // Data UID is a distinct optional domain: foreign non-Characters must not
   // become attributed merely because this address happens to be readable.
   if(dataProof){
   add(phase,role+'.data',root,index,[...path,0x538],0,8,{required:false});
   add(phase,role+'.data',root,index,[...path,0x538],0x6c,4,{required:false});
+  if(dataProof!=='uid'){
   // Token/form fields are copied independently of actor attribution; only the
   // existing reducer may validate their same-scope membership and host proof.
   add(phase,role+'.data.flags',root,index,[...path,0x538],0x90,2,{required:false});
@@ -469,15 +471,17 @@ function nativeCapturePlan(name,address,metadata){
   add(phase,role+'.data.host',root,index,[...path,0x538,0x98],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200,required:false});
   add(phase,role+'.player_side',root,index,path,0x20,4,{required:false});
   }
+  }
   if(!metadata.immutable_class_parents)for(let depth=0;depth<10;depth++)
    add(phase,role+'.lineage',root,index,[...path,0,...Array(depth).fill(0x58)],0x58,8,{required:false});
  };
- const modifier=(phase,index=1)=>{
+ const modifier=(phase,index=1,{source=true,sourceData=true,origin=true}={})=>{
   const root=phase==='entry'?'arg':'entry_ref';
   // Distinct exact regions avoid copying unrelated padding on hot paths.
   for(const [offset,bytes] of [[0,8],[0x10,8],[0x30,8],[0x48,8],[0x60,4],[0x68,4],[0x70,4],[0x80,16]])
-   add(phase,'modifier',root,index,[],offset,bytes);
-  entity(phase,'source',index,[0],true);entity(phase,'target',index,[0x10],true,null,false);
+   if(origin||offset!==0x80)add(phase,'modifier',root,index,[],offset,bytes);
+  if(source)entity(phase,'source',index,[0],true,null,sourceData,{born:false,hp:false});
+  entity(phase,'target',index,[0x10],true,null,false,{born:false});
  };
  const attr=(phase,index,entryAll=false)=>{
   const root=phase==='entry'?'arg':'entry_ref',path=[0xb0,0x68];
@@ -500,11 +504,16 @@ function nativeCapturePlan(name,address,metadata){
  };
  let profile;
  if(['Entity.ApplyModifier','Entity.OnAfterOutputDamage','Unit.OnAfterOutputDamage','Unit.OnTakeDamage','Entity.OnTakeDamage'].includes(normalized)){
-  profile='modifier';for(const phase of ['entry','leave']){clock(phase);modifier(phase);entity(phase,'receiver',0,[],true,null,false);}
+  const targetCallback=normalized.endsWith('.OnTakeDamage');
+  profile='modifier';for(const phase of ['entry','leave']){
+   clock(phase);modifier(phase,1,{source:!targetCallback||phase==='entry',sourceData:targetCallback?'uid':true,origin:normalized==='Entity.ApplyModifier'});
+   if(targetCallback)entity(phase,'receiver',0,[],true,null,false,{born:false});
+  }
   // The parent pointers come from native TLS, never the delayed JS stack.
   for(const [offset,bytes] of [[0,8],[0x10,8],[0x30,8],[0x48,8],[0x60,4],[0x68,4],[0x70,4]])add('checkpoint','parent.modifier','parent_ref',1,[],offset,bytes,{required:false});
   add('checkpoint','parent.hp','parent_ref',1,[0x10],0x40,8,{required:false});
-  entity('checkpoint','parent.source',1,[0],true,'parent_ref');entity('checkpoint','parent.target',1,[0x10],true,'parent_ref',false);
+  entity('checkpoint','parent.source',1,[0],true,'parent_ref',true,{born:false,hp:false});
+  entity('checkpoint','parent.target',1,[0x10],true,'parent_ref',false,{born:false});
  }else if(['Entity.SetHpInternal','Entity.SetHpInternalDirectly','Entity.OnAttributeDirty'].includes(normalized)){
   profile='hp';clock('entry');clock('leave');
   add('entry','hp.identity','arg',0,[],0,0x1c);
@@ -533,30 +542,54 @@ function nativeCapturePlan(name,address,metadata){
   profile='skill_transition';const actor=normalized==='BattleController.OnCharacterFinished'?1:0;
   for(const phase of ['entry','leave']){clock(phase);entity(phase,'actor',actor);skill(phase,actor,[metadata.skill_offsets.charSkill]);if(normalized==='Character.OnAfterSkill')skill(phase,1);}
  }else if(normalized==='Buff.OnTakeDamage'){
-  profile='buff';for(const phase of ['entry','leave']){clock(phase);add(phase,'buff',phase==='entry'?'arg':'entry_ref',0,[],0x18,8);add(phase,'buff.shield',phase==='entry'?'arg':'entry_ref',0,[],0x27c,1);add(phase,'buff.key',phase==='entry'?'arg':'entry_ref',0,[0x208],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200});}
+  // This callback owns only the opaque Buff stack and its opening time.
+  // BlockDamage copies the Buff/blackboard at its own child checkpoint.
+  profile='buff';clock('entry');clock('leave',true);
  }else if(normalized==='BlockDamage._AssignDynamicVar'){
   profile='shield';
   add('entry','buff.key_pointer','parent_ref',0,[],0x208,8,{required:false});
   add('entry','buff.key','parent_ref',0,[0x208],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200,required:false});
   add('entry','buff.source','parent_ref',0,[],0x18,8,{required:false});add('entry','buff.shield','parent_ref',0,[],0x27c,1,{required:false});
-  entity('entry','buff.source_actor',0,[0x18],true,'parent_ref');
+  entity('entry','buff.source_actor',0,[0x18],true,'parent_ref','uid',{born:false,hp:false});
   for(const phase of ['entry','leave']){
-   clock(phase);modifier(phase,2);const root=phase==='entry'?'arg':'entry_ref';
+   clock(phase);const root=phase==='entry'?'arg':'entry_ref';
+   if(phase==='entry'){
+    add(phase,'modifier.target',root,2,[],0x10,8);
+    add(phase,'modifier.amount',root,2,[],0x30,8);
+    add(phase,'modifier.target.uid',root,2,[0x10],0x18,4,{required:false});
+   }
    const count=add(phase,'blackboard.count',root,1,[],0x18,4,{guard_id:2,guard_side:'before'});
    add(phase,'blackboard.entries',root,1,[0x10],0x20,0,{kind:'utf16_array',count_field_id:count,element_bytes:24,element_pointer_offset:0,max_count:128,expected_class:metadata.string_class,max_units:200,stop_utf16_literal:'dynamic',guard_id:2,guard_side:'member'});
    add(phase,'blackboard.close',root,1,[],0x18,4,{guard_id:2,guard_side:'after'});
   }
  }else if(normalized.startsWith('BattleFormula.')||normalized==='AttackInfo.GetFinalAtk'||normalized==='Modifier.NewDamageModifierAfterCalculate'){
-  profile='formula';for(const phase of ['entry','leave']){clock(phase);
+  // Formula candidates never stamp event scope or attribute a player. Keep
+  // only the IDs/UIDs and exact values their shared reducer actually reads.
+  const actor=(phase,role,index,id,uid,optional=false)=>{
    const root=phase==='entry'?'arg':'entry_ref';
-   if(normalized==='AttackInfo.GetFinalAtk')add(phase,'attack.type',root,0,[],metadata.attack_type_offset,4);
-   else if(normalized==='BattleFormula.CalculateDamageInternal')add(phase,'attack.type',root,0,[],metadata.attack_type_offset,4);
+   if(uid)add(phase,role+'.uid',root,index,[],0x18,4,{required:!optional});
+   if(id)add(phase,role+'.id',root,index,[0x148],0,0,{kind:'utf16',expected_class:metadata.string_class,max_units:200,required:!optional});
+  };
+  profile='formula';for(const phase of ['entry','leave']){
+   clock(phase,normalized==='BattleFormula.CalculateDamageInternal');
+   const root=phase==='entry'?'arg':'entry_ref';
+   if(normalized==='AttackInfo.GetFinalAtk'){
+    if(phase==='entry')add(phase,'attack.type',root,0,[],metadata.attack_type_offset,4);
+   }
+   else if(normalized==='BattleFormula.CalculateDamageInternal'){/* pointer borrowing only */}
    else if(normalized==='Modifier.NewDamageModifierAfterCalculate'){
     const overload=metadata.factory_addresses.indexOf(address.toString());if(overload<0)throw new Error('unverified factory address');
-    if(phase==='leave')modifier(phase,0);
-    const index=overload+1;entity(phase,'factory.source',index+3,[],true);entity(phase,'factory.target',index+4);
+    if(phase==='leave')for(const [offset,bytes]of [[0,8],[0x10,8],[0x30,8],[0x60,4],[0x68,4],[0x80,16]])
+     add(phase,'modifier',root,0,[],offset,bytes);
+    const index=overload+1;
+    actor(phase,'factory.source',index+3,phase==='entry',true,true);
+    actor(phase,'factory.target',index+4,phase==='entry',true);
    }
-   else{entity(phase,'target',0,[],false,null,false);entity(phase,'source',1,[],true,null,false);add(phase,'attack.type',root,normalized.endsWith('NoEvent')?2:4,[],metadata.attack_type_offset,4);}
+   else{
+    actor(phase,'target',0,phase==='entry',true);
+    actor(phase,'source',1,phase==='entry',phase==='leave',true);
+    if(phase==='leave')add(phase,'attack.type',root,normalized.endsWith('NoEvent')?2:4,[],metadata.attack_type_offset,4);
+   }
   }
  }else if(['BattleController.set_state','BattleController.Destroy','BattleController.ClearRunTimeData'].includes(normalized)){
   profile='boundary';for(const phase of ['entry','leave']){clock(phase);
@@ -592,7 +625,7 @@ function nativeCapturePlan(name,address,metadata){
  else if(normalized==='BattleFormula.CalculateDamageInternal')argumentsFor(4,9);
  else if(normalized==='Modifier.NewDamageModifierAfterCalculate'){
   const overload=metadata.factory_addresses.indexOf(address.toString());
-  if(overload<0)throw new Error('unverified factory overload address');argumentsFor(overload+8);
+  if(overload<0)throw new Error('unverified factory overload address');argumentsFor(overload+8,overload===0?183:367);
  }
  return {schema_version:1,complete:false,raw_collection:'all',name:normalized,address:address.toString(),abi:'win64-gp',profile,arg_count:argCount,arg_mask:argMask,
   globals,fields,max_bytes:profile==='shield'?131072:65536,max_reads:4096,
@@ -605,13 +638,14 @@ function nativeCapturePlan(name,address,metadata){
   ...(normalized==='BattleController.Destroy'?{force_full_binding:{phase:'entry'}}:{}),
   // These producer checkpoints are mandatory profile operations. Engine must
   // reject installation until it can capture them, never ignore or sync-fallback.
-  required_projections:['live_scope_guards','same_point_class_ancestry',...(profile==='modifier'?['open_parent_checkpoint','token_host_and_character_form']:[]),...(profile==='boundary'?['full_native_binding']:[]),...(profile==='shield'?['current_buff_and_blackboard_keys']:[])]};
+  required_projections:[...(profile==='buff'||profile==='formula'||profile==='shield'||profile==='modifier'&&normalized.endsWith('.OnTakeDamage')?['consumer_edge_evidence']:['live_scope_guards']),
+   'same_point_class_ancestry',...(profile==='modifier'?['open_parent_checkpoint',...(!normalized.endsWith('.OnTakeDamage')?['token_host_and_character_form']:[])]:[]),...(profile==='boundary'?['full_native_binding']:[]),...(profile==='shield'?['current_buff_and_blackboard_keys']:[])]};
 }
 // Publish only the already verified address/expected graph. The callback still
 // This is a compatibility gate, not an assertion that native lowering exists.
 // The engine independently checks every retained required_projections name.
 function finalizeNativeCapturePlan(plan,metadata,capabilities){
- const required=['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys'];
+ const required=['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys','consumer_edge_evidence'];
  if(capabilities===null||capabilities===undefined)return {...plan,complete:false};
  if(capabilities.version!==1||capabilities.raw_collection!=='all'||!Array.isArray(capabilities.lowered_projections)||
     capabilities.lowered_projections.some(name=>typeof name!=='string')||new Set(capabilities.lowered_projections).size!==capabilities.lowered_projections.length)

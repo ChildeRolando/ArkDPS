@@ -145,7 +145,7 @@ console.log(JSON.stringify({owned_terminal_read_cases:cases,live_game:false}));
   __arkdpsSealClassHierarchy(new Map(Object.values(terminalClasses).map(k=>[k,'0x0'])));
   nativeCaptureMetadata={clock,classes:terminalClasses,string_class:terminalStringClass,cold_metadata_ready:true,immutable_class_parents:true};
   nativeCaptureMetadata.cold_plan=__arkdpsBuildColdCapturePlan(nativeCaptureMetadata);
-  globalThis.__nativeCaptureCapabilities=()=>({version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys']});
+  globalThis.__nativeCaptureCapabilities=()=>({version:1,raw_collection:'all',lowered_projections:['live_scope_guards','same_point_class_ancestry','open_parent_checkpoint','token_host_and_character_form','full_native_binding','current_buff_and_blackboard_keys','consumer_edge_evidence']});
   globalThis.arkdpsNativeAsyncCapture=true;nativeCaptureModeHistory.set(0,'all');
   prepareNativeCaptureHook(ptr(0x9000),destroyCallbacks);
   if(destroyCallbacks.arkdpsCaptureContract.complete!==true)throw Error('incomplete owned Destroy contract');
