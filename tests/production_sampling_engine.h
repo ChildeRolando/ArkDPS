@@ -16,6 +16,7 @@ static bool production_sampling_read(void* user,std::uintptr_t at,void* out,std:
 static JSValue production_sampling_run(JSContext* c,JSValueConst,int n,JSValueConst* args){return guarded(c,[&]{
  if(n!=1)throw std::runtime_error("sampling run arity");
  auto options=J::parse(string(c,args[0]));auto& r=state();
+ if(options.contains("mode_epoch"))r.capture_mode_epoch.store(plan_uint(options.at("mode_epoch"),capture_mode_slots-1));
  const auto frame=options.at("frame").get<std::uint32_t>();const auto a=r.sampling_plan->globals[0];
  auto* cell=region(a,12);if(!cell)throw std::runtime_error("sampling clock is outside owned bytes");
  auto* data=cell->data.data()+a-cell->address;const std::uint64_t fixed=(std::uint64_t(frame)<<32)/30;
@@ -23,11 +24,18 @@ static JSValue production_sampling_run(JSContext* c,JSValueConst,int n,JSValueCo
  const auto request=++r.sample_request;ProductionSamplingRead reader{options.value("fault",std::string()),0,r.capture_mode_epoch.load()};
  if(options.value("cold",false))require_cold_publication(r.cold_publication_request,request);
  std::array<std::byte,8> saved{};Region* changed=nullptr;std::uintptr_t target=0;
- if(reader.fault=="object"){target=plan_address(options.at("address"));changed=region(target,8);if(!changed)throw std::runtime_error("owned object guard missing");std::memcpy(saved.data(),changed->data.data()+target-changed->address,8);std::memset(changed->data.data()+target-changed->address,0,8);}
- const bool accepted=arkdps::sample_checkpoint(r,request,production_sampling_read,&reader);
- if(changed)std::memcpy(changed->data.data()+target-changed->address,saved.data(),8);
- r.capture_mode_epoch.store(reader.previous_mode);
+ if(reader.fault=="object"||reader.fault=="root_class"){
+  target=plan_address(options.at("address"));changed=region(target,8);if(!changed)throw std::runtime_error("owned object guard missing");
+  std::memcpy(saved.data(),changed->data.data()+target-changed->address,8);
+  const std::uint64_t replacement=reader.fault=="root_class"?plan_address(options.at("value")):0;
+  std::memcpy(changed->data.data()+target-changed->address,&replacement,8);
+ }
+ const auto restore=[&](){if(changed)std::memcpy(changed->data.data()+target-changed->address,saved.data(),8);r.capture_mode_epoch.store(reader.previous_mode);};
+ bool accepted=false;
+ try{accepted=arkdps::sample_checkpoint(r,request,production_sampling_read,&reader);}catch(...){restore();throw;}
+ restore();
  J result{{"accepted",accepted},{"request",request},{"sampling_serial",r.sampling_serial},{"raw",r.lanes->reserved.load()},{"processed",r.processed_ticket},{"closed",r.closed_ticket},{"sequence",r.published_sequence},{"reads",reader.reads},{"token",r.completed_sample_token},{"retry_reason",r.sampling_retry_reason},{"failure",r.lanes->failure.load()},{"cold_required",r.cold_publication_request.load()}};
+ result["published_raw"]=r.published_ticket;result["delivered_sequence"]=r.delivered_sequence;result["completed_request"]=r.completed_sample_request;
  if(accepted){auto command=JS_ParseJSON(c,"{\"operation\":\"mark\"}",20,"sampling-mark");auto answer=JS_Call(c,r.publication_request,JS_UNDEFINED,1,&command);JS_FreeValue(c,command);if(JS_IsException(answer))throw std::runtime_error(exception(c));result["mark"]=json_value(c,answer);JS_FreeValue(c,answer);}
  return JS_NewString(c,result.dump().c_str());
 });}

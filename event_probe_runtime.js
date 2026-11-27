@@ -3662,6 +3662,10 @@ const terminalClassNames=new Map();
 function terminalClassName(klass){
  const key=klass.toString();
  if(terminalClassNames.has(key))return terminalClassNames.get(key);
+ // A rejected live object can carry a class outside setup's metadata closure.
+ // Its captured class word is enough to reject it; never borrow uncaptured
+ // metadata merely to name it while validating a cold ownership root.
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&!immutableClassNames.has(key))return null;
  const name=className(klass);
  if(terminalClassNames.size<128)terminalClassNames.set(key,name);
  return name;
@@ -3669,14 +3673,24 @@ function terminalClassName(klass){
 function terminalIdentity(controller,controllerClass,reject){
  if(controller.isNull())return reject?.('singleton_empty')??null;
  const nativeOffset=probeAdapter.nativeOffset??0x10;
- const controllerFields=nativeOffset===0x10?checkedNativeView(controller,0x18):null;
+ const captured=typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive();
+ // The cold tree owns only the class word when its exact-type gate rejects.
+ // Read that witness before asking for a block whose bytes require the gate.
+ // Live adapters retain their single block read and validate its class below.
+ let controllerFields=nativeOffset===0x10&&!captured?checkedNativeView(controller,0x18):null;
  const klass=controllerFields?ptr(controllerFields.getBigUint64(0,true)):controller.readPointer();
  if(!klass.equals(controllerClass)){
   if(!reject)return null;
   let observed=null;
-  try{if(!klass.isNull())observed=className(klass);}catch(e){/* The mismatch is already proved. */}
+  try{if(!klass.isNull())observed=captured?immutableClassNames.get(klass.toString())??null:className(klass);
+  }catch(e){/* The mismatch is already proved; diagnostics need no new reads. */}
   return reject('controller_class_mismatch',observed);
  }
+ if(nativeOffset===0x10&&!controllerFields)controllerFields=checkedNativeView(controller,0x18);
+ // Keep the class check on the block too; the preliminary captured class word
+ // is not authority for any subsequently supplied block.
+ if(controllerFields&&!ptr(controllerFields.getBigUint64(0,true)).equals(controllerClass))
+  return reject?.('controller_class_mismatch')??null;
  // Use the same two ownership references as the guarded native snapshot.
  const native=controllerFields?ptr(controllerFields.getBigUint64(0x10,true)):controller.add(nativeOffset).readPointer();
  const logger=controller.add(probeAdapter.loggerOffset).readPointer();

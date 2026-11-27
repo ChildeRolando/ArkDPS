@@ -2,10 +2,11 @@
 from pathlib import Path
 import argparse
 from production_hp_actual_engine_bundle import engine_bundle
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def sampling_bundle():
-    text = engine_bundle(count=1).split('\n__ownedSetCallbacks(setter,sourcePrefix,')[0]
+def sampling_bundle(source_root=ROOT):
+    text = engine_bundle(count=1, source_root=source_root).split('\n__ownedSetCallbacks(setter,sourcePrefix,')[0]
     original = 'return {context, messages, requests, write, text, managedString, alloc, ptr, clock, callback, unit, modifier,'
     assert text.count(original) == 1
     text = text.replace(original, 'return {ownedMemory:memory,context, messages, requests, write, text, managedString, alloc, ptr, clock, callback, unit, modifier,')

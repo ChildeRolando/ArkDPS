@@ -559,3 +559,48 @@ mark 请求转为 RuntimeError。队列当时已消费，不能把本次异常�
 Python/JS 回归 300 passed。独立 review 的内存 mutation 放宽阶段范围后负例失败。
 新包应明确标为定位包，普通日志即可给出具体阶段/缺项，不以这组 PASS 宣称业务根因
 已解决，也不要求用户为了取证打完整大局或开启逐笔详细日志。
+
+### 9c2bb39 复现后的冷根类型门禁根修
+
+新实机定位包于北京时间 2026-11-27 18:00:24.084796 记录了
+`native_sampling_gap`：stage3、LaneFault6、ticket224、role1、field20481、两条
+原因分类 `10.10`。证据在 `runtime/first-battle-9c2bb39/evidence.json`；644 行
+冻结前缀 SHA256 为 `a62698b03ecffa76b2dc1fdd4e744f494331490f748f548f32b145874a3d08e9`。
+该 role/field 对应 `cold.root_open`。`10.10` 是 JS 的 native-owned-structural
+分类，不能当成底层 `Error::ambiguous_read`；实机未记录当时具体 class 值。
+
+自有实际 engine 复现找到确定的合同错位：冷树对 BattleController 做 exact-class
+gate，类型不匹配时只保存 8 字节 class 证据并停止后续对象读取；共享
+`terminalIdentity` 却先要求完整 24 字节，再判断 class。这会把一个本来可以正常
+拒收的错误类型变为 `missing_plan_field`，poison 后整局观察器不可用。将自有
+controller 的 class 换为另一个真实类型，得到与实机同型的 stage/field/分类，
+独立读取 NativeOwnedStatus 确认底层为 9（missing_plan_field）。旧源码及失败
+回执保存在 `runtime/review-cold-mode1/rootclass-receipt.json`，不能把合成 class
+值反推为实机实际 class。
+
+修复在同一个共享身份入口完成，PC/MuMu 业务校验没有分叉：
+
+- captured replay 先读确实持有的 8 字节 class，错误类型立即拒收；只有匹配后
+  才读取 24 字节块，并再次核对块内 class。真实缺项、冲突字节或伪造证明仍失败。
+- raw 适配器保留原单次 24 字节块读取，以块内 class 验证，不增加前置 native
+  读取。原性能门禁的 scope 58 次读取保持通过，没有调整读预算断言。
+- 错误类型的描述只使用 setup 已有不可变类名缓存。logger/level/stats 的未知
+  class 也严格拒收，不为了报出名字而读取 cold 合同之外的元数据。正确对象恢复
+  后必须取得新的独立样本；错误类型不发布、不交付、不 ACK，也不销毁观察器。
+
+这是修复已复现的取证/读取合同生产路径，未放宽 OwnedReplayView、冷根 exact
+gate、时间/作用域、水位或终局条件。新的正式 actual-engine gate 对同一二进制
+分别运行旧/新共享源码，覆盖 known/unknown/null controller、未知 logger/level/
+stats、逐次恢复，以及类型正确但确实缺少 24 字节的严格负例；另用真实共享函数
+覆盖 raw 单块与 captured 两阶段类不一致。回执随本次测试包保存。实机首局是否
+已稳定仍需新候选自己的验收，不能由离线同型复现直接宣布。
+
+最终回执为 `runtime/root-class-regression/broken-v2/receipt.json`（旧源码）、
+`fixed-v2/receipt.json`（六类错误与六次恢复、真实缺项仍拒收），二者均使用
+SHA256 `f3e004bcae99266dfe9aa795da0eba68e845e67d5dccd9cb938140de874d1d4e`
+的同一 actual-engine 二进制。原九场景门禁另存 `original-nine-row/receipt.json`。
+共享源码 SHA256 为 `d1ed6c7c572b561dcc06eff25c8ec9929942d998bb5757ba11fe687bc78ffa61`。
+最终全量回归 `runtime/first-battle-9c2bb39/pytest-final-verified.xml` 为 6501 passed /
+29 skipped；此前新增 raw 预读导致 58→60 次的失败回执保留，生产代码已恢复原预算，
+没有放宽断言。本次仅改共享 JS 的读取门禁，沿用已验证的原生 DLL
+`147c9c9359fb55299fafba6e4cb39901de2ea2cef63fe2bb94474f7e429bcdd4`。
