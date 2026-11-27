@@ -1785,12 +1785,16 @@ class NativePcBinding:
     def __init__(self, collector):
         self.collector = collector
         self.generation_sessions, self.session_generations = {}, {}
+        self._generation_bindings = {}
+        self._pending_generation_binding = None
         self._terminal_cache = None
         self.terminal_diagnostic = {'status': 'missing', 'reason': 'no_guarded_watermark'}
 
     def reset(self):
         self.generation_sessions.clear()
         self.session_generations.clear()
+        self._generation_bindings.clear()
+        self._pending_generation_binding = None
         self._terminal_cache = None
         self.terminal_diagnostic = {'status': 'missing', 'reason': 'binding_reset'}
 
@@ -1847,6 +1851,28 @@ class NativePcBinding:
                     or self.collector.diagnostics.version_actual != mark['source_build']
                     or (sample.get('battle_metadata') or {}).get('stage_id') != mark['native_stage_id']):
                 raise RuntimeError('terminal cache process, stage or build is not independently bound')
+            candidate = self._pending_generation_binding
+            if (candidate is not None and candidate['generation'] == mark['native_generation']
+                    and candidate['native_session'] == mark['native_session']
+                    and 'serial' in candidate
+                    and candidate['process_instance'] == tuple(birth)
+                    and candidate['source_build'] == mark['source_build']
+                    and candidate['stage'] == mark['native_stage_id']
+                    and candidate['identity'] == tuple(int(mark['native_identity'][key], 16) for key in self._roots)
+                    and (sample.get('native_window_guard') or {}).get('battle_serial') == candidate['serial']
+                    and _native_pc_mark_binding_valid(sample, mark)):
+                generation = candidate['generation']
+                previous_session = self.generation_sessions.get(generation)
+                previous_generation = self.session_generations.get(candidate['native_session'])
+                if (previous_session is not None and previous_session != candidate['native_session']
+                        or previous_generation is not None and previous_generation != generation):
+                    raise RuntimeError('verified generation binding conflicts with its accepted bijection')
+                # Independent ingestion proof commits the generation even if
+                # optional terminal-cache copying below is unavailable.
+                self.generation_sessions[generation] = candidate['native_session']
+                self.session_generations[candidate['native_session']] = generation
+                self._generation_bindings[generation] = candidate
+                self._pending_generation_binding = None
             cached = {key: deepcopy(mark[key]) for key in self._terminal_fields}
             if 'native_autochess_context' in mark:
                 cached['native_autochess_context'] = deepcopy(mark['native_autochess_context'])
@@ -2015,10 +2041,17 @@ class NativePcBinding:
             raise RuntimeError('PC 事件来源 标记与原始逻辑时钟不一致')
         from collector import ProcessChanged, SampleUnavailable, UnsupportedVersion
         try:
-            binding = self.collector.observer_binding(
-                frame=frame, game_time=game_time, native_identity=result.get('native_identity'),
-                native_stage_id=result.get('native_stage_id'),
-                native_process_pid=result.get('native_process_pid'), native_fixed_time=fixed_time)
+            values = dict(frame=frame, game_time=game_time, native_identity=result.get('native_identity'),
+                          native_stage_id=result.get('native_stage_id'),
+                          native_process_pid=result.get('native_process_pid'), native_fixed_time=fixed_time)
+            scoped_binding = getattr(self.collector, 'observer_binding_with_scope', None)
+            if callable(scoped_binding):
+                binding, scope = scoped_binding(**values,
+                    generation_binding=self._generation_bindings.get(generation),
+                    allow_reset_prediction=bool(self.generation_sessions
+                        and generation > max(self.generation_sessions)))
+            else:
+                binding, scope = self.collector.observer_binding(**values), {}
         except (ProcessChanged, UnsupportedVersion):
             raise
         except SampleUnavailable as exc:
@@ -2028,12 +2061,27 @@ class NativePcBinding:
         if previous is not None and previous != session:
             raise RuntimeError('PC 事件来源 事件世代与已确认战局不一致')
         previous_generation = self.session_generations.get(session)
-        if previous_generation is not None and previous_generation != generation:
+        candidate = self._pending_generation_binding
+        if (candidate is not None and candidate['generation'] == generation
+                and candidate['native_session'] != session):
+            if (generation not in self.generation_sessions and 'serial' in candidate
+                    and scope.get('sampler_confirmed') is True
+                    and candidate['serial'] != scope['serial']):
+                # Only an unaccepted proposal can be retired by an actual
+                # independent sampler transition. No committed map or ACK moves.
+                self._pending_generation_binding = None
+                raise ObserverReadRetry('PC 未确认事件世代候选已被独立战局更新，请重采')
+            raise RuntimeError('PC 事件来源 事件世代与已确认战局不一致')
+        if (previous_generation is not None and previous_generation != generation
+                or candidate is not None and candidate['native_session'] == session
+                and candidate['generation'] != generation):
             raise RuntimeError('PC 原生战局未能区分已观察到的新事件世代，当前事件覆盖已中断')
-        self.generation_sessions[generation] = session
-        self.session_generations[session] = generation
+        # Binding is only a proposal. Publish the bijection after an independently
+        # guarded sample actually ingested this mark (remember_verified_mark).
+        proposal = dict(scope, **dict(binding, generation=generation))
         bound = dict(result, **binding)
         if operation == 'mark' and isinstance(result.get('terminal_boundary'), dict):
             self._terminal_mark_valid(bound)
             bound['terminal_boundary'] = self._bound_terminal(result['terminal_boundary'], bound)
+        self._pending_generation_binding = proposal
         return bound

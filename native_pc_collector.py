@@ -180,8 +180,13 @@ class NativePcCollector:
         diag.message = 'PC 已连接 · 只读累计统计'
         diag.details = {'build': self.process.build, 'fixed_module_bytes_match': True}
 
-    def observer_binding(self, *, frame, game_time, native_identity, native_stage_id,
-                         native_process_pid, native_fixed_time):
+    def observer_binding(self, **values):
+        # Legacy callers explicitly request the sampler's next-state prediction.
+        return self.observer_binding_with_scope(**values, allow_reset_prediction=True)[0]
+
+    def observer_binding_with_scope(self, *, frame, game_time, native_identity, native_stage_id,
+                                    native_process_pid, native_fixed_time,
+                                    generation_binding=None, allow_reset_prediction=False):
         """Name a probe mark for independent validation by the guarded sample.
 
         The opening mark precedes the native read. It predicts the sampler's
@@ -215,11 +220,40 @@ class NativePcCollector:
                 or not isinstance(native_stage_id, str) or not native_stage_id):
             raise SnapshotGap('PC 事件来源 的原始逻辑时钟或关卡无效。')
         identity = tuple(roots)
-        serial = process.battle_serial_for(identity, frame, int(native_fixed_time), native_stage_id)
+        birth = tuple(process.process_instance)
+        build = self.diagnostics.version_actual
+        if generation_binding is not None:
+            if (generation_binding['identity'] != identity or generation_binding['stage'] != native_stage_id
+                    or generation_binding['process_instance'] != birth or generation_binding['source_build'] != build):
+                raise RuntimeError('PC 事件来源 已确认世代的进程、根或关卡改变')
+            serial = generation_binding['serial']
+            if (process._identity != identity or process._stage_id != native_stage_id
+                    or process._serial != serial):
+                raise SampleUnavailable('PC 已确认事件世代不属于当前独立战局，请等待新世代')
+        else:
+            current = process._last_clock
+            historical = (current is not None and
+                          (frame < current[0] or int(native_fixed_time) < current[1]))
+            changed = (process._identity is not None and
+                       (process._identity != identity or process._stage_id != native_stage_id))
+            if not allow_reset_prediction and changed:
+                raise SampleUnavailable('PC 首次事件标记不属于当前独立战局，请重采')
+            if not allow_reset_prediction and historical:
+                # A first asynchronous publication may lag forever. Its clock
+                # cannot predict a reset: propose the current independently
+                # sampled serial, without committing any generation mapping.
+                serial = process._serial
+            else:
+                serial = process.battle_serial_for(identity, frame, int(native_fixed_time), native_stage_id)
         words = (*identity, serial)
         digest = hashlib.sha256(struct.pack(f'<{len(words)}Q', *words)).hexdigest()
-        return dict(native_session=':'.join(map(str, (*process.process_instance, digest))),
-                    source_build=self.diagnostics.version_actual)
+        session = ':'.join(map(str, (*birth, digest)))
+        binding = dict(native_session=session, source_build=build)
+        scope = dict(identity=identity, stage=native_stage_id, process_instance=birth,
+                     serial=serial, native_session=session, source_build=build,
+                     sampler_confirmed=(process._identity == identity and process._stage_id == native_stage_id
+                                        and process._serial == serial))
+        return binding, scope
 
     def observer_boot_ready(self):
         if self.process is None:

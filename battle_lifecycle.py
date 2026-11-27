@@ -2132,6 +2132,41 @@ class BattleRuntime:
         self._accepted_event_observer = None
         return dict(reason=reason, previous_feed=previous_feed, feed=self.feed.id)
 
+    def _retire_started_pending_on_retry(self, observation):
+        """Transfer an admitted baseline to its capture without accepting its tail."""
+        pending = self.feed._pending_scope
+        start = (observation.events or {}).get('pending_scope_start')
+        capture = self.sessions.capture
+        receipt = self.feed._emitted_cursor
+        if (pending is None or not isinstance(start, dict) or start.get('anchor') != pending['anchor']
+                or observation.generation != pending['generation']
+                or observation.generation != self.sessions.generation
+                or receipt is None or receipt[0] != observation.sequence
+                or receipt[1] is not pending['observer'] or receipt[2] is not pending['cursor_lifetime']
+                or probe_cursor_lifetime(pending['observer']) is not pending['cursor_lifetime']
+                or capture is None or capture.closed or self.sessions.event_status != 'recording'):
+            return
+        stream = capture.adapter.event_stream
+        anchor = pending['anchor']
+        # Revalidate this exact bootstrap, rather than inferring admission from
+        # the new generation or an allocated adapter. Only zero _events has run.
+        bootstrap = verified_pending_scope_start(observation.sample, observation.events,
+                                                 previous_sequence=anchor['sequence'])
+        if bootstrap is None:
+            return
+        baseline, mark, _, _ = bootstrap
+        if (stream is not None and capture.last_sample == baseline
+                and stream.session == observation.sample['session']
+                and type(capture.baseline_sequence) is int and capture.baseline_sequence == anchor['sequence']
+                and type(stream.sequence) is int and stream.sequence == anchor['sequence']
+                and type(stream.baseline_frame) is int and stream.baseline_frame == baseline['frame']
+                and type(stream.frame) is int and stream.frame == baseline['frame']
+                and stream.game_time == baseline['game_time']
+                and self.sessions._last_event_mark == mark):
+            # The existing capture owns continuation from this real positive
+            # baseline. Retained source records and all ACK watermarks stay put.
+            self.feed._pending_scope = None
+
     @timed('event_consume')
     def _consume(self, observation):
         # Reject an invalid live handoff before journaling it as a consumable
@@ -2169,9 +2204,13 @@ class BattleRuntime:
                     self.feed._pending_scope = None
             return consumed
         except MappingUnavailable as exc:
+            self._retire_started_pending_on_retry(observation)
             # The native battle and event attachment remain valid while
             # ownership settles. Preserve the queue and the last good view.
             raise MappingRetry(str(exc), observation) from exc
+        except (BarrierBusy, CaptureRetry, FrameMismatch):
+            self._retire_started_pending_on_retry(observation)
+            raise
 
     @timed('capture_acquire')
     def _acquire(self, collector, observer):
