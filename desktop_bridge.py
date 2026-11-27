@@ -2192,6 +2192,7 @@ class CollectionWorker:
                                 capture_health.reset()
                                 audit('capture_error', {'error_type': type(exc).__name__,
                                       'reason': str(exc).partition('\n')[0][:200],
+                                      'cursor_failure': getattr(exc, 'cursor_failure', None),
                                       'monotonic': time.monotonic()})
                                 self.events.put(('error', str(exc)))
                                 diag = getattr(exc, 'diagnostics', None)

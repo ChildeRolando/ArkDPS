@@ -11,7 +11,7 @@
 ## 实验与实证
 
 - [手动对局性能计时](performance-timings.md) — 低开销开关、原生/宿主/WPF 阶段、日志解释与 rc.43 私有计时包验收。
-- [PC 原生现场采集与单消费者](native-capture-worker.md) — 现场快照、队列、共享归约、发布/读取/ACK 及冷启动边界。
+- [PC 原生现场采集与单消费者](native-capture-worker.md) — 现场快照、队列、共享归约、无回调采样事务、游标所有权及发布/读取/ACK 边界。
 - [敌方 HP 轻量采集合同](native-hp-lightweight-contract.md) — 按产品需求取消精确敌方回血指标，保留结算、关键事件与快照刷新；计划边界及严格水位。
 
 - [官服 PC Frida 生命周期与恢复约束](native-pc-frida-state-machine.md) — 状态转换、资源所有权、请求世代与覆盖验证。

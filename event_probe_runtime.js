@@ -426,6 +426,9 @@ const stacks=new Map(), hooks=[];
 const captureHooks=[];
 let capturePaused=false,captureBlocked=false,captureInterrupted=false;
 let captureRevision=0,captureGeneration=0,captureCallbacks=0;
+function attachCaptureListener(entry){
+ entry.listener=Interceptor.attach(entry.address,entry.callbacks);
+}
 function attachEventHook(address,callbacks){
  const entry={address,callbacks:null,listener:null,detached:false};
  function enter(receiver,callback,first,second){
@@ -451,7 +454,7 @@ function attachEventHook(address,callbacks){
   entry.callbacks.arkdpsDirectHpLeave=function(io){return leave(this,callbacks.arkdpsDirectHpLeave,io);};
  }
  if(!captureBlocked||globalThis.__arkdpsNativeCaptureControl===true)
-  entry.listener=Interceptor.attach(address,entry.callbacks);
+  attachCaptureListener(entry);
  captureHooks.push(entry);
  return {detach(){entry.detached=true;if(entry.listener){entry.listener.detach();entry.listener=null;}}};
 }
@@ -3914,7 +3917,7 @@ function setCapturePaused(paused,revision){
   if(capturePaused||captureInterrupted)resetCaptureContexts();
   if(globalThis.__arkdpsNativeCaptureControl!==true)
    for(const entry of captureHooks)if(!entry.detached&&!entry.listener)
-    entry.listener=Interceptor.attach(entry.address,entry.callbacks);
+    attachCaptureListener(entry);
  }
  if(globalThis.__arkdpsNativeCaptureControl!==true&&typeof Interceptor.flush==='function')Interceptor.flush();
  if(capturePaused!==paused||!paused&&captureInterrupted)captureGeneration++;
@@ -3996,11 +3999,14 @@ function __arkdpsOnClosedRecord(record){
  return typeof probeAdapter.captureRecordMode==='function'?probeAdapter.captureRecordMode(record,()=>capturedClosedRecordProjection(record)):capturedClosedRecordProjection(record);
 }
 function capturedClosedRecordProjection(record){
+ const sampling=record?.kind==='sampling_checkpoint'&&record.edge==='checkpoint'
+  &&probeAdapter.verifiedSamplingCheckpoint?.(record)===true;
  if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive()||record!==__arkdpsReplayRecord()||
-    record.edge!=='leave'||record.closed_after!==true||active!==0||!Number.isSafeInteger(record.facts?.scope_mode_epoch)||record.facts.scope_mode_epoch<0||typeof probeAdapter.capturedPublicationBinding!=='function')return null;
+    (record.edge!=='leave'&&!sampling)||record.closed_after!==true||active!==0||!Number.isSafeInteger(record.facts?.scope_mode_epoch)||record.facts.scope_mode_epoch<0||typeof probeAdapter.capturedPublicationBinding!=='function')return null;
  try{
  const boundary=currentTerminalBoundary();
  if(boundary){
+  if(sampling&&record.sampling_terminal_verified!==true)return null;
   const rawTerminal=readTerminalEvents(acknowledgedSequence,sequence,false);
   if(rawTerminal.retry!==false)return null;
   const terminal={...rawTerminal,native_capture_scope_mode_epoch:record.facts.scope_mode_epoch};
@@ -4052,7 +4058,7 @@ rpc.exports={
 };
 probeHooksReady=true;
 receiveEventRequest();
-send({ready:true,arch:Process.arch,capture_pause_version:1,skill_ready:!skillUnknown&&cfg.skillReady,
+send({ready:true,arch:Process.arch,...(globalThis.arkdpsNativeAsyncCapture===true&&globalThis.__arkdpsSamplingCapturePlan?.complete===true&&typeof __arkdpsVerifiedSamplingCheckpoint==='function'?{native_sampling_version:1}:{}),capture_pause_version:1,skill_ready:!skillUnknown&&cfg.skillReady,
  ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),
  autochess_round_start_ready:!!autoChessRoundResetMethod&&!cfg.autoChessRoundResetError,
  autochess_round_start_error:cfg.autoChessRoundResetError||null,

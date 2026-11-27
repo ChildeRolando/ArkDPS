@@ -350,11 +350,15 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
         required_mask|=bit;
     }
     const auto profile=source.value("profile",std::string());
-    const bool production=profile=="modifier"||profile=="hp"||profile=="lifecycle"||profile=="skill_cast"
+    const bool sampling=profile=="sampling_checkpoint";
+    const bool production=sampling||profile=="modifier"||profile=="hp"||profile=="lifecycle"||profile=="skill_cast"
         ||profile=="skill_transition"||profile=="buff"||profile=="shield"||profile=="formula"||profile=="boundary";
-    const unsigned mandatory=3u|(profile=="modifier"?12u:0u)|(profile=="boundary"?16u:0u)|(profile=="shield"?32u:0u);
+    const unsigned mandatory=3u|(sampling?16u:0u)|(profile=="modifier"?12u:0u)|(profile=="boundary"?16u:0u)|(profile=="shield"?32u:0u);
     if(production && (required_mask&mandatory)!=mandatory)
         throw std::runtime_error("production capture requirements were removed");
+    if(sampling && (hook_address || result.plan->arg_count || result.plan->arg_mask || required_mask!=19u
+            ||source.contains("entry_roots")||source.contains("force_cold_boundary")||source.contains("force_full_entry")))
+        throw std::runtime_error("sampling checkpoint cannot declare a game invocation or hook projections");
     if(required_mask && source.value("raw_collection",std::string())!="all")
         throw std::runtime_error("named native capture projection requires raw all-player evidence");
     const auto roots=source.value("entry_roots",nlohmann::json::array());
@@ -453,8 +457,8 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
             if((role=="clock_open"||role=="clock_close") && (field.kind!=Kind::bytes || field.bytes!=12
                 ||field.root!=Root::global_slot||field.root_index||field.depth||field.offset||!(result.globals_valid&1u)))
                 throw std::runtime_error("callback clock is not the native twelve-byte global witness");
-            if(role=="clock_open"&&field.guard==Guard::before)clocks|=field.phase==Phase::entry?1:4;
-            if(role=="clock_close"&&field.guard==Guard::after)clocks|=field.phase==Phase::entry?2:8;
+            if(role=="clock_open"&&field.guard==Guard::before)clocks|=field.phase==Phase::entry?1:field.phase==Phase::leave?4:16;
+            if(role=="clock_close"&&field.guard==Guard::after)clocks|=field.phase==Phase::entry?2:field.phase==Phase::leave?8:32;
             parent|=field.phase==Phase::checkpoint&&field.root==Root::parent_ref&&field.root_index==1;
             host|=name=="source.data.host"&&field.kind==Kind::utf16;
             cid|=name=="source.data.cid"&&field.kind==Kind::utf16;
@@ -463,12 +467,25 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
             keys|=field.kind==Kind::utf16_array&&field.stop_at_dynamic;
         }
         for(unsigned i=0;i<cold.projection_count;++i)gated_class|=cold.projections[i].gate!=TypeGate::none&&cold.projections[i].expected_class;
-        if((required_mask&1u)&&clocks!=15)throw std::runtime_error("live scope lacks independent entry/leave clocks");
+        if((required_mask&1u)&&clocks!=(sampling?48u:15u))
+            throw std::runtime_error(sampling?"live sample lacks independent checkpoint clocks":"live scope lacks independent entry/leave clocks");
         if((required_mask&2u)&&!gated_class)throw std::runtime_error("class ancestry lacks immutable typed projection metadata");
         if((required_mask&4u)&&(!result.parent_checkpoint_fields||!parent))throw std::runtime_error("open parent checkpoint recipe absent");
         if((required_mask&8u)&&(!host||!cid||!flags))throw std::runtime_error("token/form recipe absent");
         if((required_mask&32u)&&(!buff||!keys))throw std::runtime_error("current buff/blackboard recipe absent");
-        if(required_mask&16u) {
+        if((required_mask&16u)&&sampling) {
+            // A current sample has no historical receiver/entry roots. The
+            // immutable cold recipe independently traverses the same actual
+            // BattleController class root before and after its optional body.
+            const auto root=cold.fields[0].absolute_address;
+            if(!root || result.plan->field_count!=2)throw std::runtime_error("sampling native binding lacks bounded clocks/root");
+            for(unsigned i=0;i<cold.field_count;++i) {
+                const auto& field=cold.fields[i];
+                if(field.root!=Root::absolute||field.absolute_address!=root||field.depth||field.offset||field.root_index)
+                    throw std::runtime_error("sampling native binding is not independently rooted");
+            }
+        }
+        if((required_mask&16u)&&!sampling) {
             unsigned slots=0;for(unsigned i=0;i<result.entry_root_count;++i)slots|=1u<<result.entry_roots[i].slot;
             const auto name=source.value("name",std::string());
             const bool boundary=name=="BattleController.Destroy" ? result.force_full_entry

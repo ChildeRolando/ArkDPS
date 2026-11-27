@@ -90,9 +90,18 @@ def probe_cursor_lifetime(probe):
     return getattr(probe, '_cursor_lifetime', None)
 
 
-def check_cursor_lifetime(probe, lifetime):
-    if probe_cursor_lifetime(probe) is not lifetime:
-        raise StreamGap('event probe cursor lifetime changed during acquisition')
+def check_cursor_lifetime(probe, lifetime, *, phase='acquisition'):
+    actual = probe_cursor_lifetime(probe)
+    if actual is not lifetime:
+        # Failure-only metadata contains no token values or object addresses.
+        if phase not in ('acquisition', 'pending_prefix', 'accepted_before_acquisition'):
+            phase = 'acquisition'
+        detail = dict(version=1, reason='cursor_lifetime_changed', phase=phase,
+                      owner_matches=True, observer_present=probe is not None,
+                      expected_present=lifetime is not None, actual_present=actual is not None)
+        error = StreamGap('event probe cursor lifetime changed during acquisition; phase=' + phase)
+        error.cursor_failure = detail
+        raise error
 
 
 def acknowledgement_matches(reply, sequence, *, exact_fields=False):

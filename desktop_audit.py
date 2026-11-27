@@ -263,7 +263,7 @@ KEY_EVENTS = {
     'capture_health': None,  # Sanitized before the journal mode is applied.
     'event_gap': ('error_type', 'code'),
     'capture_retry': ('error_type', 'code'),
-    'capture_error': ('error_type', 'code'),
+    'capture_error': ('error_type', 'code', 'cursor_failure'),
     'history_error': ('code',),
     'history_saved': ('written',),
     'stopped': (),
@@ -310,6 +310,18 @@ def _capture_health_fields(data):
     return result
 
 
+def sanitize_cursor_failure(value):
+    """Failure-only state identity, without tokens, addresses or arbitrary text."""
+    flags = ('owner_matches', 'observer_present', 'expected_present', 'actual_present')
+    if (type(value) is not dict or set(value) != {'version', 'reason', 'phase', *flags}
+            or type(value.get('version')) is not int or value['version'] != 1
+            or value.get('reason') != 'cursor_lifetime_changed'
+            or value.get('phase') not in ('acquisition', 'pending_prefix', 'accepted_before_acquisition')
+            or any(type(value.get(key)) is not bool for key in flags)):
+        return None
+    return dict(value)
+
+
 def _event_fields(data, fields):
     if not isinstance(data, dict):
         return {}
@@ -318,6 +330,11 @@ def _event_fields(data, fields):
         if name not in data:
             continue
         value = data[name]
+        if name == 'cursor_failure':
+            clean = sanitize_cursor_failure(value)
+            if clean is not None:
+                result[name] = clean
+            continue
         if isinstance(value, Enum):
             value = value.value
         if value is None or type(value) in (bool, int) or (

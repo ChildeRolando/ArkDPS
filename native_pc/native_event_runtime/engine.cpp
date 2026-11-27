@@ -69,6 +69,13 @@ struct Runtime {
     std::uint64_t published_mode_epoch = 0;
     int desired_mode = -1;
     bool publication_ready=false;
+    std::unique_ptr<arkdps::capture::CompiledPlan> sampling_plan;
+    std::unique_ptr<arkdps::capture::Snapshot> sampling_snapshot;
+    JSValue sampling_dispatch=JS_UNDEFINED, sampling_record=JS_UNDEFINED;
+    std::uint64_t sampling_serial=0, sampling_attempts=0, sample_request=0, completed_sample_request=0, sample_mode_epoch=0;
+    std::string sampling_retry_reason;
+    std::string completed_sample_token, sample_kind, sample_opening_token;
+
     std::uint64_t published_ticket = 0;
     arkdps::capture::RecordHeader replay_header;
     JSValue replay_dispatch = JS_UNDEFINED, replay_batch = JS_UNDEFINED, batch_advance = JS_UNDEFINED;
@@ -609,6 +616,13 @@ JSValue js_replay_healthy(JSContext* c, JSValueConst, int, JSValueConst*) {
     return JS_NewBool(c,runtime.replay_active && arkdps::owned_js::binding().active
         && runtime.lanes->failure.load(std::memory_order_acquire)==0);
 }
+JSValue js_sampling_checkpoint(JSContext* c,JSValueConst,int count,JSValueConst* args) {
+    auto& r=state();const auto& owner=arkdps::owned_js::binding();
+    return JS_NewBool(c,count==1 && JS_IsObject(args[0]) && JS_IsObject(r.sampling_record)
+        && JS_VALUE_GET_PTR(args[0])==JS_VALUE_GET_PTR(r.sampling_record)
+        && r.replay_active && owner.active && owner.ticket==r.replay_header.ticket
+        && r.replay_header.phase==arkdps::capture::Phase::checkpoint);
+}
 JSValue js_pid(JSContext* c, JSValueConst, int, JSValueConst*) { return JS_NewUint32(c, GetCurrentProcessId()); }
 void function(JSContext* c, JSValueConst global, const char* name, JSCFunction* callback, int arguments) {
     JS_SetPropertyStr(c, global, name, JS_NewCFunction(c, callback, name, arguments));
@@ -946,6 +960,12 @@ void finish_replay_record(const PreparedReplay& item,JSValue answer,bool control
                     throw std::runtime_error("published configuration epoch does not bind captured scope point");
                 runtime.published_mode_epoch=header.scope_mode_epoch;
                 runtime.published_sequence=arkdps::capture::plan_uint(fence.at("sequence"),9007199254740991ULL);
+                if(header.publication_request && header.publication_request==runtime.sample_request
+                        && runtime.published_mode_epoch==runtime.capture_mode_epoch.load(std::memory_order_acquire)) {
+                    runtime.completed_sample_request=header.publication_request;
+                    runtime.completed_sample_token=fence.at("token").get<std::string>();
+                }
+
                 clear_cold_publication(runtime.cold_publication_request,header.publication_request,header.ticket,
                     runtime.lanes->minimum_publication_ticket.load(std::memory_order_acquire),header.scope_mode_epoch,
                     runtime.capture_mode_epoch.load(std::memory_order_acquire),header.closed_after && header.active_after==0);
@@ -1436,6 +1456,26 @@ extern "C" void* arkdps_on_leave(ReturnFrame* frame, std::uint64_t mode) noexcep
 }
 
 namespace arkdps {
+// Shared production/test installer: a capture-only clock bracket cannot become
+// an executable hook or read argument/entry state.
+void install_sampling_plan(Runtime& runtime,const nlohmann::json& source) {
+    auto plan=arkdps::capture::compile_plan(source,0);
+    if(source.value("profile",std::string())!="sampling_checkpoint"
+            || plan.plan->arg_count||plan.plan->arg_mask||!plan.cold||plan.plan->field_count!=2
+            ||plan.globals_valid!=1||plan.entry_root_count)
+        throw std::runtime_error("sampling plan requires independent clock roots and cold fallback");
+    for(unsigned i=0;i<2;++i) {
+        const auto& field=plan.plan->fields[i];
+        if(field.phase!=arkdps::capture::Phase::checkpoint||field.root!=arkdps::capture::Root::global_slot
+                ||field.root_index||field.offset||field.depth||field.kind!=arkdps::capture::Kind::bytes
+                ||field.bytes!=12||plan.roles.at(field.role-1)!=(i?"clock_close":"clock_open")
+                ||!field.guard_id||field.guard_id!=plan.plan->fields[0].guard_id
+                ||field.guard!=(i?arkdps::capture::Guard::after:arkdps::capture::Guard::before))
+            throw std::runtime_error("sampling clock bracket is not independent and paired");
+    }
+    runtime.configurations.intern(plan);
+    runtime.sampling_plan=std::make_unique<arkdps::capture::CompiledPlan>(std::move(plan));
+}
 void initialize_on_worker(const std::string& source) {
     auto& runtime = state();
     if (runtime.runtime) throw std::runtime_error("native runtime can only initialize once per process");
@@ -1458,6 +1498,7 @@ void initialize_on_worker(const std::string& source) {
     function(c,global,"__publishCaptureScope",js_publish_scope,1);
     function(c,global,"__publishCapturePublication",js_publish_publication,1);
     function(c,global,"__nativeReplayHealthy",js_replay_healthy,0);
+    function(c,global,"__nativeSamplingCheckpoint",js_sampling_checkpoint,1);
     install_controlled_advance(c,global);
     runtime.batch_advance=JS_GetPropertyStr(c,global,"__nativeBoundedReplayAdvance");
     function(c,global,"__send",js_send,1);function(c,global,"__nativeActive",js_active,0);function(c,global,"__pid",js_pid,0);
@@ -1477,6 +1518,16 @@ void initialize_on_worker(const std::string& source) {
         runtime.dispatch = JS_GetPropertyStr(c, global, "__arkdpsRequest");
         evaluate(c, source, "event-probe.js");
         runtime.prefix_projection=JS_GetPropertyStr(c,global,"__arkdpsOnClosedRecord");
+        runtime.sampling_dispatch=JS_GetPropertyStr(c,global,"__arkdpsSamplingDispatch");
+        auto sampling=JS_GetPropertyStr(c,global,"__arkdpsSamplingCapturePlan");
+        if(!JS_IsUndefined(sampling) && !JS_IsNull(sampling)) {
+            auto encoded=JS_JSONStringify(c,sampling,JS_UNDEFINED,JS_UNDEFINED);
+            if(JS_IsException(encoded)){JS_FreeValue(c,sampling);throw std::runtime_error("invalid sampling capture plan");}
+            const auto wire=string(c,encoded);JS_FreeValue(c,encoded);
+            install_sampling_plan(runtime,nlohmann::json::parse(wire));
+        }
+        JS_FreeValue(c,sampling);
+
         runtime.publication_publish=JS_GetPropertyStr(c,global,"__arkdpsPublishClosedRecord");
         runtime.publication_request=JS_GetPropertyStr(c,global,"__arkdpsPublicationRequest");
         runtime.mode_state=JS_GetPropertyStr(c,global,"__arkdpsCaptureModeState");
@@ -1508,15 +1559,117 @@ void initialize_on_worker(const std::string& source) {
         throw;
     }
 }
+// This is a new observation, independent of business hook traffic. It never
+// reserves a hook ticket, runs a game method, or changes a callback stack.
+bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMemory reader=arkdps::capture::capture_read,void* read_user=nullptr) {
+    using namespace arkdps::capture;
+    ++r.sampling_attempts;
+    if(!r.sampling_plan){r.sampling_retry_reason="sampling_plan_unavailable";return false;}
+    if(!request || r.active.load(std::memory_order_acquire)){r.sampling_retry_reason="sampling_callback_active";return false;}
+    const auto raw=r.lanes->reserved.load(std::memory_order_acquire);
+    const auto activity=r.activity_generation.load(std::memory_order_acquire);
+    const auto mode=r.capture_mode_epoch.load(std::memory_order_acquire);
+    if(r.processed_ticket!=raw || r.closed_ticket!=raw){r.sampling_retry_reason="sampling_raw_prefix_open";return false;}
+    const auto* config=r.configurations.pin(mode);
+    if(!r.sampling_snapshot)r.sampling_snapshot=std::make_unique<Snapshot>();
+    auto& snapshot=*r.sampling_snapshot;
+    Context context{};context.checkpoint=0;context.globals=r.sampling_plan->globals;context.globals_valid=r.sampling_plan->globals_valid;
+    RecordHeader header{};header.ticket=raw;header.mode_epoch=mode;header.scope_mode_epoch=mode;
+    header.publication_request=request;header.phase=Phase::checkpoint;
+    const bool cold=cold_publication_required(request,r.cold_publication_request.load(std::memory_order_acquire));
+    capture_scope_point(*r.sampling_plan,Phase::checkpoint,context,config,reader,read_user,snapshot,header,nullptr,cold);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    // Any producer, even one whose body was intentionally omitted, invalidates
+    // the sampled quiet prefix. Discard these bytes; never publish old values.
+    if(r.active.load(std::memory_order_acquire) || r.activity_generation.load(std::memory_order_acquire)!=activity
+            || r.lanes->reserved.load(std::memory_order_acquire)!=raw || r.capture_mode_epoch.load(std::memory_order_acquire)!=mode){r.sampling_retry_reason="sampling_native_activity_changed";return false;}
+    if(snapshot.error!=Error::ok) {
+        r.sampling_retry_reason="sampling_capture_error_"+std::to_string(static_cast<unsigned>(snapshot.error));
+        if(OwnedReplayView::structural(snapshot.error)) {
+            r.lanes->poison(LaneFault::publication_failure);
+            throw std::runtime_error("sampling structural capture error: "+std::to_string(static_cast<unsigned>(snapshot.error)));
+        }
+        require_cold_publication(r.cold_publication_request,request);return false;
+    }
+    const bool terminal_verified=r.terminal_fence.verified&&r.terminal_fence.accepts(0,raw,activity,reader,read_user);
+    if(r.active.load(std::memory_order_acquire)||r.activity_generation.load(std::memory_order_acquire)!=activity
+            ||r.lanes->reserved.load(std::memory_order_acquire)!=raw||r.capture_mode_epoch.load(std::memory_order_acquire)!=mode){r.sampling_retry_reason="sampling_terminal_activity_changed";return false;}
+    if(r.sampling_serial==UINT64_MAX)throw std::runtime_error("sampling checkpoint serial exhausted");
+    const auto serial=++r.sampling_serial;
+    nlohmann::json record{{"version",1},{"native_view",true},{"kind","sampling_checkpoint"},{"edge","checkpoint"},
+        {"ticket",std::to_string(raw)},{"sampling_serial",std::to_string(serial)},{"publication_request",std::to_string(request)},
+        {"sampling_terminal_verified",terminal_verified},{"checkpoint",0},{"closed_after",true},{"active_after",0},{"activity_begin",std::to_string(activity)},
+        {"activity_end",std::to_string(activity)},
+        {"facts",{{"mode_epoch",mode},{"scope_mode_epoch",mode},{"scope_revision",header.scope_revision},
+            {"publication_revision",header.publication_revision},{"cold_revision",header.cold_revision},
+            {"scope_unavailable",header.scope_unavailable},{"capture_concurrent",false},{"parent_checkpoints",nlohmann::json::array()}}}};
+    for(const auto* name:{"scope_revision","publication_revision","cold_revision"})if(record["facts"][name]==0)record["facts"].erase(name);
+    auto* c=r.context;arkdps::owned_js::Lease lease;
+    if(arkdps::owned_js::begin(snapshot.segments.data(),snapshot.segment_count,snapshot.fields.data(),snapshot.field_count,
+            snapshot.bytes.data(),snapshot.byte_count,r.configurations.roles,raw,snapshot.error)!=Error::ok)
+        throw std::runtime_error("sampling owned view rejected structural capture");
+    arkdps::owned_js::bind_graphs(config,header.scope_revision,header.publication_revision,mode,0);
+    r.replay_header=header;r.replay_active=true;
+    const auto wire=record.dump();auto item=JS_ParseJSON(c,wire.data(),wire.size(),"sampling-checkpoint.json");
+    r.sampling_record=JS_DupValue(c,item);
+    std::array<JSValue,2> args{{item,r.prefix_projection}};
+    auto result=JS_Call(c,r.sampling_dispatch,JS_UNDEFINED,args.size(),args.data());
+    r.replay_active=false;
+    if(JS_IsException(result)){JS_FreeValue(c,item);JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;throw std::runtime_error(exception(c));}
+    auto projection=JS_GetPropertyUint32(c,result,0),complete=JS_GetPropertyUint32(c,result,1);
+    const bool healthy=JS_IsBool(complete)&&JS_ToBool(c,complete)==1;
+    JS_FreeValue(c,complete);JS_FreeValue(c,result);
+    if(!healthy || r.lanes->failure.load(std::memory_order_acquire)) {
+        JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;JS_FreeValue(c,item);JS_FreeValue(c,projection);throw std::runtime_error("sampling checkpoint violated owned boundary");
+    }
+    if(JS_IsUndefined(projection)||JS_IsNull(projection)) {
+        JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;
+        r.sampling_retry_reason="sampling_projection_not_ready";JS_FreeValue(c,item);JS_FreeValue(c,projection);require_cold_publication(r.cold_publication_request,request);return false;
+    }
+    auto terminal=JS_GetPropertyStr(c,projection,"terminal_read");
+    const bool terminal_projection=!JS_IsUndefined(terminal)&&!JS_IsNull(terminal);JS_FreeValue(c,terminal);
+    if(terminal_projection && (!r.terminal_fence.accepts(0,raw,activity,reader,read_user)
+            ||r.active.load(std::memory_order_acquire)||r.activity_generation.load(std::memory_order_acquire)!=activity
+            ||r.lanes->reserved.load(std::memory_order_acquire)!=raw||r.capture_mode_epoch.load(std::memory_order_acquire)!=mode)) {
+        JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;
+        r.sampling_retry_reason="sampling_terminal_not_current";JS_FreeValue(c,item);JS_FreeValue(c,projection);return false;
+    }
+    std::array<JSValue,3> publish_args{{item,projection,JS_TRUE}};
+    r.replay_active=true;auto published=JS_Call(c,r.publication_publish,JS_UNDEFINED,publish_args.size(),publish_args.data());r.replay_active=false;
+    JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;
+    JS_FreeValue(c,item);JS_FreeValue(c,projection);
+    if(JS_IsException(published))throw std::runtime_error(exception(c));
+    auto encoded=JS_JSONStringify(c,published,JS_UNDEFINED,JS_UNDEFINED);JS_FreeValue(c,published);
+    if(JS_IsException(encoded))throw std::runtime_error(exception(c));
+    const auto text=string(c,encoded);JS_FreeValue(c,encoded);const auto receipt=nlohmann::json::parse(text);
+    if(receipt.value("native_publication_failure",false)||!receipt.value("error",nlohmann::json()).is_null())
+        throw std::runtime_error("sampling publication failed");
+    if(receipt.value("retry",false)){r.sampling_retry_reason="sampling_journal_not_ready";return false;}
+    const auto& fence=receipt.at("native_publication");
+    if(fence.at("closed_ticket")!=std::to_string(raw)||fence.at("sampling_serial")!=std::to_string(serial)
+            ||fence.at("sample_request")!=std::to_string(request)
+            ||plan_uint(receipt.at("native_capture_scope_mode_epoch"),9007199254740991ULL)!=mode)
+        throw std::runtime_error("sampling publication certificate mismatch");
+    r.publication_ready=true;r.published_ticket=raw;r.published_mode_epoch=mode;
+    r.published_sequence=plan_uint(fence.at("sequence"),9007199254740991ULL);
+    r.completed_sample_request=request;r.completed_sample_token=fence.at("token").get<std::string>();
+    auto pending=request;r.lanes->pending_publication.compare_exchange_strong(pending,0,std::memory_order_acq_rel);
+    auto required=r.cold_publication_request.load(std::memory_order_acquire);
+    if(cold_publication_required(request,required))r.cold_publication_request.compare_exchange_strong(required,0,std::memory_order_acq_rel);
+    r.sampling_retry_reason.clear();
+    // A sampling checkpoint cannot manufacture terminal-destruction evidence.
+    return true;
+}
+
 std::string readiness_on_worker() {
     auto& runtime = state();
     if (!runtime.initialized || !runtime.fatal.empty()) throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
     return runtime.ready;
 }
-std::string request_on_worker(const std::string& json, std::uint64_t minimum_ticket) {
+std::string request_on_worker(const std::string& json,std::uint64_t legacy_minimum=0) {
     auto& runtime=state();
     if (json.size()>8*max_read) throw std::runtime_error("request too large");
-    const auto command=nlohmann::json::parse(json,[](int depth,nlohmann::json::parse_event_t,nlohmann::json&) {
+    auto command=nlohmann::json::parse(json,[](int depth,nlohmann::json::parse_event_t,nlohmann::json&) {
         if (depth>64) throw std::runtime_error("request nesting exceeds limit");
         return true;
     });
@@ -1582,6 +1735,10 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
             {"publication_lag_records",runtime.processed_ticket-runtime.published_ticket},
             {"published_event_sequence",runtime.published_sequence},{"delivered_event_sequence",runtime.delivered_sequence},
             {"read_prefix_lag_events",runtime.published_sequence>=runtime.delivered_sequence ? runtime.published_sequence-runtime.delivered_sequence : 0}};
+        state["sampling"]={{"version",1},{"plan_available",runtime.sampling_plan!=nullptr},
+            {"attempts",runtime.sampling_attempts},{"serial",std::to_string(runtime.sampling_serial)},
+            {"request",std::to_string(runtime.sample_request)},{"completed_request",std::to_string(runtime.completed_sample_request)},
+            {"retry_reason",runtime.sampling_retry_reason}};
         state["batch_fallback_reasons"]={{"unsupported_plan",runtime.replay_fallbacks[1]},{"methods_unavailable",runtime.replay_fallbacks[2]},
             {"argument_contract",runtime.replay_fallbacks[3]},{"missing_root",runtime.replay_fallbacks[4]},{"parent_or_nested",runtime.replay_fallbacks[5]},
             {"concurrent",runtime.replay_fallbacks[6]},{"cold_or_publication",runtime.replay_fallbacks[7]}};
@@ -1639,31 +1796,94 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
         if (sequence>runtime.delivered_sequence) throw std::runtime_error("native ACK exceeds delivered event prefix");
     }
     const bool publication_operation=operation=="mark" || operation=="read" || operation=="terminal_read" || operation=="ack";
-    if (operation=="mark") {
+    if (operation=="mark" && !command.contains("sampling")) {
+        // Providers without the sampling capability retain their original
+        // callback admission contract. A retry is a new request, including a
+        // new cold candidate; it cannot reuse an exhausted callback claim.
         const auto terminal_ready=[&]() noexcept {
-            if (runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)) return false;
+            if(runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire))return false;
             const auto active=runtime.active.load(std::memory_order_acquire);
             const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
             const auto activity=runtime.activity_generation.load(std::memory_order_acquire);
-            if (!runtime.terminal_fence.accepts(active,reserved,activity,arkdps::capture::capture_read,nullptr)) return false;
+            if(!runtime.terminal_fence.accepts(active,reserved,activity,arkdps::capture::capture_read,nullptr))return false;
             std::atomic_thread_fence(std::memory_order_seq_cst);
             return runtime.active.load(std::memory_order_acquire)==0
                 && runtime.lanes->reserved.load(std::memory_order_acquire)==reserved
                 && runtime.activity_generation.load(std::memory_order_acquire)==activity;
         };
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(100);
-        while (!terminal_ready() && (runtime.published_ticket<minimum_ticket || runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)) && std::chrono::steady_clock::now()<deadline) {
-            const bool ready_more=drain_captures();
-            if (!runtime.fatal.empty()) throw std::runtime_error(runtime.fatal);
-            if (!ready_more && (runtime.published_ticket<minimum_ticket || runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire))) Sleep(1);
+        const auto waiting=[&]() {return !terminal_ready() && (runtime.published_ticket<legacy_minimum
+            ||runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire));};
+        while(waiting() && std::chrono::steady_clock::now()<deadline) {
+            const bool more=drain_captures();
+            if(!runtime.fatal.empty())throw std::runtime_error(runtime.fatal);
+            if(!more && waiting())Sleep(1);
         }
-        if (!terminal_ready() && (runtime.published_ticket<minimum_ticket || runtime.published_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)))
+        if(waiting())return nlohmann::json{{"retry",true},{"error",nullptr},{"stopped",false},
+            {"events",nlohmann::json::array()},{"hp_context",nlohmann::json::array()},
+            {"mark_retry_reason","native_fresh_publication_not_ready"},{"native_async_capture",async_state()}}.dump();
+    } else if (operation=="mark") {
+        const auto sampling=command.at("sampling").get<std::string>();
+        if(sampling!="fresh" && sampling!="confirm")throw std::runtime_error("invalid sampling transaction operation");
+        auto retained=[&](const std::string& token) {
+            const auto query=nlohmann::json{{"operation","mark"},{"sampling","receipt"},{"publication_token",token}}.dump();
+            auto* c=runtime.context;auto arg=JS_ParseJSON(c,query.data(),query.size(),"sampling-token.json");
+            runtime.replay_active=true;auto answer=JS_Call(c,runtime.publication_request,JS_UNDEFINED,1,&arg);runtime.replay_active=false;JS_FreeValue(c,arg);
+            if(JS_IsException(answer))throw std::runtime_error(exception(c));
+            auto encoded=JS_JSONStringify(c,answer,JS_UNDEFINED,JS_UNDEFINED);JS_FreeValue(c,answer);
+            if(JS_IsException(encoded))throw std::runtime_error(exception(c));
+            const auto wire=string(c,encoded);JS_FreeValue(c,encoded);return nlohmann::json::parse(wire);
+        };
+        if(sampling=="confirm") {
+            if(!command.contains("publication_token") || !command.at("publication_token").is_string())throw std::runtime_error("confirmation requires publication token");
+            const auto opening=retained(command.at("publication_token").get<std::string>());
+            if(opening.value("retry",false))return opening.dump();
+        }
+        std::uint64_t requested=0;
+        if(command.contains("sample_request")) {
+            const auto text=command.at("sample_request").get<std::string>();
+            if(text.empty()||text.size()>20||text.find_first_not_of("0123456789")!=std::string::npos || (text.size()>1&&text[0]=='0'))
+                throw std::runtime_error("invalid sample request identity");
+            requested=std::stoull(text);
+            if(!requested || requested!=runtime.sample_request)throw std::runtime_error("sample request no longer active");
+            if(runtime.sample_kind!=sampling || runtime.sample_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)
+                    || (sampling=="confirm" && runtime.sample_opening_token!=command.at("publication_token").get<std::string>()))
+                throw std::runtime_error("sample request transaction binding changed");
+        } else {
+            requested=runtime.lanes->request_serial.fetch_add(1,std::memory_order_acq_rel)+1;
+            if(!requested)throw std::runtime_error("sample request identity exhausted");
+            runtime.sample_request=requested;runtime.sample_kind=sampling;
+            runtime.sample_mode_epoch=runtime.capture_mode_epoch.load(std::memory_order_acquire);
+            runtime.sample_opening_token=sampling=="confirm"?command.at("publication_token").get<std::string>():std::string();
+            const auto reserved=runtime.lanes->reserved.load(std::memory_order_acquire);
+            if(reserved==UINT64_MAX)throw std::runtime_error("native capture ticket exhausted");
+            runtime.lanes->minimum_publication_ticket.store(reserved+1,std::memory_order_release);
+            runtime.lanes->publication_attempts.store(0,std::memory_order_release);
+            runtime.lanes->pending_publication.store(requested,std::memory_order_release);
+        }
+        const auto mode=runtime.capture_mode_epoch.load(std::memory_order_acquire);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(100);
+        while ((runtime.completed_sample_request!=requested || runtime.published_mode_epoch!=mode) && std::chrono::steady_clock::now()<deadline) {
+            drain_captures();
+            if(!runtime.fatal.empty())throw std::runtime_error(runtime.fatal);
+            if(runtime.completed_sample_request==requested && runtime.published_mode_epoch==mode)break;
+            try {if(sample_checkpoint(runtime,requested))break;}
+            catch(const std::exception& error) {
+                runtime.lanes->poison(capture::LaneFault::publication_failure);fail(error.what());throw;
+            }
+            Sleep(1);
+        }
+        if(runtime.completed_sample_request!=requested || runtime.published_mode_epoch!=mode)
             return nlohmann::json{{"retry",true},{"error",nullptr},{"stopped",false},
                 {"events",nlohmann::json::array()},{"hp_context",nlohmann::json::array()},
+                {"native_sample_request",std::to_string(requested)},
                 {"mark_retry_reason","native_fresh_publication_not_ready"},{"native_async_capture",async_state()}}.dump();
+        command["sampling"]="receipt";command["publication_token"]=runtime.completed_sample_token;
+        command["sample_request"]=std::to_string(requested);
     }
     JS_UpdateStackTop(runtime.runtime);
-    JSValue argument=publication_operation ? JS_ParseJSON(runtime.context,json.data(),json.size(),"native-command.json")
+    const auto journal_command=command.dump();
+    JSValue argument=publication_operation ? JS_ParseJSON(runtime.context,journal_command.data(),journal_command.size(),"native-command.json")
                                           : JS_NewStringLen(runtime.context,json.data(),json.size());
     if (JS_IsException(argument)) throw std::runtime_error(exception(runtime.context));
     // Publication requests are pure journal operations. C++ primitives must
@@ -1694,6 +1914,7 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
     if (!response.is_object()) throw std::runtime_error("native worker reply must be an object");
     response.erase("native_quiet_boundary_version"); response.erase("native_deferred_callbacks");
     response["native_async_capture"]=async_state();
+    if(operation=="mark" && command.contains("sample_request"))response["native_sample_request"]=command.at("sample_request");
     if ((operation=="read" || operation=="terminal_read") && response.value("error",nlohmann::json()).is_null()
                && !response.value("retry",false) && response.contains("events") && response.at("events").is_array()) {
         const auto after=arkdps::capture::plan_uint(command.at("after"),UINT64_MAX);
@@ -1733,23 +1954,26 @@ std::string readiness() {
 }
 std::string request(const std::string& json) {
     if (json.size()>8*max_read) throw std::runtime_error("request too large");
-    const auto command=nlohmann::json::parse(json,[](int depth,nlohmann::json::parse_event_t,nlohmann::json&) {
+    auto command=nlohmann::json::parse(json,[](int depth,nlohmann::json::parse_event_t,nlohmann::json&) {
         if (depth>64) throw std::runtime_error("request nesting exceeds limit");
         return true;
     });
-    std::uint64_t minimum=0;
-    if (command.value("operation",std::string())=="mark") {
+    std::uint64_t legacy_minimum=0;
+    if(command.value("operation",std::string())=="mark" && !command.contains("sampling")) {
+        // Register legacy publication before queuing behind replay work, so a
+        // producer arriving during that work still captures this request.
         auto* lanes=state().ingress.load(std::memory_order_acquire);
-        if (!lanes) throw std::runtime_error("native capture not initialized");
+        if(!lanes)throw std::runtime_error("native capture not initialized");
         const auto reserved=lanes->reserved.load(std::memory_order_acquire);
-        if (reserved==UINT64_MAX) throw std::runtime_error("native capture ticket exhausted");
-        minimum=reserved+1;
-        lanes->minimum_publication_ticket.store(minimum,std::memory_order_release);
+        if(reserved==UINT64_MAX)throw std::runtime_error("native capture ticket exhausted");
+        legacy_minimum=reserved+1;
+        lanes->minimum_publication_ticket.store(legacy_minimum,std::memory_order_release);
         const auto revision=lanes->request_serial.fetch_add(1,std::memory_order_acq_rel)+1;
+        if(!revision)throw std::runtime_error("sample request identity exhausted");
         lanes->publication_attempts.store(0,std::memory_order_release);
         lanes->pending_publication.store(revision,std::memory_order_release);
     }
-    return state().worker.submit([json,minimum] { return request_on_worker(json,minimum); });
+    return state().worker.submit([json,legacy_minimum] { return request_on_worker(json,legacy_minimum); });
 }
 std::uint64_t timing_begin() noexcept {
     return timing_state.enabled.load(std::memory_order_relaxed) ? ticks_now() : 0;

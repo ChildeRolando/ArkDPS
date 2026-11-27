@@ -272,3 +272,17 @@ def test_uncertain_counter_allows_crossed_atomic_snapshot_and_preserves_generati
     saved = [json.loads(s) for s in next(tmp_path.glob('wpf-*.jsonl')).read_text(encoding='utf-8').splitlines()]
     rows = [r['data']['async_capture']['lane_metrics'][0] for r in saved if r['kind']=='native_performance_timing']
     assert [(r['lane_generation'], r['capture_uncertain_records']) for r in rows] == [(3, 21), (4, 2)]
+
+
+
+def test_sampling_diagnostic_keeps_request_and_finite_rejection_without_game_values():
+    raw=raw_async()
+    raw['sampling']=dict(version=1, plan_available=True, attempts=10, serial='7', request='8',
+                         completed_request='6', retry_reason='sampling_native_activity_changed', secret='private')
+    value=clean(raw)
+    assert value['available'] is True
+    assert value['sampling']['request']=='8'
+    assert value['sampling']['retry_reason']=='sampling_native_activity_changed'
+    assert 'private' not in repr(value)
+    raw['sampling']['retry_reason']='C:/private/config'
+    assert clean(raw)['available'] is False

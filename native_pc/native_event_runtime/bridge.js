@@ -133,6 +133,25 @@ function __arkdpsReplayDispatch(header,callback,receiver,payload,argumentMask,pr
  if(!result[2])result.push(replay.diagnostic||__arkdpsReplayDiagnostic(replay));
  return result;
 }
+// Only the exact record issued under the native owned lease can be branded.
+const __arkdpsSamplingAuthority=(()=>{const records=new WeakSet(),publishable=new WeakSet();
+ const verify=globalThis.__nativeSamplingCheckpoint;
+ return Object.freeze({
+  admit(record){if(typeof verify!=='function'||verify(record)!==true)throw Error('sampling checkpoint lacks native authority');
+   const freeze=value=>{if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value);}return value;};
+   freeze(record);records.add(record);publishable.add(record);},
+  verified:record=>records.has(record)&&__arkdpsReplay!==null&&__arkdpsReplay.record===record,
+  consume:record=>typeof verify==='function'&&verify(record)===true&&publishable.delete(record)
+ });})();
+function __arkdpsVerifiedSamplingCheckpoint(record){return __arkdpsSamplingAuthority.verified(record);}
+function __arkdpsConsumeSamplingCheckpoint(record){return __arkdpsSamplingAuthority.consume(record);}
+function __arkdpsSamplingDispatch(record,prefix){
+ if(record?.kind!=='sampling_checkpoint'||record.edge!=='checkpoint'||typeof prefix!=='function')throw Error('invalid sampling checkpoint');
+ __arkdpsSamplingAuthority.admit(record);__arkdpsReplayBegin(record);let projection,complete;
+ try{if(!__nativeReplayHealthy())__arkdpsReplayGap('sampling owned view unavailable');projection=prefix(record);}
+ finally{complete=__arkdpsReplayEnd(true);}
+ return [projection,complete];
+}
 // The bootstrap captures actual native control function identities before the
 // probe source runs. Only a successful native advance can mint a one-shot
 // permit; callbacks receive neither controller, permit nor authority state.

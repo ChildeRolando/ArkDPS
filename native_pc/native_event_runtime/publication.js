@@ -1,6 +1,7 @@
 // One worker owns this journal. Game callbacks only own native capture lanes.
 // Publishing a closed prefix never acknowledges it or reads live game memory.
 'use strict';
+const __arkdpsConsumeSamplingPublication=typeof __arkdpsConsumeSamplingCheckpoint==='function'?__arkdpsConsumeSamplingCheckpoint:null;
 class ArkdpsPublicationJournal {
  constructor(options={}){
   this.maxEvents=options.maxEvents??100000;
@@ -10,7 +11,7 @@ class ArkdpsPublicationJournal {
    if(!Number.isSafeInteger(n)||n<=0)throw new Error('invalid publication budget');
   this.events=[];this.contexts=[];this.marks=[];this.bytes=0;
   this.acknowledged=0;this.readThrough=0;this.publishedThrough=0;
-  this.rawClosed=0n;this.serial=0;this.failure=null;this.latest=null;
+  this.rawClosed=0n;this.samplingSerial=0n;this.serial=0;this.failure=null;this.latest=null;
  }
  integer(value){return Number.isSafeInteger(value)&&value>=0;}
  raw(value){
@@ -55,10 +56,15 @@ class ArkdpsPublicationJournal {
   catch(error){return this.fail(error.message||error);}
  }
  publishChecked(record,p,receiptOnly=false){
-  if(record?.version!==1||record.edge!=='leave'||record.closed_after!==true||record.active_after!==0)
+  const sampling=record?.kind==='sampling_checkpoint';
+  if(sampling&&(__arkdpsConsumeSamplingPublication===null||!__arkdpsConsumeSamplingPublication(record)))
+   throw new Error('sampling publication lacks native authority');
+  if(record?.version!==1||(sampling?record.edge!=='checkpoint':record.edge!=='leave')||record.closed_after!==true||record.active_after!==0)
    throw new Error('publication lacks a captured closed leave');
   const ticket=this.raw(record.ticket),begin=this.raw(record.activity_begin),end=this.raw(record.activity_end);
-  if(ticket<=this.rawClosed||end!==begin+1n)throw new Error('publication raw prefix regressed or remained open');
+  const sample=sampling?this.raw(record.sampling_serial):0n;
+  if(sampling?(ticket<this.rawClosed||end!==begin||sample<=this.samplingSerial):(ticket<=this.rawClosed||end!==begin+1n))
+   throw new Error('publication raw prefix regressed or remained open');
   if(!p||p.mark?.retry)return this.retry('native_publication_not_ready');
   if(p.mark?.error||p.mark?.stopped)throw new Error('native publication producer failed or stopped');
   const m=p.mark;
@@ -90,7 +96,8 @@ class ArkdpsPublicationJournal {
   const terminal_verified=this.terminalVerified(m,p.terminal_read,p.acknowledged);
   const token=ticket.toString()+':'+(this.serial+1);
   const fence={version:1,token,closed_ticket:ticket.toString(),activity_begin:begin.toString(),
-   activity_end:end.toString(),sequence:m.sequence,epoch:m.epoch,terminal_verified};
+   activity_end:end.toString(),sequence:m.sequence,epoch:m.epoch,terminal_verified,
+   ...(sampling?{kind:'sampling_checkpoint',sampling_serial:sample.toString(),sample_request:record.publication_request}:{})};
   const mark=this.own({...m,native_publication:fence}),fields=this.own(p.read_fields);
   // The event journal is the sole owner of retained normalized events.
   // Terminal metadata must not duplicate the entire unacknowledged prefix.
@@ -109,7 +116,7 @@ class ArkdpsPublicationJournal {
   this.bytes+=cost;
   this.marks.push(published);
   for(let i=0;i<retire;i++){const old=this.marks.shift();this.bytes-=old.bytes;}
-  this.latest=published;this.rawClosed=ticket;this.publishedThrough=m.sequence;this.serial++;
+  this.latest=published;this.rawClosed=ticket;if(sampling)this.samplingSerial=sample;this.publishedThrough=m.sequence;this.serial++;
   // The native worker only needs this bounded certificate. It never serves
   // this return value to a host: mark/read still use owned journal snapshots.
   if(receiptOnly)return {retry:false,error:null,native_publication:fence,
@@ -172,7 +179,13 @@ const __arkdpsPublicationJournal=new ArkdpsPublicationJournal();
 function __arkdpsPublishClosedRecord(record,projection,receiptOnly=false){return __arkdpsPublicationJournal.publish(record,projection,receiptOnly);}
 function __arkdpsPublicationRequest(command){
  switch(command.operation){
-  case 'mark':return __arkdpsPublicationJournal.mark();
+  case 'mark':{
+   if(command.sampling==='receipt'){
+    const pub=__arkdpsPublicationJournal.select(command.publication_token);
+    return pub?__arkdpsPublicationJournal.copy(pub.mark):__arkdpsPublicationJournal.retry('native_publication_token_expired');
+   }
+   return __arkdpsPublicationJournal.mark();
+  }
   case 'read':case 'terminal_read':return __arkdpsPublicationJournal.read(command,__arkdpsPublicationServed);
   case 'ack':return __arkdpsPublicationJournal.ack(command.sequence,sequence=>rpc.exports.ackEvents(sequence));
   default:throw new Error('unknown native publication request');

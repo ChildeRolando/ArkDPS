@@ -24,7 +24,7 @@ from event_observer import ObserverStatus
 from event_probe import (NATIVE_PC_CONTRACT, NativePcBinding, ObserverReadRetry, AssembledProbeSource,
                          assemble_probe_source, ready_probe_modes, acquire_native_terminal_tail,
                          reset_probe_cursor, commit_probe_prefix, check_round_start_range, read_probe_range,
-                         request_capture_pause,
+                         request_capture_pause, check_cursor_lifetime,
                          finite_message_number as _finite_number,
                          reject_message_constant as _reject_constant,
                          unique_message_fields as _unique_fields)
@@ -728,6 +728,10 @@ class NativeHookEventProbe:
         self._native_timing_may_be_enabled = False
         self._native_timing_confirmed = False
         self._publication_token = None
+        self._sampling_supported = False
+        self._sample_request = None
+        self._sample_options = None
+        self._sampling_anchor = None
         self._pressure_since = None
         self._pressure_next = 0.0
         self._pressure_reported = False
@@ -857,6 +861,8 @@ class NativeHookEventProbe:
                 if not process.process_alive():
                     raise RuntimeError('游戏进程在原生组件偏好初始化期间退出')
             self.probe_modes = ready_probe_modes(hello['ready'])
+            sampling_version = hello['ready'].get('native_sampling_version')
+            self._sampling_supported = type(sampling_version) is int and sampling_version == 1
             if type(hello.get('capture_pause_version')) is int and hello['capture_pause_version'] == 1:
                 self.probe_modes['native_capture_pause_version'] = 1
             self.probe_modes['probe_source'] = dict(assembled.audit(), provider=PROVIDER, protocol=PROTOCOL,
@@ -975,6 +981,16 @@ class NativeHookEventProbe:
             arguments['publication_token'] = requested_publication
 
         def bind(raw):
+            if operation == 'mark' and self._sampling_supported:
+                request = raw.get('native_sample_request')
+                if request is not None and (not isinstance(request, str)
+                        or re.fullmatch(r'[1-9][0-9]{0,19}', request) is None
+                        or int(request) > 0xffffffffffffffff):
+                    raise RuntimeError('PC 采样请求身份无效')
+                if arguments.get('sampling') == 'fresh':
+                    # Binding can yield before returning to mark(). Keep the
+                    # still-unfulfilled producer request across that retry.
+                    self._sample_request = request if raw.get('retry') else None
             result = self.binding.bind(operation, raw)
             if operation in ('mark', 'read') and not any(result.get(key) for key in ('retry', 'error', 'stopped')):
                 publication = result.get('native_publication')
@@ -1024,11 +1040,40 @@ class NativeHookEventProbe:
         return {} if self._autochess_enabled is None else dict(autochess_enabled=self._autochess_enabled())
 
     def mark(self):
-        return self._request('mark', native_publication_version=1, **self._mark_options())
+        options = self._mark_options()
+        self._sampling_anchor = None
+        arguments = {}
+        if self._sampling_supported:
+            current = tuple(sorted(options.items()))
+            if current != self._sample_options:
+                self._sample_request = None
+            self._sample_options = current
+            arguments['sampling'] = 'fresh'
+            if self._sample_request is not None:
+                arguments['sample_request'] = self._sample_request
+        result = self._request('mark', native_publication_version=1, **arguments, **options)
+        if self._sampling_supported:
+            self._sampling_anchor = result, self._cursor_lifetime
+        return result
+
+    def confirm_mark(self, opening):
+        if not getattr(self, '_sampling_supported', False):
+            return self.mark()
+        anchor = self._sampling_anchor
+        if anchor is None or anchor[0] is not opening:
+            raise RuntimeError('PC 采样确认不是当前事务的原始标记')
+        check_cursor_lifetime(self, anchor[1])
+        token = self._validated_publication_token(opening)
+        self._sampling_anchor = None
+        # Native confirmation takes new owned evidence at the current prefix;
+        # it never waits for a future business hook or retimestamps this mark.
+        return self._request('mark', sampling='confirm', publication_token=token,
+                             native_publication_version=1, **self._mark_options())
 
     @staticmethod
     def _validated_publication_token(result):
         publication = result.get('native_publication')
+        sampling = isinstance(publication, dict) and publication.get('kind') == 'sampling_checkpoint'
         if (not isinstance(publication, dict) or type(publication.get('version')) is not int
                 or publication['version'] != 1 or not isinstance(publication.get('token'), str)
                 or re.fullmatch(r'[0-9]{1,20}:[1-9][0-9]{0,15}', publication['token']) is None
@@ -1036,14 +1081,22 @@ class NativeHookEventProbe:
                        or re.fullmatch(r'(?:0|[1-9][0-9]{0,19})', publication[key]) is None
                        or int(publication[key]) > 0xffffffffffffffff
                        for key in ('closed_ticket', 'activity_begin', 'activity_end'))
-                or int(publication['closed_ticket']) <= 0
+                or int(publication['closed_ticket']) <= 0 and not sampling
                 or publication['token'].split(':', 1)[0] != publication['closed_ticket']
-                or int(publication['activity_end']) != int(publication['activity_begin']) + 1
+                or int(publication['activity_end']) != int(publication['activity_begin']) + (0 if sampling else 1)
                 or any(type(publication.get(key)) is not int or publication[key] < 0
                        for key in ('sequence', 'epoch'))
                 or 'sequence' in result and publication['sequence'] != result['sequence']
                 or 'epoch' in result and publication['epoch'] != result['epoch']):
             raise RuntimeError('PC 异步采集缺少完整闭合发布前缀')
+        if sampling:
+            for key in ('sampling_serial', 'sample_request'):
+                value = publication.get(key)
+                if (not isinstance(value, str) or re.fullmatch(r'[1-9][0-9]{0,19}', value) is None
+                        or int(value) > 0xffffffffffffffff):
+                    raise RuntimeError('PC 独立采样缺少现场序号或请求身份')
+        elif 'kind' in publication:
+            raise RuntimeError('PC 发布前缀类型无效')
         return publication['token']
 
     @property

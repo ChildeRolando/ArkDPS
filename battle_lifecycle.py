@@ -21,7 +21,7 @@ from autochess_context import (NATIVE_AUTOCHESS_CHARACTER_COUNTERS, native_autoc
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch,
-                           read_pending_scope_prefix)
+                           read_pending_scope_prefix, confirm_sampling_mark)
 from event_observer import ObserverReadRetry
 from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
@@ -397,8 +397,9 @@ def _terminal_boundary(observer, capture=None, *, deadline=None):
                                    else {'status': 'candidate', 'reason': 'raw_boundary_received'}}
 
 
-def _observer_mark(observer, *, retry_busy=False, with_presence=False):
-    read = observer.mark_with_presence if with_presence else observer.mark
+def _observer_mark(observer, *, retry_busy=False, with_presence=False, opening=None):
+    read = ((observer.mark_with_presence if with_presence else observer.mark) if opening is None
+            else lambda: confirm_sampling_mark(observer, opening, with_presence=with_presence))
     try:
         mark = read()
     except CallbackBusyMark:
@@ -746,7 +747,7 @@ class BattleFeed:
                 self._next_android_presence = now + ANDROID_PRESENCE_INTERVAL
                 self._android_presence_seq += 1
             try:
-                end_mark = _observer_mark(observer, with_presence=with_presence)
+                end_mark = _observer_mark(observer, with_presence=with_presence, opening=mark)
             except ObserverReadRetry as exc:
                 raise CaptureRetry(str(exc)) from exc
             sequence = self._project_event_window(sample, mark, end_mark)
@@ -793,7 +794,7 @@ class BattleFeed:
             scoped_pc = (sample.get('state') == 2 and metadata.get('platform') == 'native_pc'
                          and 'AUTOCHESS' in str(metadata.get('stage_id', '')).upper()
                          and autochess_event_mark_context(sample, mark) is not None)
-            end_mark = _observer_mark(observer, retry_busy=scoped_pc)
+            end_mark = _observer_mark(observer, retry_busy=scoped_pc, opening=mark)
             if scoped_pc:
                 BattleFeed._project_event_window(sample, mark, end_mark)
             if not isinstance(contract_for(observer), NativePcProbeContract):
@@ -912,9 +913,9 @@ class BattleFeed:
         check_cursor_lifetime(observer, cursor_lifetime)
         pending = self._pending_scope
         if pending is not None:
-            check_cursor_lifetime(observer, pending['cursor_lifetime'])
             if observer is not pending['observer']:
-                raise CaptureRetry('pending scope observer changed before its prefix committed')
+                raise CaptureRetry('pending scope observer unavailable before its prefix committed')
+            check_cursor_lifetime(observer, pending['cursor_lifetime'], phase='pending_prefix')
             anchor = pending['anchor']
             if ((sample.get('autochess_context') or {}).get('identity') !=
                     anchor['sample']['autochess_context']['identity']):
@@ -2056,12 +2057,18 @@ class BattleRuntime:
 
     @timed('capture_acquire')
     def _acquire(self, collector, observer):
+        pending = self.feed._pending_scope
+        if pending is not None and observer is not None and observer is not pending['observer']:
+            # A replacement source cannot certify the retired source's anchor.
+            # Absence alone is not retirement: a temporary snapshot-only read
+            # must retain the owned prefix for the original source to return.
+            self.observer_retired(pending['observer'])
         published_observer = None
         accepted = self._accepted_event_observer
         if (accepted is not None and accepted[1] == self.sessions.generation
                 and accepted[0] is observer and len(accepted) > 2
                 and probe_cursor_lifetime(observer) is not accepted[2]):
-            raise StreamGap('accepted observer cursor lifetime changed before acquisition')
+            check_cursor_lifetime(observer, accepted[2], phase='accepted_before_acquisition')
         if (accepted is not None and accepted[1] == self.sessions.generation
                 and (len(accepted) < 3 or probe_cursor_lifetime(accepted[0]) is accepted[2])):
             published_observer = accepted[0]
@@ -2197,6 +2204,12 @@ class BattleRuntime:
         return observation
 
     def observer_retired(self, observer):
+        pending = self.feed._pending_scope
+        if pending is not None and pending['observer'] is observer:
+            # Preserve a replayable coverage break, without emitting the held
+            # sample as though its unconsumed tail had been verified.
+            self.feed._pending_scope = None
+            self._consume(self.feed.gap('pending_scope_observer_retired'))
         if self._accepted_event_observer is not None and self._accepted_event_observer[0] is observer:
             self._accepted_event_observer = None
         if self._pending_event_ack is not None and self._pending_event_ack[0] is observer:

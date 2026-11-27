@@ -266,3 +266,26 @@ def test_native_replay_gap_numeric_context_survives_non_debug_journal(tmp_path):
     data = failure['data']
     assert {k: data[k] for k in fields} == fields
     assert 'reason' not in data
+
+
+@pytest.mark.parametrize('debug', [False, True])
+def test_cursor_failure_context_is_bounded_in_normal_and_debug_journal(tmp_path, debug):
+    detail = dict(version=1, reason='cursor_lifetime_changed', phase='pending_prefix',
+                  owner_matches=True, observer_present=True, expected_present=True, actual_present=True)
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               header=_test_header, debug_mode=debug) as journal:
+        journal.write('capture_error', dict(error_type='StreamGap', cursor_failure=detail))
+    log, = tmp_path.glob('wpf-*.jsonl')
+    row = next(row for row in _records(log) if row['kind'] == 'capture_error')
+    assert row['data']['cursor_failure'] == detail
+
+
+def test_cursor_failure_normal_journal_refuses_unknown_text(tmp_path):
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               header=_test_header, debug_mode=False) as journal:
+        journal.write('capture_error', dict(error_type='StreamGap', cursor_failure={
+            'version':1, 'reason':'cursor_lifetime_changed', 'phase':'C:/private/token'}))
+    log, = tmp_path.glob('wpf-*.jsonl')
+    row = next(row for row in _records(log) if row['kind'] == 'capture_error')
+    assert 'cursor_failure' not in row['data']
+    assert 'private' not in repr(row)

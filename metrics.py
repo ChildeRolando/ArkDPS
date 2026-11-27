@@ -201,6 +201,24 @@ def sanitize_native_async_capture(data, *, native=None, identity=None):
         return unavailable('invalid_numbers')
     result = dict(schema=1, version=1, available=True, pid=bound[0], process_created_filetime=bound[1])
     result.update((key, data[key]) for key in numbers + booleans)
+    if 'sampling' in data:
+        sampling = data['sampling']
+        reasons = ('', 'sampling_plan_unavailable', 'sampling_callback_active', 'sampling_raw_prefix_open',
+                   'sampling_native_activity_changed', 'sampling_terminal_activity_changed',
+                   'sampling_projection_not_ready', 'sampling_terminal_not_current', 'sampling_journal_not_ready')
+        def raw_decimal(value):
+            return (type(value) is str and 1 <= len(value) <= 20 and value.isascii()
+                    and value.isdecimal() and (value == '0' or value[0] != '0')
+                    and int(value) <= 2**64-1)
+        valid = (type(sampling) is dict and type(sampling.get('version')) is int and sampling['version'] == 1
+                 and type(sampling.get('plan_available')) is bool and integer(sampling.get('attempts'))
+                 and all(raw_decimal(sampling.get(key)) for key in ('serial', 'request', 'completed_request'))
+                 and (sampling.get('retry_reason') in reasons
+                      or sampling.get('retry_reason') in tuple('sampling_capture_error_'+str(n) for n in range(32))))
+        if not valid:
+            return unavailable('invalid_schema')
+        result['sampling'] = {key: sampling[key] for key in
+                              ('version', 'plan_available', 'attempts', 'serial', 'request', 'completed_request', 'retry_reason')}
     if 'planned_hp_boundary_edges' in data:
         if not integer(data['planned_hp_boundary_edges'], data['processed_ticket']):
             return unavailable('invalid_numbers')

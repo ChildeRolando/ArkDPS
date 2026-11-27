@@ -188,7 +188,25 @@ function prepareNativeCaptureMetadata(meta){
  // Mutable setup objects are copied, never cached or frozen in place.
  for(const key of ['cold_plan','classes','skill_offsets','hp_non_enemy_classes'])
   if(nativeCaptureMetadata[key]!==undefined)nativeCaptureMetadata[key]=sealedCaptureContract(nativeCaptureMetadata[key]);
-
+ const sampling=nativeSamplingCapturePlan(nativeCaptureMetadata,
+  typeof __nativeCaptureCapabilities==='function'?__nativeCaptureCapabilities():null);
+ const previous=globalThis.__arkdpsSamplingCapturePlan;
+ if(previous!==undefined&&JSON.stringify(previous)!==JSON.stringify(sampling))
+  throw new Error('native sampling capture plan changed during setup');
+ if(previous===undefined)Object.defineProperty(globalThis,'__arkdpsSamplingCapturePlan',{
+  value:sealedCaptureContract(sampling),writable:false,configurable:false});
+}
+function nativeSamplingCapturePlan(metadata,capabilities){
+ // A worker observation point, never a method address or a game invocation.
+ // Clock witnesses bracket the same scope/publication/cold capture machinery.
+ const fields=['clock_open','clock_close'].map((name,index)=>({field_id:index+1,
+  phase:'checkpoint',name,role:name,root:'global_slot',root_index:0,pointer_offsets:[],offset:0,
+  bytes:12,kind:'bytes',guard_id:1,guard_side:index?'after':'before',required:true}));
+ return finalizeNativeCapturePlan({schema_version:1,complete:false,raw_collection:'all',
+  name:'sampling checkpoint',address:'0x0',abi:'win64-gp',profile:'sampling_checkpoint',
+  arg_count:0,arg_mask:0,globals:[metadata.clock.toString()],fields,max_bytes:65536,max_reads:4096,
+  cold_plan:metadata.cold_plan,required_projections:['live_scope_guards','same_point_class_ancestry','full_native_binding']},
+  metadata,capabilities);
 }
 const nativeCaptureColdBindings=new WeakMap();
 let nativeCaptureColdRebuilding=false;
@@ -307,6 +325,9 @@ function prepareNativeCaptureHook(address,callbacks){
 
 }
 const probeAdapter={
+ verifiedSamplingCheckpoint(record){
+  return typeof __arkdpsVerifiedSamplingCheckpoint==='function'&&__arkdpsVerifiedSamplingCheckpoint(record)===true;
+ },
  prepareCaptureMetadata:prepareNativeCaptureMetadata,prepareCaptureHook:prepareNativeCaptureHook,publishCaptureScope:publishNativeCaptureScope,publishCapturePublication:publishNativeCapturePublication,capturedPublicationBinding:nativeCapturedPublicationBinding,
  captureCharacterFormPoint:capturedCharacterFormPoint,captureTokenHostEvidence:capturedTokenHostEvidence,
  captureRootRead(side,read){
@@ -834,7 +855,8 @@ function nativeCapturedPublicationBinding(forCallback=false){
  }
  if(!__arkdpsReplayActive())throw new Error('captured publication outside replay');
  const record=__arkdpsReplayRecord(),facts=record.facts;
- if((!forCallback&&(record.edge!=='leave'||record.closed_after!==true))||!facts||!Number.isSafeInteger(facts.publication_revision))return null;
+ const sampling=record.kind==='sampling_checkpoint'&&record.edge==='checkpoint'&&probeAdapter.verifiedSamplingCheckpoint(record);
+ if((!forCallback&&((record.edge!=='leave'&&!sampling)||record.closed_after!==true))||!facts||!Number.isSafeInteger(facts.publication_revision))return null;
  const owned=nativeCapturePublications.get(facts.publication_revision);
  if(!owned||owned.mode_epoch!==record.facts.mode_epoch)return null;
  const chunks=nativeGraphChunks(),geometry=publicationReadGeometry(owned,facts.publication_revision),proof=checkedGraphProof('publication',geometry.graph);

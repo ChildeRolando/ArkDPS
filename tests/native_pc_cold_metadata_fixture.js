@@ -82,7 +82,8 @@ write(prefabName,'prefabKey');write(fieldTable,prefabName);write(fieldTable.add(
 write(skillData.add(0x80),fieldTable);write(skillData.add(0x124),1);write(systemNamespace,'System');write(string.add(0x18),systemNamespace);
 found.SkillData=skillData;apiTable.il2cpp_field_get_type=f=>f.add(8).readPointer();
 const adapter=fs.readFileSync(path.join(__dirname,'../event_probe_native_pc.js'),'utf8');
-const setup=adapter.slice(adapter.indexOf('const nativeContractSnapshots='),adapter.indexOf('function prepareNativeCaptureHook('))+adapter.slice(adapter.indexOf('function prepareNativeCaptureMetadata('),adapter.indexOf('const nativeCaptureColdBindings='));
+const finalize=adapter.slice(adapter.indexOf('function finalizeNativeCapturePlan('),adapter.indexOf('// copies both live observations;'));
+const setup=finalize+adapter.slice(adapter.indexOf('const nativeContractSnapshots='),adapter.indexOf('function prepareNativeCaptureHook('))+adapter.slice(adapter.indexOf('function prepareNativeCaptureMetadata('),adapter.indexOf('const nativeCaptureColdBindings='));
 vm.runInContext("let nativeCaptureMetadata=null;const nativeCaptureModeHistory=new Map();const nativeAutoDesiredMode='all';const coalesceEnemyHp=true;const collectEnemyHpChanges=true;globalThis.arkdpsNativeAsyncCapture=true;"+setup,context);
 vm.runInContext('prepareNativeCaptureMetadata({...meta,skillF:{charSkill:0x3c8,owner:0xa8,data:0xb0,prefab:0x50,id:0x18,name:0x10}});globalThis.adapterMetadata=nativeCaptureMetadata;',context);
 assert.equal(context.adapterMetadata.cold_metadata_ready,true);assert.equal(context.adapterMetadata.immutable_class_parents,true);assert.equal(context.adapterMetadata.coalesce_enemy_hp,true);

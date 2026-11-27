@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--compiler', default='g++')
     parser.add_argument('--optimization', choices=['O0', 'O2'], default='O0')
-    parser.add_argument('--fixture', choices=['bounded', 'production-hp', 'hp-opaque', 'hp-leaf', 'light-hp'], default='bounded')
+    parser.add_argument('--fixture', choices=['bounded', 'production-hp', 'hp-opaque', 'hp-leaf', 'light-hp', 'sampling'], default='bounded')
     parser.add_argument('--build-only', action='store_true')
     args = parser.parse_args()
     output = args.output.resolve()
@@ -41,8 +41,8 @@ def main():
     for header, symbol in [('bridge_source.h','arkdps_bridge_source'), ('publication_source.h','arkdps_publication_source'), ('cold_plan_source.h','arkdps_cold_plan_source')]:
         (deps / header).write_text('// Syntax/link declaration only; never executed.\ninline constexpr const char ' + symbol + '[]="";\n')
     binary = output / 'owned-batch-test.exe'
-    fixture = {'bounded':'owned_bounded_replay_test.cpp','production-hp':'production_hp_actual_engine.cpp','hp-opaque':'owned_hp_opaque_io_test.cpp','hp-leaf':'owned_hp_leaf_facts_test.cpp','light-hp':'owned_light_hp_test.cpp'}[args.fixture]
-    tracked = [*sorted((ROOT/'native_pc/native_event_runtime').glob('*.h')), ROOT/'native_pc/native_event_runtime/engine.cpp', ROOT/'native_pc/native_event_runtime/native_capture.cpp', ROOT/'native_pc/native_event_runtime/bridge.js', *sorted((ROOT/'tests').glob('owned_*test.cpp')), ROOT/'tests/production_hp_actual_engine.cpp',ROOT/'tests/production_hp_paced_engine.h']
+    fixture = {'bounded':'owned_bounded_replay_test.cpp','production-hp':'production_hp_actual_engine.cpp','hp-opaque':'owned_hp_opaque_io_test.cpp','hp-leaf':'owned_hp_leaf_facts_test.cpp','light-hp':'owned_light_hp_test.cpp','sampling':'owned_sampling_checkpoint_test.cpp'}[args.fixture]
+    tracked = [*sorted((ROOT/'native_pc/native_event_runtime').glob('*.h')), ROOT/'native_pc/native_event_runtime/engine.cpp', ROOT/'native_pc/native_event_runtime/native_capture.cpp', ROOT/'native_pc/native_event_runtime/bridge.js', *sorted((ROOT/'tests').glob('owned_*test.cpp')), ROOT/'tests/production_hp_actual_engine.cpp',ROOT/'tests/production_hp_paced_engine.h',ROOT/'tests/production_sampling_engine.h']
     source_before = {str(p.relative_to(ROOT)):digest(p) for p in tracked}
     command = [args.compiler, '-std=c++17', '-static', '-' + args.optimization, '-pthread', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                '-I', str(ROOT/'native_pc/native_event_runtime'), '-isystem', str(deps),
@@ -57,6 +57,12 @@ def main():
         (output/'build-receipt.json').write_text(json.dumps({**identity,'executed':False,'fixture':args.fixture,'optimization':args.optimization,'binary_sha256':digest(binary),'dependency_sha256':{str(p):digest(p) for p in inputs}},indent=2))
         print('BUILT_OWNED_REPLAY', binary)
         return
+    if args.fixture=='sampling':
+        run=subprocess.run([str(binary)],cwd=ROOT,capture_output=True,text=True,timeout=15)
+        (output/'sampling.log').write_text(run.stdout+run.stderr)
+        assert run.returncode==0 and 'PASS_NATIVE_SAMPLING_CHECKPOINT' in run.stdout,(run.returncode,run.stdout,run.stderr)
+        (output/'receipt.json').write_text(json.dumps({**identity,'scope':'actual engine checkpoint/owned view/journal over self-owned memory','excluded':['game','FPS','production scope/publication graph'],'binary_sha256':digest(binary),'pass':True},indent=2))
+        print('PASS_NATIVE_SAMPLING_CHECKPOINT',output/'receipt.json');return
     if args.fixture=='light-hp':
         run=subprocess.run([str(binary)],cwd=ROOT,capture_output=True,text=True,timeout=15)
         (output/'light.log').write_text(run.stdout+run.stderr)

@@ -480,3 +480,37 @@ capture_scope_point、CaptureLanes、prepare/finalize/drain 和完整生产 JS�
 每笔 p99 发布、60秒真实混合负载及游戏FPS仍未验收。
 
 2026-11-27 方向调整：用户确认采用[敌方 HP 轻量采集合同](native-hp-lightweight-contract.md)，取消精确敌方累计回血与含回血可承受量，先按业务需求减少生产。叶子事实组与回血压缩暂缓，未接入产品。结算内全部相关写入、关键生命周期/MaxHP 事件、快照刷新和终局/read/ACK 水位继续保留；计划不采集与真实缺口分别处理，不通过扩大队列或隐藏错误冒充吞吐修复。
+
+### 2026-11-27 主分支同步与无回调采样、游标所有权修复
+
+先以 `dee6914` 合并当时最新 main `4c7ffb0`（包含其余 9 项提交），保留原生队列、共享 HP 入口和轻量合同，同时接入主线暂停/恢复采集。原生控制不重新安装一次性钩子；Frida 首次安装和恢复安装共用同一监听器入口。以下改动在这个合并点上进行，没有覆盖此前正确性修复。
+
+实机 `bf0b40b` 记录及自有 DLL 复现共同定位了一个活性错误：mark 每次都等下一个业务回调产生发布。低事件密度或暂停时，即使 `reserved=processed=closed=published` 且 failure 为 0，也可能连续重试。宿主的 opening/sample/closing 又会再要求下一回调，因而在“暂停”“过期”“正常”间切换。证据冻结在 `runtime/fresh-publication-incident/`；捕获前 3934 行 SHA256 为 `59735ab49349b147e4955836fe90ac0cc691fb9ba2ab3a736fae9e5687c06cfd`。这是当前已证原因，不以渲染 FPS 或 retry 数替代采样可靠性。
+
+| 状态及所有者 | 本次修复的转换与不变量 |
+| --- | --- |
+| 原生采样事务，单 worker | 显式 `sampling=fresh` 建立请求，未完成请求仅凭原请求身份跨宿主重试；请求还绑定模式世代。缺少重试身份就新建事务，跨模式复用拒收。`confirm` 绑定原 opening 的保留 token，再取当前独立证据，不能把旧 mark 改时间戳后当新样本。 |
+| 现场检查点，现有 CompiledPlan/OwnedReplayView | 没有业务回调时，后台独立读取 clock、scope、publication/cold 字节，验证安静且完整闭合的前缀。真实活动、模式或时钟/guard 变化拒收并重试；结构缺项仍失败。 |
+| 发布 journal，单一业务投影 | 检查点进入原 `capturedClosedRecordProjection`，没有第二套战局/归属状态。`kind=sampling_checkpoint` 用独立正序 serial；原始 ticket 和业务 sequence 可保持 0，不伪造 enter/leave。只有原生实际签发对象、有效租约及一次性品牌可发布。 |
+| opening/closing，宿主一次采集 | Python 只确认本次 mark 的原始对象及同一 cursor lifetime。双方仍须通过原有帧、时间和作用域 barrier；确认不要求下一次业务 hook，也不取消独立采样。 |
+| pending scope，旧观察器 | 更换观察器时先退休精确的旧 owner，记录 `pending_scope_observer_retired` 覆盖缺口；新 owner 建立自己的真实基线。旧前缀不由新 owner 读取或 ACK。暂时 observer=None 不是退休，仍允许原 owner 恢复。 |
+| cursor lifetime，同一观察器 | 同一个 owner 真正重置仍报 StreamGap。失败日志仅保留阶段、存在性和固定原因，不输出 token/地址。 |
+| UI 新鲜度，现有 DesktopState | 同帧的新鲜可靠采样可显示暂停；真实采样失败仍会过期。没有扩大超时、重新标记旧数据或隐藏提示。 |
+
+采样计划是不可执行的 `sampling_checkpoint` profile：地址 0、无参数/entry roots、两次独立 12 字节时钟，强制 live scope/class ancestry/full native binding，冷路径有同根前后证据。普通钩子的 entry/leave 要求不变。终局投影还要原生 terminal fence 的当时现场证明，不能仅靠已有 JS 终局对象发布成功。raw、处理、闭合、发布、交付和 ACK 水位仍分开。
+
+能力协商后产品显式使用新事务。未声明 sampling 的旧调用方继续原 callback admission/terminal 协议，宿主到达即设置请求，每次重试可认领新的冷候选。复核曾发现候选错误地让旧调用方沿用耗尽请求；失败回执保存在 `runtime/fresh-sampling/dll-gates/`，修复后的原门禁另存 `dll-gates-v2/`，没有放宽原断言。
+
+游标截图所对应的旧普通日志没有完整失败阶段，不能声称已还原截图的唯一分支。已复现并修复的是“新 observer 比较旧 pending token”的确定性生产路径；同 owner 重置的独立负例继续拒收。新包正常日志的有限 `cursor_failure` 和 `native_async_capture.sampling` 能区分后续实际拒收原因；采样 retry_reason 是最近一次尝试，需同时看 request/completed_request，不能把已完成请求的历史原因当当前故障。
+
+验收回执：
+
+- `tests/test_native_sampling_acquisition.py`：请求重用、原始 opening/租约、配置改变及严格 raw0 合同；`tests/test_pending_scope_start.py`：新 owner、不向旧 owner ACK、None 恢复及真实 reset 拒收。
+- `runtime/fresh-sampling/checkpoint-final/receipt.json`：真实 engine 事务、owned 字节、journal；无 hook/暂停/raw0、时钟变化、原生品牌/过期租约、跨模式请求、终局正反例及结构故障。
+- `runtime/fresh-sampling/production-final/final/receipt.json`：完整共享投影 scope64/publication1604，无业务 hook 时新帧/同帧新 token；cold、时钟、模式、对象 guard 及错误计划负例。这一夹具直接调用共享 sampler，不冒充 IPC 事务；上项覆盖事务。
+- `runtime/fresh-sampling/dll-gates-final/`：实际 DLL 的原 direct HP、轻量边界、冷请求跨期限门禁；`bounded-v2/`：原 20 项原生负例。
+- 全量 pytest、压力及便携包的最终回执与交付包一起保留。离线通过不代表真实游戏 FPS 或所有实机 barrier 已通过；下一盘应检查低事件密度、暂停/恢复和防御/协防切换。
+
+本轮全量离线回归 6414 passed / 29 skipped；最后补齐原生请求的模式绑定后，相关 195 项及原生事务/实际 DLL 门禁再通过。最终源码的轻量 30k/s、10 秒完成 300000 次 setter，500ms 暂停后约 78ms 追平、code0，回执 `runtime/fresh-sampling/pressure-final-30k-10s/receipt.json`。模式绑定补齐前的同一轻量路径另完成 60 秒/180 万次，约 71ms 追平，留在 `pressure-30k-60s/`，不混同版本。压力夹具未包含宿主新 sampler 事务流量，不据此声称已验证真实 mark 频率下延迟或实机表现。
+
+变更控制：本次只扩展现有采样请求、CompiledPlan/OwnedReplayView、共享投影和观察器生命周期，不新建业务状态所有者。原生新增事实由其当时实际持有字节及租约负责；可选 `confirm_mark` 没有渗入其他平台的取证解释，未支持者仍走原接口。严格拒收条件由上述负例保护，没有以文案或阈值补偿。最先失败的边界分别是原生 checkpoint/采样事务、宿主原 opening 与 cursor owner；均可在自有内存/日志回放中复现。新增检查点是原发布机制的一种受控输入，不是另一套事件统计或治理层。仍未覆盖的边界是新候选实机成功率、真实混合持续负载和游戏 FPS。

@@ -71,6 +71,18 @@ class CaptureRetry(RuntimeError):
     """No stable frame was obtained; queued events remain available."""
 
 
+def confirm_sampling_mark(observer, opening, *, with_presence=False):
+    """Close one acquisition without asking native sampling for another hook.
+
+    Providers still return their own independently verified closing mark. The
+    ordinary barrier below remains the authority for matching clocks/scopes.
+    """
+    confirm = getattr(observer, 'confirm_mark', None)
+    if not with_presence and callable(confirm):
+        return confirm(opening)
+    return observer.mark_with_presence() if with_presence else observer.mark()
+
+
 _ROUND_START_READ_SIZE = 2048
 
 
@@ -270,9 +282,10 @@ class LiveEventCapture:
             self.adapter.on_event_gap()
             self.closed = True
 
-    def _mark(self):
+    def _mark(self, opening=None):
         try:
-            mark = self.observer.mark()
+            mark = (self.observer.mark() if opening is None
+                    else confirm_sampling_mark(self.observer, opening))
         except ObserverReadRetry as exc:
             raise CaptureRetry(str(exc)) from exc
         except Exception as exc:
@@ -327,7 +340,7 @@ class LiveEventCapture:
             before = self._mark()
             sample = self.collector.read()
             roster = self.collector.read_roster()
-            after = self._mark()
+            after = self._mark(before)
             self.audit('sample', {'before': before, 'sample': sample, 'roster': roster, 'after': after})
         except (StreamGap, BattleChanged, UnsupportedVersion):
             self.close()
