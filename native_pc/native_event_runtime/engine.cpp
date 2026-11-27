@@ -13,6 +13,7 @@ extern "C" {
 #include <quickjs.h>
 }
 #include "owned_replay_js.h"
+#include "owned_hp_leaf_facts.h"
 #include "bridge_source.h"
 #include "publication_source.h"
 #include "cold_plan_source.h"

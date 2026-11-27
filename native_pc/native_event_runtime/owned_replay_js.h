@@ -200,10 +200,16 @@ inline JSValue scalar(JSContext* c,JSValueConst,int count,JSValueConst* args) {
 }
 // Read the exact current owned point without committing its error. Callers
 // decide when a demanded fact commits failure; no live reads are possible.
-inline capture::Error read_owned_field(const capture::OwnedReadField& field,std::uintptr_t base,
+struct OwnedReadContext {
+    const capture::OwnedReplayView& view;
+    const std::vector<std::string>& roles;
+    capture::OwnedRoleIndex& role_index;
+    bool concurrent=false;
+};
+inline capture::Error read_owned_field_from(const OwnedReadContext& owner,const capture::OwnedReadField& field,std::uintptr_t base,
                                       std::uint32_t checkpoint,std::byte* output,std::size_t& size) noexcept {
-    auto& owner=binding();size=0;
-    auto status=capture::Error::ok;const auto role_id=field.role_id?field.role_id:owner.role_index.find(*owner.roles,field.role);
+    size=0;
+    auto status=capture::Error::ok;const auto role_id=field.role_id?field.role_id:owner.role_index.find(owner.roles,field.role);
     const auto cp=field.current_checkpoint?checkpoint:field.checkpoint;
     std::optional<std::uint16_t> selected;
     if(!role_id)status=capture::Error::missing_plan_field;
@@ -238,6 +244,29 @@ inline capture::Error read_owned_field(const capture::OwnedReadField& field,std:
     }
     return status;
 }
+inline capture::Error read_owned_field(const capture::OwnedReadField& field,std::uintptr_t base,
+                                      std::uint32_t checkpoint,std::byte* output,std::size_t& size) noexcept {
+    auto& owner=binding();
+    if(!owner.roles){size=0;return capture::Error::missing_plan_field;}
+    return read_owned_field_from({owner.view,*owner.roles,owner.role_index,owner.concurrent},field,base,checkpoint,output,size);
+}
+// One predicate implementation for the ordinary reader and bounded lookahead.
+// A lookahead rejection is not consumption: its original record stays owned and
+// must be replayed by the normal path, preserving the demanded-error policy.
+inline capture::Error compare_owned_field(const capture::OwnedReadField& field,const std::byte* bytes) noexcept {
+    for(const auto& word:field.words){
+        const auto* data=bytes+word.offset;bool equal=false;
+        if(word.kind==0){std::uint8_t value;std::memcpy(&value,data,1);equal=value==word.bits;}
+        else if(word.kind==1){std::uint32_t value;std::memcpy(&value,data,4);equal=value==word.bits;}
+        else {std::uint64_t value;std::memcpy(&value,data,8);equal=static_cast<double>(value)==word.number;}
+        if(!equal)return capture::Error::changed_guard;
+    }
+    if(field.compare_utf16){
+        std::int32_t length;std::memcpy(&length,bytes+8,4);
+        if(length!=static_cast<std::int32_t>(field.utf16.size())||(!field.utf16.empty()&&std::memcmp(bytes+12,field.utf16.data(),field.utf16.size()*2)!=0))return capture::Error::changed_guard;
+    }
+    return capture::Error::ok;
+}
 inline JSValue execute_read_batch(JSContext* c,const ReadProgram& plan,unsigned mask,std::uintptr_t base,std::uint32_t checkpoint,bool check=false,bool primitives=false) {
     auto& owner=binding();unsigned slots=plan.fields.size();
     if(check){slots=0;for(const auto& field:plan.fields)slots+=field.project;}
@@ -251,19 +280,7 @@ inline JSValue execute_read_batch(JSContext* c,const ReadProgram& plan,unsigned 
         if(emit){++projected;put(entry,std::uint16_t{0xffff});put(entry+2,static_cast<std::uint16_t>(field.kind));put(entry+4,std::uint32_t{0});put(entry+8,std::uint32_t{0});put(entry+12,std::uint32_t{0});}
         if(!(mask&field.tier))continue;
         std::size_t bytes=0;auto status=read_owned_field(field,base,checkpoint,output.data()+cursor,bytes);cursor+=bytes;
-        if(check&&status==capture::Error::ok) {
-            for(const auto& word:field.words){
-                const auto* data=output.data()+start+word.offset;bool equal=false;
-                if(word.kind==0){std::uint8_t value;std::memcpy(&value,data,1);equal=value==word.bits;}
-                else if(word.kind==1){std::uint32_t value;std::memcpy(&value,data,4);equal=value==word.bits;}
-                else {std::uint64_t value;std::memcpy(&value,data,8);equal=static_cast<double>(value)==word.number;}
-                if(!equal){status=capture::Error::changed_guard;break;}
-            }
-            if(status==capture::Error::ok&&field.compare_utf16){
-                std::int32_t length;std::memcpy(&length,output.data()+start+8,4);
-                if(length!=static_cast<std::int32_t>(field.utf16.size())||(!field.utf16.empty()&&std::memcmp(output.data()+start+12,field.utf16.data(),field.utf16.size()*2)!=0))status=capture::Error::changed_guard;
-            }
-        }
+        if(check&&status==capture::Error::ok)status=compare_owned_field(field,output.data()+start);
         if(capture::OwnedReplayView::structural(status)){owner.graph_failure=i;error(status);return JS_UNDEFINED;}
         if(check&&status!=capture::Error::ok&&first_error==capture::Error::ok){first_error=status;first_index=i;}
         if(!emit){cursor=start;continue;}
@@ -319,12 +336,30 @@ inline JSValue observation_string(JSContext* c,const std::byte* bytes) {
     }
     return allocated(JS_NewStringLen(c,encoded.data(),cursor));
 }
+// Raw facts and their individual statuses are collected once by the same
+// reader. Collection does not demand a field or commit its error; source use
+// still determines which unavailable field fails an observation.
+struct RawHpField {
+    std::array<std::byte,12+capture::max_string_units*2> bytes;
+    std::size_t size=0;std::uint16_t status=UINT16_MAX;
+};
+struct RawHpObservation {std::array<RawHpField,16> fields;};
+inline void collect_hp_observation(const OwnedReadContext& context,const std::vector<capture::ObservationField>& fields,
+                                   std::uintptr_t root,std::uint32_t checkpoint,RawHpObservation& output) noexcept {
+    for(unsigned i=0;i<fields.size();++i){
+        const auto& field=fields[i];auto& fact=output.fields[i];
+        const bool present=context.view.field_present(field.raw.role_id,checkpoint,field.presence_id);
+        const auto status=read_owned_field_from(context,field.raw,root,checkpoint,fact.bytes.data(),fact.size);
+        fact.status=!present&&status==capture::Error::missing_plan_field?UINT16_MAX:static_cast<std::uint16_t>(status);
+    }
+}
 inline JSValue prepare_hp_observation(JSContext* c) {
     auto& owner=binding();owner.js_exception=false;
     if(!owner.active||!owner.hp_plan||!owner.hp_plan->hp_observations_ready||!owner.hp_root
         ||(owner.hp_phase!=capture::Phase::entry&&owner.hp_phase!=capture::Phase::leave)) {error(capture::Error::invalid_plan);return JS_UNDEFINED;}
     release_hp_packet();
     const auto& fields=owner.hp_plan->hp_observations[owner.hp_phase==capture::Phase::entry?0:1];
+    RawHpObservation raw;collect_hp_observation({owner.view,*owner.roles,owner.role_index,owner.concurrent},fields,owner.hp_root,owner.hp_checkpoint,raw);
     JSValue result=JS_NewArray(c);if(JS_IsException(result)){conversion_exception();return result;}
     unsigned cursor=0;bool failed=false;
     const auto put=[&](JSValue value){if(JS_IsException(value)){failed=true;return;}
@@ -332,12 +367,7 @@ inline JSValue prepare_hp_observation(JSContext* c) {
     put(JS_NewUint32(c,1));put(JS_NewUint32(c,fields.size()));put(JS_NewUint32(c,owner.hp_phase==capture::Phase::entry?0:1));
     put(JS_NewUint32(c,owner.hp_checkpoint));put(JS_NewFloat64(c,static_cast<double>(owner.hp_mode)));
     for(unsigned i=0;i<fields.size()&&!failed;++i){
-        const auto& field=fields[i];std::array<std::byte,12+capture::max_string_units*2> bytes;std::size_t size=0;
-        const bool present=owner.view.field_present(field.raw.role_id,owner.hp_checkpoint,field.presence_id);
-        const auto observed=read_owned_field(field.raw,owner.hp_root,owner.hp_checkpoint,bytes.data(),size);
-        // Auto body reads may be owned by another independent successful field
-        // even when the nominal primary field was not captured at this tier.
-        const auto status=!present&&observed==capture::Error::missing_plan_field?65535u:static_cast<unsigned>(observed);
+        const auto& field=fields[i];const auto& fact=raw.fields[i];const auto& bytes=fact.bytes;const auto status=fact.status;
         owner.hp_status[i]=status;put(JS_NewUint32(c,status));
         for(const auto& codec:field.values){
             if(failed)break;
