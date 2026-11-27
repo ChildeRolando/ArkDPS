@@ -32,6 +32,23 @@ DEFAULT_ADB = r'C:\Program Files\Netease\MuMu Player 12\nx_main\adb.exe'
 PACKAGE = 'com.hypergryph.arknights'
 PROJECT_FORWARD_PORT = 27381
 CONFIG_VERSION = 1
+DEFAULT_EVENT_QUEUE_MEMORY_MIB = 1024
+MIN_EVENT_QUEUE_MEMORY_MIB = 512
+MAX_EVENT_QUEUE_MEMORY_MIB = 2048
+
+
+def event_queue_memory_mib(value):
+    """One process-wide native capture queue budget; never clamp invalid input."""
+    if type(value) is not int or not MIN_EVENT_QUEUE_MEMORY_MIB <= value <= MAX_EVENT_QUEUE_MEMORY_MIB:
+        raise ValueError('事件队列内存上限必须是 512–2048 MiB 的整数')
+    return value
+
+
+def event_queue_memory_argument(value):
+    if not isinstance(value, str) or not re.fullmatch(r'[0-9]+', value):
+        raise ValueError('事件队列内存上限必须是 512–2048 MiB 的整数')
+    return event_queue_memory_mib(int(value))
+
 
 MUMU_ADB_CANDIDATES = (
     DEFAULT_ADB,
@@ -298,13 +315,15 @@ class ConnectionConfig:
     native_game_root: str | None = None
     native_pc_event_backend: str = 'frida'
     native_pc_event_feed: str | None = None
+    event_queue_memory_mib: int = DEFAULT_EVENT_QUEUE_MEMORY_MIB
 
     def to_dict(self) -> dict:
         return {'version': CONFIG_VERSION, 'adb_path': self.adb_path,
                 'serial': self.serial, 'auto_detect': bool(self.auto_detect),
                 'platform': self.platform, 'native_game_root': self.native_game_root,
                 'native_pc_event_backend': self.native_pc_event_backend,
-                'native_pc_event_feed': self.native_pc_event_feed}
+                'native_pc_event_feed': self.native_pc_event_feed,
+                'event_queue_memory_mib': event_queue_memory_mib(self.event_queue_memory_mib)}
 
     @classmethod
     def from_dict(cls, raw: object) -> 'ConnectionConfig':
@@ -330,7 +349,8 @@ class ConnectionConfig:
             raise ValueError('PC 事件内核必须是 frida 或 native')
         return cls(adb_path=adb or None, serial=serial or None, auto_detect=auto,
                    platform=platform, native_game_root=native_root or None, native_pc_event_backend=backend,
-                   native_pc_event_feed=native_event_feed_path(raw.get('native_pc_event_feed')))
+                   native_pc_event_feed=native_event_feed_path(raw.get('native_pc_event_feed')),
+                   event_queue_memory_mib=event_queue_memory_mib(raw.get('event_queue_memory_mib', DEFAULT_EVENT_QUEUE_MEMORY_MIB)))
 
 
 @dataclass

@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include "capture_memory_budget.h"
 
 namespace arkdps::capture {
 
@@ -21,16 +22,14 @@ public:
     struct Config { std::size_t metadata_slots; std::size_t arena_bytes; };
     enum class PopResult { empty, destination_too_small, popped };
 
-    explicit CaptureQueue(Config config)
+    explicit CaptureQueue(Config config,bool mapped=false)
         : slots_(checked(config.metadata_slots)), bytes_(checked(config.arena_bytes)),
-          records_(new Record[slots_]{}), arena_(new std::byte[bytes_]{}) {
-        // Allocation and page commitment happen before hooks become enabled.
-        // Touch each byte through volatile so initialization cannot be elided.
-        auto* committed = reinterpret_cast<volatile unsigned char*>(arena_.get());
-        for (std::size_t i = 0; i < bytes_; ++i) committed[i] = 0;
+          record_storage_(metadata_bytes(slots_),mapped),arena_storage_(bytes_,mapped),
+          records_(reinterpret_cast<Record*>(record_storage_.data())),arena_(arena_storage_.data()) {
+        // Record lifetime begins here. Values are written before publication;
+        // preparation already touched every metadata and payload page.
         for (std::size_t i = 0; i < slots_; ++i) {
-            auto* cell = reinterpret_cast<volatile unsigned char*>(&records_[i]);
-            for (std::size_t j = 0; j < sizeof(Record); ++j) cell[j] = 0;
+            ::new (static_cast<void*>(records_+i)) Record;
         }
     }
 
@@ -51,9 +50,9 @@ public:
         if (size > bytes_ - (producer_.bytes - reclaimed)) return false;
 
         const auto first = std::min(size, bytes_ - producer_.offset);
-        if (first) std::memcpy(arena_.get() + producer_.offset, payload, first);
+        if (first) std::memcpy(arena_ + producer_.offset, payload, first);
         if (size > first)
-            std::memcpy(arena_.get(), static_cast<const std::byte*>(payload) + first, size - first);
+            std::memcpy(arena_, static_cast<const std::byte*>(payload) + first, size - first);
         records_[producer_.index] = {ticket, producer_.offset, size};
         producer_.offset = advance(producer_.offset, size, bytes_);
         producer_.bytes += size;
@@ -84,9 +83,9 @@ public:
         size = record.size;
         if (capacity < size || (size && !destination)) return PopResult::destination_too_small;
         const auto first = std::min(size, bytes_ - record.offset);
-        if (first) std::memcpy(destination, arena_.get() + record.offset, first);
+        if (first) std::memcpy(destination, arena_ + record.offset, first);
         if (size > first)
-            std::memcpy(static_cast<std::byte*>(destination) + first, arena_.get(), size - first);
+            std::memcpy(static_cast<std::byte*>(destination) + first, arena_, size - first);
         ticket = record.ticket;
         consumer_.bytes += size;
         consumer_.index = advance(consumer_.index, 1, slots_);
@@ -99,11 +98,29 @@ public:
     }
 
     Config capacity() const noexcept { return {slots_, bytes_}; }
+    // Producer-only; used solely on the failing path, never a success counter.
+    QueueOccupancy producer_occupancy() const noexcept {
+        return {slots_,bytes_,producer_.records-released_records_.load(std::memory_order_acquire),
+            producer_.bytes-released_bytes_.load(std::memory_order_acquire)};
+    }
+    static constexpr std::size_t metadata_record_size() noexcept{return sizeof(Record);}
+    static std::size_t storage_bytes(Config config,bool mapped=false) {
+        const auto metadata=metadata_bytes(checked(config.metadata_slots));
+        const auto arena=checked(config.arena_bytes);
+        const auto a=mapped?capture_page_round(metadata):metadata,b=mapped?capture_page_round(arena):arena;
+        if(a>std::numeric_limits<std::size_t>::max()-b)throw std::invalid_argument("capture storage size overflow");
+        return a+b;
+    }
 
 private:
     static_assert(std::atomic<std::uint64_t>::is_always_lock_free,
                   "capture callbacks require lock-free 64-bit atomics");
     struct Record { std::uint64_t ticket; std::size_t offset; std::size_t size; };
+    static std::size_t metadata_bytes(std::size_t slots) {
+        if(slots>std::numeric_limits<std::size_t>::max()/sizeof(Record))
+            throw std::invalid_argument("capture metadata size overflow");
+        return slots*sizeof(Record);
+    }
     struct Cursor {
         std::uint64_t records = 0, bytes = 0;
         std::size_t index = 0, offset = 0;
@@ -119,8 +136,9 @@ private:
         return amount >= until_end ? amount - until_end : position + amount;
     }
     const std::size_t slots_, bytes_;
-    std::unique_ptr<Record[]> records_;
-    std::unique_ptr<std::byte[]> arena_;
+    CaptureStorage record_storage_,arena_storage_;
+    Record* records_;
+    std::byte* arena_;
     alignas(64) Cursor producer_;
     alignas(64) std::atomic<std::uint64_t> published_records_{0};
     alignas(64) Cursor consumer_;

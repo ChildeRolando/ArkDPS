@@ -57,6 +57,7 @@
 - [事件探针与共享统计接口](event-probe-interface.md) — MuMu/PC 探针契约、质量声明、共享统计口径和离线一致性回归。
 - [PC 自研事件后端内部候选](internal-event-backend.md) — 合作生产者接入、受控验证及候选包。
 - [PC ArkPie 事件后端](native-pc-native-hooks.md) — 设置与启动、标准便携包集成、同局对账及实机验收记录。
+- [事件队列预算与窗口重试](event-queue-memory.md) — 全进程有界内存、待生效设置、后台准备/回收，以及健康观察器的窗口忙重试。
 - [探针复用审计与修复边界](event-probe-reuse.md) — 实际 MuMu 基线、技能与嵌套结算断点、局部缺口及共同业务回归。
 - [GUI/HUD 共用面板模型](panel-model.md) — 面板配置、排序、柱长与占比口径（Tk 实现已封存）。
 - [设置、托盘与窗口配置恢复](settings-and-layout.md) — 布局版本与迁移、可达位置、托盘生命周期、事件观察开关与退出清理（Tk 历史章节已封存）。

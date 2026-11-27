@@ -286,6 +286,7 @@ public partial class MainWindow : Window
             var reply=await source.RequestAsync(op,fields);
             if(bridge!=source || workerUnavailable || closingRequested || quitting) return;
             ApplyState(reply.Get("state"));
+            if(op=="event_queue_memory") App.ClearEventQueueOverride();
             if(op=="connection_apply")
             {
                 App.ClearConnectionOverrides();
@@ -449,6 +450,7 @@ public partial class MainWindow : Window
         MultiplayerPage.Update(MultiplayerActive ? state.Get("multiplayer") : default, scopeUnverified ? scopeNotice : "");
         var diag=state.Get("diagnostic");
         UpdateConnectionFromWorker(diag);
+        UpdateEventQueueMemoryStatus();
         ConnectionStatusSummary.Text=SamplingRejected ? state.Text("status_text")
             : PcReadiness.Active ? PcReadiness.Label : state.Text("connection_text");
         ConnectionObserverStatus.Text=state.Text("event_text");
@@ -683,8 +685,33 @@ public partial class MainWindow : Window
         NativeGameRoot.Text=config.Text("native_game_root");
         NativeEventBackend.SelectedIndex=config.Text("native_pc_event_backend")=="native" ? 1 : 0;
         NativeEventFeed.Text=config.Text("native_pc_event_feed");
+        EventQueueMemory.Text=((int)State.Get("connection_config").Number("event_queue_memory_mib",1024)).ToString();
         ConnectionPlatform.SelectedIndex=config.Text("platform")=="native_pc" ? 1 : 0;
         UpdateConnectionForm();
+    }
+    private void UpdateEventQueueMemoryStatus()
+    {
+        var budget=State.Get("event_queue_memory");
+        int saved=(int)State.Get("connection_config").Number("event_queue_memory_mib",1024);
+        int configured=(int)budget.Number("configured_mib",saved);
+        double effective=budget.Number("effective_mib",double.NaN);
+        bool? supported=budget.Get("supported").ValueKind==JsonValueKind.False?false:budget.Get("supported").ValueKind==JsonValueKind.True?true:null;
+        EventQueueMemoryStatus.Text=QueueMemoryStatusText(configured,effective,budget.Bool("applicable"),saved,supported);
+    }
+    internal static string QueueMemoryStatusText(int configured,double effective,bool applicable,int? savedMib=null,bool? supported=null)
+    {
+        string saved=savedMib is int value ? $"已保存 {value} MiB"+(value==configured?"":$" · 本次启动配置 {configured} MiB") : $"配置 {configured} MiB";
+        if(!applicable) return saved+" · 当前后端未应用此预算";
+        if(supported is false) return saved+" · 当前采集组件未提供预算回执，实际生效值未知";
+        if(!double.IsFinite(effective)) return saved+" · 尚未确认实际生效值；下次游戏启动时应用";
+        return saved+$" · 当前进程上限 {effective:0} MiB"+(effective==configured?"":" · 待下次游戏启动生效");
+    }
+    private async void SaveEventQueueMemory(object sender,RoutedEventArgs e)
+    {
+        if(!int.TryParse(EventQueueMemory.Text,System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,out int value)||value<512||value>2048)
+        { EventQueueMemoryStatus.Text="请输入 512–2048 MiB 的整数。";return; }
+        await Command("event_queue_memory",new(){["value"]=value});
     }
     private void ConnectionPlatformChanged(object sender,SelectionChangedEventArgs e)
     {
@@ -1615,7 +1642,7 @@ public partial class MainWindow : Window
             await ReconnectObserver();
             if(workerUnavailable || closingRequested || quitting || updateShutdownPreparing) return;
         }
-        var config=new{adb_path=ConfiguredAdbPath,serial=ConfiguredSerial,auto_detect=AutoDetect.IsChecked==true,
+        var config=new{event_queue_memory_mib=(int)State.Get("connection_config").Number("event_queue_memory_mib",1024),adb_path=ConfiguredAdbPath,serial=ConfiguredSerial,auto_detect=AutoDetect.IsChecked==true,
             platform=SelectedConnectionPlatform,
             native_pc_event_backend=SelectedNativeEventBackend,
             native_pc_event_feed=string.IsNullOrWhiteSpace(NativeEventFeed.Text) ? null : NativeEventFeed.Text.Trim(),

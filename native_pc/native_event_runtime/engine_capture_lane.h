@@ -76,6 +76,8 @@ struct Lane {
     std::atomic<std::uint64_t> birth{0};
     std::atomic<unsigned> depth{0}, generation{0};
     std::atomic<std::uint32_t> spill_owner_tag{1};
+    // Written only by this lane's producer; owner CAS validates stale hints.
+    CaptureSpillPool::ProducerCursor spill_cursor;
     // Only worker reads/writes these handles; producers never OpenThread.
     HANDLE worker_thread_handle=nullptr;
     DWORD worker_handle_tid=0;
@@ -142,11 +144,26 @@ public:
     struct Config {
         CaptureQueue::Config lane_queue{8192,8*1024*1024};
         CaptureSpillPool::Config spill{};
+        std::uint32_t requested_budget_mib=0;
     };
+    static Config budget_config(std::uint32_t mib) {
+        if(mib<512||mib>2048)throw std::invalid_argument("capture queue budget must be 512..2048 MiB");
+        Config c;c.requested_budget_mib=mib;c.lane_queue={2048,2*1024*1024};
+        c.spill.metadata_slots=65536;c.spill.arena_bytes=16*1024*1024;c.spill.elastic=true;
+        const auto fixed=sizeof(CaptureLanes)+lane_count*(sizeof(Lane)-capture_working_per_lane())
+            +lane_count*CaptureQueue::storage_bytes(c.lane_queue);
+        const auto bank=sizeof(CaptureQueue)+CaptureQueue::storage_bytes({c.spill.metadata_slots,c.spill.arena_bytes},true);
+        const auto budget=static_cast<std::uint64_t>(mib)*1024*1024;
+        if(budget<=fixed)throw std::invalid_argument("capture queue budget has no spill capacity");
+        c.spill.banks=static_cast<std::size_t>((budget-fixed)/bank);
+        if(c.spill.banks>CaptureSpillPool::max_bank_count)c.spill.banks=CaptureSpillPool::max_bank_count;
+        if(c.spill.banks<c.spill.warm_banks)throw std::invalid_argument("capture queue budget cannot prepare warm banks");
+        return c;
+    }
     enum class Source : std::uint8_t { private_lane, spill_bank };
     struct ReadyRecord { std::uint64_t ticket=0; Source source=Source::private_lane; std::uint16_t index=0; };
     CaptureLanes() : CaptureLanes(Config{}) {}
-    explicit CaptureLanes(Config config) : spill_(config.spill) {
+    explicit CaptureLanes(Config config) : config_(config),spill_(config.spill) {
         for (std::size_t index=0;index<lane_count;++index) {
             auto& lane=lanes[index];
             lane = std::make_unique<Lane>(config.lane_queue,static_cast<std::uint32_t>(index+1));
@@ -185,11 +202,12 @@ public:
     }
     bool publish(Lane& lane, RecordHeader header) noexcept {
         if (header.lane>=lane_count || lanes[header.lane].get()!=&lane) { poison(LaneFault::invalid_record); return false; }
-        return publish_to_lane(lane,header,failure,&spill_);
+        return publish_to_lane(lane,header,failure,&spill_,&queue_failure_,&queue_failure_state_);
     }
     // Three-argument API remains a private-queue-only fixture/legacy entry.
     static bool publish_to_lane(Lane& lane, RecordHeader header, std::atomic<unsigned>& failure,
-                                CaptureSpillPool* spill=nullptr) noexcept {
+                                CaptureSpillPool* spill=nullptr,QueueFailureSnapshot* diagnostic=nullptr,
+                                std::atomic<unsigned>* diagnostic_state=nullptr) noexcept {
         const auto& snapshot=lane.snapshot;
         if (snapshot.segment_count>max_segments || snapshot.field_count>max_fields || snapshot.byte_count>max_bytes
             || header.parent_checkpoint_count>invocation_depth) {
@@ -209,7 +227,14 @@ public:
         append(snapshot.fields.data(), snapshot.field_count*sizeof(FieldState));
         append(snapshot.bytes.data(), snapshot.byte_count);
         if (!lane.queue.push(header.ticket, lane.scratch.data(), offset)
-            && !(spill && spill->try_push(lane.spill_owner_tag.load(std::memory_order_relaxed),header.ticket,lane.scratch.data(),offset))) {
+            && !(spill && spill->try_push(lane.spill_owner_tag.load(std::memory_order_relaxed),header.ticket,lane.scratch.data(),offset,&lane.spill_cursor))) {
+            unsigned empty=0;
+            if(diagnostic&&diagnostic_state&&diagnostic_state->compare_exchange_strong(empty,1,std::memory_order_acq_rel)) {
+                diagnostic->ticket=header.ticket;diagnostic->lane=header.lane;diagnostic->attempted_bytes=offset;
+                diagnostic->private_queue=lane.queue.producer_occupancy();
+                if(spill)diagnostic->spill=spill->failure_snapshot(lane.spill_owner_tag.load(std::memory_order_relaxed),offset);
+                diagnostic->available=true;diagnostic_state->store(2,std::memory_order_release);
+            }
             unsigned zero=0; failure.compare_exchange_strong(zero,static_cast<unsigned>(LaneFault::queue_full),std::memory_order_relaxed); return false;
         }
         if(header.capture_concurrent)lane.submitted.uncertain_records.store(
@@ -231,13 +256,18 @@ public:
     // Worker only. The expected raw prefix can be in any private or spill
     // bank; a later head is never treated as permission to skip a reserved ID.
     std::optional<ReadyRecord> next_ready(std::uint64_t expected) const noexcept {
+        // Storage hint only. A later head never licenses skipping a ticket.
+        if(last_ready_){const auto& previous=*last_ready_;
+            const auto head=previous.source==Source::private_lane?lanes[previous.index]->queue.head_ticket():spill_.head_ticket(previous.index);
+            if(head&&*head==expected)return ReadyRecord{expected,previous.source,previous.index};
+        }
         for (std::uint16_t i=0;i<lane_count;++i) {
             const auto head=lanes[i]->queue.head_ticket();
-            if (head && *head==expected) return ReadyRecord{expected,Source::private_lane,i};
+            if (head && *head==expected) {last_ready_=ReadyRecord{expected,Source::private_lane,i};return last_ready_;}
         }
-        for (std::uint16_t i=0;i<CaptureSpillPool::bank_count;++i) {
+        for (std::uint16_t i=0;i<spill_.configured_banks();++i) {
             const auto head=spill_.head_ticket(i);
-            if (head && *head==expected) return ReadyRecord{expected,Source::spill_bank,i};
+            if (head && *head==expected) {last_ready_=ReadyRecord{expected,Source::spill_bank,i};return last_ready_;}
         }
         return std::nullopt;
     }
@@ -247,7 +277,7 @@ public:
         CaptureQueue::PopResult result;
         if (ready.source==Source::private_lane && ready.index<lane_count)
             result=lanes[ready.index]->queue.try_pop(ticket,destination,capacity,size);
-        else if (ready.source==Source::spill_bank && ready.index<CaptureSpillPool::bank_count)
+        else if (ready.source==Source::spill_bank && ready.index<spill_.configured_banks())
             result=spill_.try_pop(ready.index,ticket,destination,capacity,size);
         else { poison(LaneFault::invalid_record); size=0; return CaptureQueue::PopResult::empty; }
         if (result!=CaptureQueue::PopResult::popped) return result;
@@ -279,7 +309,7 @@ public:
         const auto tag=lane.spill_owner_tag.load(std::memory_order_acquire);
         // Empty assigned banks still retain an owner; release these under the
         // pool's writer exclusion before deciding that a tag is quiescent.
-        for (std::size_t bank=0;bank<CaptureSpillPool::bank_count;++bank)
+        for (std::size_t bank=0;bank<spill_.configured_banks();++bank)
             if (spill_.bank_owner(bank)==tag) spill_.reap_empty(bank);
         if (spill_.has_owner_pending(tag)) return false;
         if (lane.submitted.records.load(std::memory_order_acquire)!=lane.consumed.records.load(std::memory_order_acquire)
@@ -324,12 +354,32 @@ public:
         lane.consumed.observed_pending_qpc=lane.consumed.observed_pending_ticket=0;
         lane.consumed.last_age=lane.consumed.maximum_age=lane.consumed.age_samples=0;
         lane.generation.fetch_add(1,std::memory_order_relaxed);
+        lane.spill_cursor=CaptureSpillPool::ProducerCursor{};
         lane.spill_owner_tag.store(static_cast<std::uint32_t>(next),std::memory_order_relaxed);
         lane.birth.store(0,std::memory_order_relaxed);
         lane.owner.store(0,std::memory_order_release);
         return true;
     }
     CaptureSpillPool& spill_pool() noexcept { return spill_; }
+    void maintain_spill()noexcept{spill_.maintain();}
+    QueueMemoryStatus memory_status()const noexcept {
+        QueueMemoryStatus s;s.enabled=config_.requested_budget_mib!=0;s.requested_budget_mib=config_.requested_budget_mib;
+        s.budget_bytes=static_cast<std::uint64_t>(config_.requested_budget_mib)*1024*1024;
+        const auto c=spill_.capacity();s.maximum_banks=static_cast<std::uint32_t>(c.banks);
+        s.prepared_banks=spill_.prepared_banks();s.free_banks=spill_.free_banks();
+        const auto fixed=sizeof(CaptureLanes)+lane_count*(sizeof(Lane)-capture_working_per_lane())+lane_count*CaptureQueue::storage_bytes(config_.lane_queue);
+        const auto bank=sizeof(CaptureQueue)+CaptureQueue::storage_bytes({c.metadata_slots,c.arena_bytes},c.elastic);
+        s.maximum_storage_bytes=fixed+c.banks*bank;s.prepared_storage_bytes=fixed+s.prepared_banks*bank;
+        s.fixed_capture_working_bytes=lane_count*capture_working_per_lane();
+        s.slot_capacity=lane_count*config_.lane_queue.metadata_slots+c.banks*c.metadata_slots;
+        s.arena_capacity=lane_count*config_.lane_queue.arena_bytes+c.banks*c.arena_bytes;
+        s.prepared_slot_capacity=lane_count*config_.lane_queue.metadata_slots+s.prepared_banks*c.metadata_slots;
+        s.prepared_arena_capacity=lane_count*config_.lane_queue.arena_bytes+s.prepared_banks*c.arena_bytes;
+        s.trimmed=spill_.trimmed();s.prepare_failures=spill_.prepare_failures();return s;
+    }
+    QueueFailureSnapshot queue_failure_snapshot()const noexcept {
+        return queue_failure_state_.load(std::memory_order_acquire)==2?queue_failure_:QueueFailureSnapshot{};
+    }
     std::array<std::unique_ptr<Lane>, lane_count> lanes;
     std::atomic<unsigned> failure{0};
     std::atomic<std::uint64_t> reserved{0};
@@ -340,7 +390,15 @@ public:
     std::atomic<std::uint64_t> publication_claim{0};
     std::atomic<unsigned> publication_attempts{0};
 private:
+    static constexpr std::size_t capture_working_per_lane()noexcept {
+        return sizeof(decltype(Lane::calls))+sizeof(decltype(Lane::snapshot))
+            +sizeof(decltype(Lane::parent_checkpoints))+sizeof(decltype(Lane::scratch));
+    }
+    const Config config_;
     CaptureSpillPool spill_;
+    mutable std::optional<ReadyRecord> last_ready_;
+    QueueFailureSnapshot queue_failure_;
+    std::atomic<unsigned> queue_failure_state_{0};
 };
 inline bool capture_read(void*, std::uintptr_t address, void* target, std::size_t bytes) noexcept {
     if (!bytes) return true;

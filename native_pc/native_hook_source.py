@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 import os
+from connection import DEFAULT_EVENT_QUEUE_MEMORY_MIB, event_queue_memory_mib
 from pathlib import Path, PurePosixPath
 from metrics import timed, sanitize_native_async_capture, NATIVE_CAPTURE_RETRY_REASONS
 import re
@@ -98,7 +99,7 @@ PROVIDER = 'arkdps-native-hooks'
 PROTOCOL = 1
 RUNTIME_SOURCES = ('engine.cpp', 'engine.h', 'engine_worker.h', 'engine_capture_lane.h',
                    'engine_capture_plan.h', 'engine_capture_config.h', 'engine_capture_pipeline.h', 'engine_terminal_fence.h', 'engine_capture_timing.h',
-                   'capture_queue.h', 'capture_spill_pool.h', 'native_capture.cpp', 'native_capture.h',
+                   'capture_queue.h', 'capture_memory_budget.h', 'capture_spill_pool.h', 'native_capture.cpp', 'native_capture.h',
                    'owned_replay_view.h', 'owned_replay_js.h', 'owned_role_index.h',
                    'server.cpp', 'hooks.S', 'bridge.js', 'publication.js', 'cold_plan.js', 'build.py')
 NATIVE_HOOK_LICENSES = {
@@ -439,9 +440,18 @@ class NativePipe:
                 except ValueError as exc:
                     raise RuntimeError('native observer returned invalid JSON') from exc
                 if (not isinstance(reply, dict) or type(reply.get('id')) is not int
-                        or reply['id'] != self._id or set(reply) - {'id', 'result', 'error'}):
+                        or reply['id'] != self._id or set(reply) - {'id', 'result', 'error', 'queue_failure'}
+                        or ('queue_failure' in reply and (not reply.get('error') or 'result' in reply))):
                     raise RuntimeError('native observer response ID or envelope mismatch')
                 if reply.get('error'):
+                    failure = None
+                    if 'queue_failure' in reply:
+                        from metrics import sanitize_native_queue_failure
+                        failure = sanitize_native_queue_failure(reply['queue_failure'])
+                    if failure is not None:
+                        error = RuntimeError(str(reply['error']))
+                        error.queue_failure = failure
+                        raise error
                     raise RuntimeError(str(reply['error']))
                 if not isinstance(reply.get('result'), dict):
                     raise RuntimeError('native observer returned a non-object result')
@@ -788,6 +798,9 @@ class NativeHookEventProbe:
         self._native_timing_may_be_enabled = False
         self._native_timing_confirmed = False
         self._publication_token = None
+        self.configured_event_queue_memory_mib = DEFAULT_EVENT_QUEUE_MEMORY_MIB
+        self.effective_event_queue_memory_mib = None
+        self._queue_memory_supported = False
         self._sampling_supported = False
         self._sampling_scheduler_supported = False
         self._configured_options = None
@@ -799,6 +812,17 @@ class NativeHookEventProbe:
         self._pressure_next = 0.0
         self._pressure_reported = False
         self._capture_status_next = 0.0
+
+    def set_event_queue_memory_mib(self, value):
+        value = event_queue_memory_mib(value)
+        if self._attempted or self._started:
+            raise RuntimeError('事件队列预算仅能在游戏进程初始化前设置')
+        self.configured_event_queue_memory_mib = value
+
+    def queue_memory_status(self):
+        return {'configured_mib': self.configured_event_queue_memory_mib,
+                'effective_mib': self.effective_event_queue_memory_mib,
+                'applicable': True, 'supported': self._queue_memory_supported}
 
     def set_request_timing_audit(self, sink=None, *, enabled=None):
         self._timing_sink, self._timing_enabled = sink, enabled
@@ -904,11 +928,20 @@ class NativeHookEventProbe:
                         raise self._loader.load_error
             self._pipe = self.pipe_factory(pipe_name, process.pid)
             self.hook_disable_confirmed = False
-            hello = self._pipe.request('initialize', token=token, timeout=20)
+            hello = self._pipe.request('initialize', token=token, timeout=20,
+                                       event_queue_memory_mib=self.configured_event_queue_memory_mib)
             if (hello.get('provider') != PROVIDER or type(hello.get('protocol')) is not int
                     or hello['protocol'] != PROTOCOL or not isinstance(hello.get('ready'), dict)
                     or hello['ready'].get('ready') is not True or hello['ready'].get('arch') != 'x64'):
                 raise RuntimeError('ArkPie 实时组件握手或架构不匹配')
+            queue_version = hello['ready'].get('event_queue_memory_version')
+            if queue_version is not None:
+                if type(queue_version) is not int or queue_version != 1:
+                    raise RuntimeError('ArkPie 事件队列预算能力版本不匹配')
+                self.effective_event_queue_memory_mib = event_queue_memory_mib(
+                    hello['ready'].get('effective_event_queue_memory_mib'))
+                self._queue_memory_supported = True
+
             if not process.process_alive():
                 raise RuntimeError('游戏进程在原生组件初始化期间退出')
             sampling_version = hello['ready'].get('native_sampling_version')
@@ -1020,6 +1053,11 @@ class NativeHookEventProbe:
                                                  r'(?=native_replay_gap:v1,)', str(exc))
                             if combined:
                                 diagnostic['native_failure_code'] = int(combined[1])
+                    if getattr(exc, 'queue_failure', None) is not None:
+                        from metrics import sanitize_native_queue_failure
+                        queue_failure = sanitize_native_queue_failure(exc.queue_failure)
+                        if queue_failure is not None:
+                            diagnostic['queue_failure'] = queue_failure
                     self._timing_sink('native_hook_request_failed', diagnostic)
                 except Exception:
                     pass  # Failure reporting cannot replace the transport error.

@@ -82,12 +82,20 @@ def wire_challenge(pipe,sequence,bypass_poison=False):
   if bypass_poison:pipe._poisoned=True
  return {'test_only_poison_bypass':bypass_poison,'io':rows,'answer':answer,'failure':failure,'post_disconnect_acknowledged':None,'post_disconnect_acknowledged_reason':'not queryable after server closes this authenticated pipe'}
 
-def run(binary,helper,source_root,out,missing=False,mismatch=False,early_ack=False):
+def run(binary,helper,source_root,out,missing=False,mismatch=False,early_ack=False,queue_budget=None):
  out.mkdir(parents=True,exist_ok=True);text=source(source_root,helper,missing,mismatch);(out/'source.js').write_text(text,encoding='utf-8');receipt={'missing':missing,'mismatch':mismatch,'early_ack':early_ack,'source_sha256':sha256(text.encode()).hexdigest(),'product_sha256':{name:sha256((source_root/name).read_bytes()).hexdigest()for name in ['event_probe_native_pc.js','event_probe_runtime.js','event_probe_autochess.js','event_probe_store.js']}}
  with TemporaryDirectory(prefix='arkdps-damage-dll-')as temp:
   f=OwnedFixture(Path(temp)/'child',binary,helper);pipe=None
   try:
-   receipt['identity']=f.identity;f.configure(source=text);f.command('load');pipe=NativePipe(f.pipe_name,f.identity['pid'],timeout=20);hello=pipe.request('initialize',token=f.token);ready=hello['ready'];assert 'fixture_setup_error'not in ready,ready
+   receipt['identity']=f.identity;f.configure(source=text);f.command('load');pipe=NativePipe(f.pipe_name,f.identity['pid'],timeout=20)
+   options={}if queue_budget is None else{'event_queue_memory_mib':queue_budget}
+   hello=pipe.request('initialize',token=f.token,**options);ready=hello['ready'];assert 'fixture_setup_error'not in ready,ready
+   if queue_budget is not None:
+    from metrics import sanitize_native_queue_memory
+    memory=sanitize_native_queue_memory(ready.get('event_queue_memory'))
+    assert ready.get('event_queue_memory_version')==1 and ready.get('effective_event_queue_memory_mib')==queue_budget,ready
+    assert memory is not None and memory['requested_budget_mib']==queue_budget,memory
+    receipt['queue_budget']=memory
    (out/'ready.json').write_text(json.dumps(hello,indent=2),encoding='utf-8');world=ready.pop('world');(out/'world.json').write_text(json.dumps(world),encoding='utf-8');receipt['world_sha256']=sha256((out/'world.json').read_bytes()).hexdigest();receipt['setup']=f.command('install-world',world=world)
    receipt['calls']=[]
    for route in ([0]if missing else [6,0]if mismatch else [0,1,2,3,4,5]):receipt['calls'].append(f.command('run-route',route=route))

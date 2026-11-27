@@ -1282,6 +1282,9 @@ bool drain_captures_with_batch(bool allow_batch) noexcept {
     try {
         if (runtime.lanes->failure.load(std::memory_order_acquire))
             throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
+        // Prepare/prefault and retire empty spill storage only on the worker.
+        // Producers can borrow only already-prepared banks and never wait here.
+        runtime.lanes->maintain_spill();
         // Bounded poll work keeps host jobs responsive under sustained producers.
         const auto poll_deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(2);
         for (unsigned budget=0;budget<512;++budget) {
@@ -1692,12 +1695,43 @@ bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMem
     }
 }
 
+nlohmann::json queue_memory_json(const arkdps::capture::CaptureLanes& lanes) {
+    const auto value=lanes.memory_status();
+    return {{"version",1},{"enabled",value.enabled},{"requested_budget_mib",value.requested_budget_mib},
+        {"budget_bytes",value.budget_bytes},{"maximum_storage_bytes",value.maximum_storage_bytes},
+        {"prepared_storage_bytes",value.prepared_storage_bytes},{"fixed_capture_working_bytes",value.fixed_capture_working_bytes},
+        {"slot_capacity",value.slot_capacity},{"arena_capacity",value.arena_capacity},
+        {"prepared_slot_capacity",value.prepared_slot_capacity},{"prepared_arena_capacity",value.prepared_arena_capacity},
+        {"maximum_banks",value.maximum_banks},{"prepared_banks",value.prepared_banks},{"free_banks",value.free_banks},
+        {"trimmed",value.trimmed},{"prepare_failures",value.prepare_failures}};
+}
+nlohmann::json queue_failure_json(const arkdps::capture::CaptureLanes& lanes) {
+    if (lanes.failure.load(std::memory_order_acquire)
+            != static_cast<unsigned>(arkdps::capture::LaneFault::queue_full)) return nullptr;
+    const auto value=lanes.queue_failure_snapshot();
+    if (!value.available) return nullptr;
+    return {{"version",1},{"failure_code",4},{"ticket",std::to_string(value.ticket)},
+        {"lane",value.lane},{"attempted_bytes",value.attempted_bytes},
+        {"private_queue",{{"slot_capacity",value.private_queue.slot_capacity},{"arena_capacity",value.private_queue.arena_capacity},
+            {"used_slots",value.private_queue.used_slots},{"used_bytes",value.private_queue.used_bytes}}},
+        {"spill",{{"configured_banks",value.spill.configured_banks},{"prepared_banks",value.spill.prepared_banks},
+            {"free_banks",value.spill.free_banks},{"owned_banks",value.spill.owned_banks},
+            {"foreign_owned_banks",value.spill.foreign_owned_banks},{"busy_banks",value.spill.busy_banks},
+            {"unprepared_banks",value.spill.unprepared_banks},{"slot_rejections",value.spill.slot_rejections},
+            {"byte_rejections",value.spill.byte_rejections},{"oversize_rejections",value.spill.oversize_rejections}}}};
+}
 std::string readiness_on_worker() {
     auto& runtime = state();
     if (!runtime.initialized || !runtime.fatal.empty()) throw std::runtime_error(runtime.fatal.empty() ? "native runtime is not ready" : runtime.fatal);
     auto ready=nlohmann::json::parse(runtime.ready);
     ready.erase("native_mark_scheduler_version");ready.erase("mode_control_version");
     if(runtime.sampling_plan){ready["native_mark_scheduler_version"]=1;ready["mode_control_version"]=1;}
+    const auto memory=queue_memory_json(*runtime.lanes);
+    if(memory.at("enabled").get<bool>()) {
+        ready["event_queue_memory_version"]=1;
+        ready["effective_event_queue_memory_mib"]=memory.at("requested_budget_mib");
+        ready["event_queue_memory"]=memory;
+    }
     return ready.dump();
 }
 bool terminal_fence_current(Runtime& runtime) noexcept {
@@ -1790,6 +1824,8 @@ std::string request_on_worker(const std::string& json,std::uint64_t legacy_minim
             {"attempts",runtime.sampling_attempts},{"serial",std::to_string(runtime.sampling_serial)},
             {"request",std::to_string(runtime.sample_request)},{"completed_request",std::to_string(runtime.completed_sample_request)},
             {"retry_reason",runtime.sampling_retry_reason}};
+        state["event_queue_memory"]=queue_memory_json(*runtime.lanes);
+        state["queue_failure"]=queue_failure_json(*runtime.lanes);
         state["batch_fallback_reasons"]={{"unsupported_plan",runtime.replay_fallbacks[1]},{"methods_unavailable",runtime.replay_fallbacks[2]},
             {"argument_contract",runtime.replay_fallbacks[3]},{"missing_root",runtime.replay_fallbacks[4]},{"parent_or_nested",runtime.replay_fallbacks[5]},
             {"concurrent",runtime.replay_fallbacks[6]},{"cold_or_publication",runtime.replay_fallbacks[7]}};
@@ -2008,15 +2044,10 @@ std::string request_on_worker(const std::string& json,std::uint64_t legacy_minim
     }
     return response.dump();
 }
-void initialize(const std::string& source) {
+void initialize(const std::string& source, std::uint32_t event_queue_memory_mib) {
+    const auto lane_config=capture::CaptureLanes::budget_config(event_queue_memory_mib);
     auto& runtime=state();
-    runtime.worker.start([source] {
-        capture::CaptureLanes::Config lane_config;
-        lane_config.lane_queue={2048,2*1024*1024};
-        // The actual owned HP recipe is 907/6208 bytes for enter/heal-leave.
-        // 30k setters/s and a 500ms consumer pause need ~107MB, before a
-        // publication burst. One hot lane may borrow all four 32MiB banks.
-        lane_config.spill={32768,32*1024*1024};
+    runtime.worker.start([source,lane_config] {
         state().lanes=std::make_unique<capture::CaptureLanes>(lane_config);
         state().ingress.store(state().lanes.get(),std::memory_order_release);
         initialize_on_worker(source);
@@ -2025,6 +2056,12 @@ void initialize(const std::string& source) {
 }
 std::string readiness() {
     return state().worker.submit([] { return readiness_on_worker(); });
+}
+std::string queue_failure_diagnostic() {
+    return state().worker.submit([] {
+        auto& runtime=state();
+        return runtime.lanes ? queue_failure_json(*runtime.lanes).dump() : std::string("null");
+    });
 }
 std::string request(const std::string& json) {
     if (json.size()>8*max_read) throw std::runtime_error("request too large");

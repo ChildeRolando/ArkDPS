@@ -112,10 +112,10 @@ def launch(args=None):
                    [str(EXECUTABLE), '--repo', str(ROOT), '--python', worker_python(sys.executable)])
         if args is not None:
             for name in ('adb', 'serial', 'platform', 'native_game_root', 'native_pc_event_backend',
-                         'native_pc_event_feed'):
+                         'native_pc_event_feed', 'event_queue_memory_mib'):
                 value = getattr(args, name, None)
                 if value:
-                    command += ['--' + name.replace('_', '-'), value]
+                    command += ['--' + name.replace('_', '-'), str(value)]
             framework_root = getattr(args, 'arkframework_root', None)
             if framework_root:
                 command += ['--arkframework-root', str(Path(framework_root).absolute())]

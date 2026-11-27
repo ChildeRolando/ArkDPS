@@ -411,12 +411,20 @@ DWORD WINAPI worker(void* argument) {
                 const std::string operation = request["operation"].get<std::string>();
                 Json result;
                 if (!initialized) {
-                    if (operation != "initialize" || request.size() != 3 || !request.contains("token")
+                    if (operation != "initialize" || request.size() != 3 + request.count("event_queue_memory_mib") || !request.contains("token")
                             || !request["token"].is_string()
                             || !equal_token(request["token"].get<std::string>(), config.token))
                         throw SafeError("runtime authentication failed");
                     authenticated = true;
                     phase = "initialize";
+                    std::uint32_t event_queue_memory_mib = 1024;
+                    if (request.contains("event_queue_memory_mib")) {
+                        const auto& value = request.at("event_queue_memory_mib");
+                        if (!value.is_number_unsigned() || value.get<std::uint64_t>() < 512
+                                || value.get<std::uint64_t>() > 2048)
+                            throw SafeError("event queue memory must be an integer from 512 to 2048 MiB");
+                        event_queue_memory_mib = value.get<std::uint32_t>();
+                    }
                     const auto name = L"Local\\ArkDPS.NativeEvents." + std::to_wstring(GetCurrentProcessId())
                         + L"." + std::to_wstring(creation_time());
                     mutex = CreateMutexW(&security.attributes, TRUE, name.c_str());
@@ -429,7 +437,7 @@ DWORD WINAPI worker(void* argument) {
                             reinterpret_cast<LPCWSTR>(&worker), &pinned))
                         throw SafeError("cannot preserve runtime callback lifetime");
                     initialized = true; // Also clean up a partially failed initialize.
-                    arkdps::initialize(config.source);
+                    arkdps::initialize(config.source, event_queue_memory_mib);
                     phase = "readiness";
                     result = hello();
                 } else if (operation == "initialize" || request.contains("token")) {
@@ -471,7 +479,14 @@ DWORD WINAPI worker(void* argument) {
                 if (authenticated) {
                     try { diagnostic = safe_diagnostic(error.what(), phase); } catch (...) {}
                 }
-                write_line(pipe.value, Json{{"id", id}, {"error", diagnostic}});
+                Json response{{"id", id}, {"error", diagnostic}};
+                if (authenticated && initialized) {
+                    try {
+                        auto failure=Json::parse(arkdps::queue_failure_diagnostic());
+                        if (failure.is_object()) response["queue_failure"]=std::move(failure);
+                    } catch (...) {} // Diagnostics cannot change the original failure.
+                }
+                write_line(pipe.value, response);
                 break;
             } catch (...) {
                 // Never echo engine exceptions, configuration, token, or caller source.

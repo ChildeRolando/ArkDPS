@@ -10,7 +10,7 @@ import time
 from uuid import uuid4
 
 from log_context import LogContext
-from metrics import sanitize_native_async_capture, NATIVE_CAPTURE_RETRY_REASONS
+from metrics import sanitize_native_async_capture, sanitize_native_queue_failure, NATIVE_CAPTURE_RETRY_REASONS
 
 
 ENEMY_STATE_DELTA = 'desktop_enemy_state_delta_v1'
@@ -259,12 +259,12 @@ KEY_EVENTS = {
                                    'replay_ticket', 'replay_role_id', 'replay_checkpoint', 'replay_field_id',
                                    'replay_gap_count', 'metadata_read_size', 'replay_reason_codes', 'replay_script_lines',
                                    'native_failure_code', 'sampling_failure_reason', 'sampling_capture_error_code',
-                                   'sampling_stage', 'sampling_lane_fault', 'sampling_json_exception_id'),
+                                   'sampling_stage', 'sampling_lane_fault', 'sampling_json_exception_id', 'queue_failure'),
     'lifecycle_state': ('previous', 'state'),
     'capture_health': None,  # Sanitized before the journal mode is applied.
     'event_gap': ('error_type', 'code'),
-    'capture_retry': ('error_type', 'code'),
-    'capture_error': ('error_type', 'code', 'cursor_failure'),
+    'capture_retry': ('error_type', 'code', 'window_failure'),
+    'capture_error': ('error_type', 'code', 'cursor_failure', 'window_failure'),
     'history_error': ('code',),
     'history_saved': ('written',),
     'stopped': (),
@@ -317,6 +317,9 @@ SAMPLING_FAILURE_REASONS = frozenset(('plan_contract', 'clock_contract', 'invali
 def sanitize_sampling_failure(data):
     """Only finite sampler categories cross the normal or detailed journal."""
     result = dict(data)
+    queue_failure = sanitize_native_queue_failure(result.pop('queue_failure', None))
+    if queue_failure is not None:
+        result['queue_failure'] = queue_failure
     reason = result.pop('sampling_failure_reason', None)
     code = result.pop('sampling_capture_error_code', None)
     stage = result.pop('sampling_stage', None)
@@ -362,6 +365,61 @@ def sanitize_cursor_failure(value):
     return dict(value)
 
 
+def sanitize_window_failure(value):
+    """Bounded host-only frame diagnostics, never original events or account lists."""
+    if not isinstance(value, dict) or set(value) - {'stage', 'stages', 'before', 'snapshot', 'anchor', 'after', 'guard', 'cursor'}:
+        return None
+    stage = value.get('stage')
+    stages = value.get('stages', [])
+    valid_stage = lambda item: isinstance(item, str) and re.fullmatch(r'[a-z_]{1,64}', item) is not None
+    if not valid_stage(stage) or not isinstance(stages, list) or len(stages) > 6 or not all(map(valid_stage, stages)):
+        return None
+    result = dict(stage=stage, stages=list(stages))
+    integer_keys = {'frame', 'native_frame', 'native_fixed_time', 'sequence', 'epoch',
+                    'native_generation', 'damage_settlement_scope', 'phase', 'round'}
+    point_keys = integer_keys | {'game_time', 'collection_mode'}
+    def point(raw):
+        if not isinstance(raw, dict) or set(raw) - point_keys:
+            return None
+        clean = {}
+        for key, item in raw.items():
+            if key in integer_keys:
+                valid = type(item) is int and 0 <= item <= (1 << 64) - 1
+            elif key == 'game_time':
+                valid = type(item) in (int, float) and math.isfinite(item) and 0 <= item <= 864000
+            else:
+                valid = type(item) is str and item in ('local', 'all')
+            if not valid:
+                return None
+            clean[key] = item
+        return clean
+    for key in ('before', 'snapshot', 'anchor', 'after'):
+        if key in value:
+            clean = point(value[key])
+            if clean is None:
+                return None
+            result[key] = clean
+    if 'guard' in value:
+        guard = value['guard']
+        if not isinstance(guard, dict) or set(guard) - {'version', 'before', 'after', 'start', 'end', 'complete'}:
+            return None
+        clean = {}
+        for key, item in guard.items():
+            if key in ('before', 'after'):
+                item = point(item)
+                if item is None:
+                    return None
+            elif type(item) not in (int, bool) or type(item) is int and not 0 <= item <= (1 << 64) - 1:
+                return None
+            clean[key] = item
+        result['guard'] = clean
+    if 'cursor' in value:
+        if type(value['cursor']) is not int or not 0 <= value['cursor'] <= (1 << 64) - 1:
+            return None
+        result['cursor'] = value['cursor']
+    return result
+
+
 def _event_fields(data, fields):
     if not isinstance(data, dict):
         return {}
@@ -370,6 +428,16 @@ def _event_fields(data, fields):
         if name not in data:
             continue
         value = data[name]
+        if name == 'queue_failure':
+            clean = sanitize_native_queue_failure(value)
+            if clean is not None:
+                result[name] = clean
+            continue
+        if name == 'window_failure':
+            clean = sanitize_window_failure(value)
+            if clean is not None:
+                result[name] = clean
+            continue
         if name == 'cursor_failure':
             clean = sanitize_cursor_failure(value)
             if clean is not None:
@@ -506,6 +574,11 @@ class DesktopCaptureJournal:
                     return
             if kind == 'native_hook_request_failed':
                 data = sanitize_sampling_failure(data)
+            if kind in ('capture_retry', 'capture_error') and isinstance(data, dict):
+                data = dict(data)
+                window = sanitize_window_failure(data.pop('window_failure', None))
+                if window is not None:
+                    data['window_failure'] = window
             detailed = bool(self.debug_enabled())
             if detailed != self._detailed:
                 previous = self._detailed

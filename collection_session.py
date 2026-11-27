@@ -13,6 +13,7 @@ from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverReadRetry, ObserverStatus
 from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from event_probe import EventProbe
+from connection import DEFAULT_EVENT_QUEUE_MEMORY_MIB, event_queue_memory_mib as validate_event_queue_memory_mib
 from metrics import TimingWindow, timing_batch
 
 
@@ -46,13 +47,18 @@ class CollectionSession:
     def __init__(self, adb, serial, *, frida_remote=DEFAULT_FRIDA_REMOTE, audit=None, log=print,
                  collector=None, observer_factory=None, prepare_observer=None,
                  history=None, on_history=None, on_history_result=None, state_dir=None,
-                 autochess_enabled=None, debug_mode=None, performance_diagnostics=None):
+                 autochess_enabled=None, debug_mode=None, performance_diagnostics=None,
+                 event_queue_memory_mib=DEFAULT_EVENT_QUEUE_MEMORY_MIB):
         self.collector = (collector if collector is not None else
                           Collector(adb, serial, log=log, state_dir=state_dir))
         self.frida_remote = frida_remote
         self.observer_factory = observer_factory
         self.prepare_observer = prepare_observer
         self.autochess_enabled = autochess_enabled
+        self.event_queue_memory_mib = event_queue_memory_mib
+        if not callable(event_queue_memory_mib):
+            # Validation is shared with connection persistence and CLI.
+            validate_event_queue_memory_mib(event_queue_memory_mib)
         self.debug_mode = debug_mode
         self.observer: EventProbe | None = None
         self._pending_observers = []
@@ -254,6 +260,10 @@ class CollectionSession:
                 from event_observer import FridaEventObserver, NativePcFridaObserver
                 self.observer_factory = NativePcFridaObserver if self._is_native_pc() else FridaEventObserver
             self.observer = self.observer_factory(self.collector, self.frida_remote)
+            configure_queue = getattr(self.observer, 'set_event_queue_memory_mib', None)
+            if callable(configure_queue):
+                budget = self.event_queue_memory_mib() if callable(self.event_queue_memory_mib) else self.event_queue_memory_mib
+                configure_queue(validate_event_queue_memory_mib(budget))
             if self.autochess_enabled is not None:
                 configure = getattr(self.observer, 'set_autochess_setting', None)
                 if callable(configure):

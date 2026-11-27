@@ -31,7 +31,8 @@ class Session:
     instances = []
     failed = False
 
-    def __init__(self, adb, serial, *, frida_remote, audit):
+    def __init__(self, adb, serial, *, frida_remote, audit, event_queue_memory_mib=1024):
+        self.event_queue_memory_mib = event_queue_memory_mib
         self.audit = audit
         self.calls = 0
         self.closed = False

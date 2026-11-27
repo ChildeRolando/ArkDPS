@@ -519,7 +519,80 @@ def autochess_event_mark_context(sample, mark):
     return None
 
 
+def annotate_barrier_busy(error, stage, *, sample=None, before=None, after=None, anchor=None, cursor=None):
+    """Attach bounded already-read diagnostics; this never reads an observer."""
+    if not isinstance(error, BarrierBusy):
+        return error
+    def point(value):
+        if not isinstance(value, dict):
+            return None
+        result = {}
+        for key in ('frame', 'native_frame', 'native_fixed_time', 'sequence', 'epoch',
+                    'native_generation', 'damage_settlement_scope'):
+            item = value.get(key)
+            if (key == 'native_fixed_time' and type(item) is str and item.isascii()
+                    and item.isdecimal() and 1 <= len(item) <= 20):
+                item = int(item)
+            if type(item) is int and 0 <= item <= (1 << 64) - 1:
+                result[key] = item
+        item = value.get('game_time')
+        if type(item) in (int, float) and isfinite(item) and 0 <= item <= 864000:
+            result['game_time'] = item
+        context = value.get('native_autochess_context') or value.get('autochess_context') or {}
+        identity = context.get('identity') or {} if isinstance(context, dict) else {}
+        if not isinstance(identity, dict):
+            identity = {}
+        for key in ('phase', 'round', 'collection_mode'):
+            item = context.get(key, identity.get(key)) if isinstance(context, dict) else None
+            if key == 'collection_mode':
+                if item in ('local', 'all'):
+                    result[key] = item
+            elif type(item) is int and 0 <= item <= (1 << 64) - 1:
+                result[key] = item
+        return result
+    context = dict(getattr(error, 'window_failure', {}))
+    context['stage'] = stage[:64]
+    context['stages'] = [*context.get('stages', ()), stage[:64]][-6:]
+    for key, value in (('before', before), ('snapshot', sample), ('anchor', anchor), ('after', after)):
+        bounded = point(value)
+        if bounded is not None:
+            context[key] = bounded
+    if isinstance(sample, dict):
+        guard = sample.get('guard')
+        if isinstance(guard, dict):
+            context['guard'] = {k: guard[k] for k in ('start', 'end', 'complete')
+                                if type(guard.get(k)) in (int, bool)}
+        raw = sample.get('native_window_guard')
+        if isinstance(raw, dict):
+            context['guard'] = {k: v for k, v in dict(version=raw.get('version'),
+                before=point(raw.get('before')), after=point(raw.get('after'))).items() if v is not None}
+    if type(cursor) is int and 0 <= cursor <= (1 << 64) - 1:
+        context['cursor'] = cursor
+    error.window_failure = context
+    return error
+
+
+def barrier_failure_context(error):
+    """Find only a typed busy diagnostic in the bounded causal chain."""
+    seen = set()
+    while error is not None and id(error) not in seen and len(seen) < 16:
+        seen.add(id(error))
+        if isinstance(error, BarrierBusy) and isinstance(getattr(error, 'window_failure', None), dict):
+            return deepcopy(error.window_failure)
+        error = error.__cause__
+    return None
+
+
 def verified_autochess_event_window(sample, before, after, *, anchor=None):
+    try:
+        return _verified_autochess_event_window(sample, before, after, anchor=anchor)
+    except BarrierBusy as error:
+        annotate_barrier_busy(error, 'autochess_event_window', sample=sample, before=before,
+                              after=after, anchor=anchor)
+        raise
+
+
+def _verified_autochess_event_window(sample, before, after, *, anchor=None):
     """Prove an event-only watermark around one independent guarded snapshot.
 
     Each mark attests its own frame. The counter snapshot attests the battle
@@ -534,8 +607,18 @@ def verified_autochess_event_window(sample, before, after, *, anchor=None):
         raise BarrierBusy('an AutoChess event window requires a playing battle')
     contexts = []
     for mark in (before, after):
+        if not isinstance(mark, dict) or mark.get('error') or mark.get('stopped'):
+            raise StreamGap('AutoChess producer mark failed or stopped')
+        if platform == 'native_pc':
+            if (mark.get('native_session') != sample.get('native_session', sample.get('session'))
+                    or mark.get('source_build') != metadata.get('source_build')
+                    or not _native_pc_mark_binding_valid(sample, mark)):
+                raise StreamGap('AutoChess event mark has an invalid native source binding')
         context = autochess_event_mark_context(sample, mark)
         if context is None:
+            raw_context = mark.get('native_autochess_context')
+            if isinstance(raw_context, dict) and raw_context.get('status') == 'available':
+                raise StreamGap('AutoChess event mark contains an invalid available scope')
             raise BarrierBusy('AutoChess event mark failed independent binding')
         check = dict(sample, frame=context['frame'], game_time=context['game_time'],
                      autochess_context=context, native_counter_scope='events_only')

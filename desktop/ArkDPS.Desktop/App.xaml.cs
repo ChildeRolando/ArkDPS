@@ -47,6 +47,12 @@ public partial class App : System.Windows.Application
             else index++;
         }
     }
+    internal static void ClearEventQueueOverride()
+    {
+        for(int i=0;i<BridgeArguments.Count;)
+            if(BridgeArguments[i]=="--event-queue-memory-mib") BridgeArguments.RemoveRange(i,Math.Min(2,BridgeArguments.Count-i));
+            else i++;
+    }
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
@@ -111,7 +117,7 @@ public partial class App : System.Windows.Application
                         BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
                     case "--fixture": case "--adb": case "--serial": case "--frida-remote":
                     case "--platform": case "--native-game-root":
-                    case "--native-pc-event-backend": case "--native-pc-event-feed":
+                    case "--native-pc-event-backend": case "--native-pc-event-feed": case "--event-queue-memory-mib":
                         BridgeArguments.Add(arg); BridgeArguments.Add(arguments[++i]); break;
                     case "--arkframework-root":
                         BridgeArguments.Add(arg); BridgeArguments.Add(Path.GetFullPath(arguments[++i])); break;

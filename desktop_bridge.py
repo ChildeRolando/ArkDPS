@@ -31,12 +31,13 @@ from battle_share import (AUTOCHESS_SNAPSHOT_NOTE, json_bytes, record_display, r
 from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
 from collector import BattleChanged, NativeClockBusy, ProcessChanged, SampleUnavailable, SnapshotGap, ROOT
 from connection import (PC_EVENT_BACKENDS, ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
-                        DetectionStatus, detect_instances, native_event_feed_path, resolve_configured)
+                        DetectionStatus, detect_instances, native_event_feed_path, resolve_configured,
+                        event_queue_memory_mib, event_queue_memory_argument)
 from desktop_audit import (DesktopCaptureJournal, NATIVE_HOOK_STARTUP_EVENTS,
                             NATIVE_HOOK_STARTUP_OVERFLOW, sanitize_native_hook_startup)
 from event_capture import CaptureRetry
 from event_observer import ObserverReadRetry, ObserverStatus
-from event_probe import BarrierBusy, CallbackBusyMark, NATIVE_PC_CONTRACT
+from event_probe import BarrierBusy, CallbackBusyMark, NATIVE_PC_CONTRACT, barrier_failure_context
 from frida_provision import BUNDLED_SERVER_ARCHIVE, ensure_frida_endpoint, keep_frida_endpoint
 from layout_store import LayoutStore, GuiGeometry, HudPlacement, HudStyle
 from log_context import LogContext
@@ -67,7 +68,7 @@ BRIDGE_COMMANDS = frozenset((
     'hello', 'snapshot', 'quit', 'detect', 'rescan', 'panel_add', 'panel_duplicate',
     'panel_update', 'panel_delete', 'theme', 'number_units', 'hud_style', 'placement',
     'history_refresh', 'history_select', 'history_config', 'export', 'connection_apply',
-    'multiplayer_enabled', 'debug_mode', 'performance_diagnostics', 'event_pause',
+    'multiplayer_enabled', 'debug_mode', 'performance_diagnostics', 'event_pause', 'event_queue_memory',
 ))
 BRIDGE_KEY_COMMANDS = frozenset(('hello', 'connection_apply', 'rescan', 'history_refresh', 'quit', 'debug_mode', 'event_pause'))
 PC_STARTUP_KEY_EVENTS = frozenset(('target_selected', 'loader_submitted', 'loader_completed', 'target_unavailable')) | NATIVE_HOOK_STARTUP_EVENTS
@@ -370,6 +371,8 @@ class DesktopState:
         self.connection_store = ConnectionConfigStore(directory / 'connection.json')
         config = self.connection_store.load()
         self.connection = config.config
+        self._event_queue_memory_override = None
+        self._event_queue_memory_status_reader = None
         from native_pc.internal_entry import native_hook_candidate_profile, native_hook_candidate_defaults
         self.native_hook_profile = native_hook_candidate_profile(ROOT)
         self.effective_connection = native_hook_candidate_defaults(self.native_hook_profile, self.connection)
@@ -1037,6 +1040,33 @@ class DesktopState:
             self._history_view_key = key
         return self._history_view
 
+    def event_queue_memory_requested(self):
+        return (self._event_queue_memory_override if self._event_queue_memory_override is not None
+                else self.connection.event_queue_memory_mib)
+
+    def event_queue_memory_view(self):
+        configured = self.event_queue_memory_requested()
+        config = self.effective_connection
+        applicable = config.platform == 'native_pc' and config.native_pc_event_backend == 'native' and not config.native_pc_event_feed
+        actual = None
+        if callable(self._event_queue_memory_status_reader):
+            try:
+                actual = self._event_queue_memory_status_reader()
+            except Exception:
+                pass  # A diagnostic getter cannot invalidate the desktop snapshot.
+        effective = actual.get('effective_mib') if isinstance(actual, dict) else None
+        known = (applicable and isinstance(actual, dict) and actual.get('applicable') is True
+                 and actual.get('supported') is True and type(effective) is int and 512 <= effective <= 2048)
+        pending = known and effective != configured
+        return dict(configured_mib=configured, saved_mib=self.connection.event_queue_memory_mib,
+                    override_mib=self._event_queue_memory_override,
+                    effective_mib=effective if known else None, applicable=applicable,
+                    supported=(actual.get('supported') if applicable and isinstance(actual, dict)
+                               and type(actual.get('supported')) is bool else None),
+                    pending_restart=pending, effective_known=known,
+                    status='not_applicable' if not applicable else 'unavailable' if not known else
+                           'pending_restart' if pending else 'active')
+
     def multiplayer_view(self, payload, *, event=None):
         """Render the same statistics model in a player/actor-scoped view."""
         if not isinstance(payload, dict) or payload.get('schema_version') not in (1, 2):
@@ -1169,6 +1199,7 @@ class DesktopState:
                     native_hook_candidate=self.native_hook_profile,
                     event_capture_control=dict(self.event_capture_control),
                     connection_config=self.connection.to_dict(), warnings=self.warnings,
+                    event_queue_memory=self.event_queue_memory_view(),
                     effective_connection_config=self.effective_connection.to_dict(),
                     totals=team_totals({} if character_counters else stats), native_counter_scope=counter_scope,
                     status=status, status_text=label, error=self.error,
@@ -1246,6 +1277,12 @@ class DesktopState:
                 raise ValueError('卫戍队友DPS开关必须是布尔值')
             if enabled != self.layout.multiplayer_enabled:
                 self.persist(replace(self.layout, multiplayer_enabled=enabled))
+        elif op == 'event_queue_memory':
+            value = event_queue_memory_mib(cmd.get('value'))
+            config = ConnectionConfig.from_dict(dict(self.connection.to_dict(), event_queue_memory_mib=value))
+            self.connection_store.save(config)
+            self.connection = config
+            self._event_queue_memory_override = None
         elif op == 'performance_diagnostics':
             enabled = cmd.get('enabled')
             if type(enabled) is not bool:
@@ -1438,6 +1475,8 @@ class CollectionWorker:
         self.arkframework_root = Path(arkframework_root) if arkframework_root is not None else None
         self.requests, self.events = queue.Queue(), queue.Queue()
         self.effective = (state.connection, state.layout.event_observation)
+        self._queue_memory_requested = state.event_queue_memory_requested
+        state._event_queue_memory_status_reader = self.event_queue_memory_status
         self._request_lock = threading.Lock()
         self._autochess_enabled = state.layout.multiplayer_enabled
         self._performance_enabled = threading.Event()
@@ -1668,6 +1707,11 @@ class CollectionWorker:
             reason='等待事件观察者就绪', revision=self._event_pause_revision, source_revision=self._request_revision)
         return True
 
+    def event_queue_memory_status(self):
+        observer = getattr(getattr(self, 'session', None), 'observer', None)
+        read = getattr(observer, 'queue_memory_status', None)
+        return read() if callable(read) else None
+
     def _connect_session(self, adb, serial, runtime, **kwargs):
         # Publishing ownership and admitting the connection are one local
         # commit against close(). Session setup opens no device connection.
@@ -1678,6 +1722,7 @@ class CollectionWorker:
                 raise InterruptedError('采集线程正在关闭，不再建立采集会话')
             if self.session is not None:
                 raise RuntimeError('旧采集会话尚未释放')
+            kwargs.setdefault('event_queue_memory_mib', self._queue_memory_requested)
             self.session = CollectionSession(adb, serial, **kwargs)
             self.session.enable_lifecycle(runtime)
             session = self.session
@@ -2175,6 +2220,7 @@ class CollectionWorker:
                                             reason = reason.partition(':')[0]
                                         audit('capture_retry', {
                                             'error_type': type(exc).__name__,
+                                            'code': code, 'window_failure': barrier_failure_context(exc),
                                             'reason': reason[:200], 'count': retries,
                                             'duration_ms': round((now - started) * 1000, 1),
                                             'monotonic': now})
@@ -2193,6 +2239,7 @@ class CollectionWorker:
                                 audit('capture_error', {'error_type': type(exc).__name__,
                                       'reason': str(exc).partition('\n')[0][:200],
                                       'cursor_failure': getattr(exc, 'cursor_failure', None),
+                                      'window_failure': barrier_failure_context(exc),
                                       'monotonic': time.monotonic()})
                                 self.events.put(('error', str(exc)))
                                 diag = getattr(exc, 'diagnostics', None)
@@ -2523,6 +2570,7 @@ def main(*, native_pc_observer_factory=None):
     parser.add_argument('--native-game-root')
     parser.add_argument('--native-pc-event-backend', choices=PC_EVENT_BACKENDS)
     parser.add_argument('--native-pc-event-feed', type=native_event_feed_path)
+    parser.add_argument('--event-queue-memory-mib', type=event_queue_memory_argument)
     parser.add_argument('--arkframework-root', type=Path)
     parser.add_argument('--no-events', action='store_true')
     parser.add_argument('--debug-mode', action='store_true')
@@ -2574,6 +2622,7 @@ def main(*, native_pc_observer_factory=None):
     output = sys.stdout
     sys.stdout = sys.stderr  # stdout is exclusively the protocol stream
     state = DesktopState(args.state_dir)
+    state._event_queue_memory_override = args.event_queue_memory_mib
     if args.debug_mode:
         state.layout = replace(state.layout, debug_mode=True)
     effective_config = replace(
@@ -2586,6 +2635,7 @@ def main(*, native_pc_observer_factory=None):
         native_game_root=(args.native_game_root if args.native_game_root is not None
                           else state.connection.native_game_root),
         native_pc_event_backend=args.native_pc_event_backend or state.connection.native_pc_event_backend,
+        event_queue_memory_mib=state.event_queue_memory_requested(),
         native_pc_event_feed=(args.native_pc_event_feed if args.native_pc_event_backend == 'native'
                               else args.native_pc_event_feed or state.connection.native_pc_event_feed))
     state.effective_connection = effective_config

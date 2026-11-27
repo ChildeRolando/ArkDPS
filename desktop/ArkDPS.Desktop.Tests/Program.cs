@@ -36,6 +36,12 @@ internal static class Program
         // Host real product resource dictionaries without launching its Application.
         System.Reflection.Assembly.SetEntryAssembly(null);
         System.Windows.Application.ResourceAssembly = typeof(App).Assembly;
+        Check("queue unknown is not reported effective", MainWindow.QueueMemoryStatusText(1024,double.NaN,true).Contains("尚未确认实际生效值"));
+        Check("queue changed preference waits for game", MainWindow.QueueMemoryStatusText(2048,1024,true).Contains("待下次游戏启动生效"));
+        Check("queue matching effective is current", !MainWindow.QueueMemoryStatusText(512,512,true).Contains("待下次"));
+        Check("queue other backend not applied", MainWindow.QueueMemoryStatusText(1024,double.NaN,false).Contains("当前后端未应用"));
+        Check("queue CLI override does not invent pending restart", MainWindow.QueueMemoryStatusText(512,512,true,1024).Contains("本次启动配置 512") && !MainWindow.QueueMemoryStatusText(512,512,true,1024).Contains("待下次"));
+        Check("old component budget remains unknown", MainWindow.QueueMemoryStatusText(2048,double.NaN,true,2048,false).Contains("实际生效值未知") && !MainWindow.QueueMemoryStatusText(2048,double.NaN,true,2048,false).Contains("时应用"));
         long timingClock=1;
         int timingReads=0;
         var timingWrites=new System.Collections.Generic.List<string>();

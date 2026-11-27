@@ -25,6 +25,7 @@ from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
 from event_observer import ObserverReadRetry
 from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
+                         annotate_barrier_busy,
                          autochess_event_mark_context, verified_autochess_event_window,
                          autochess_root_failure, autochess_scope_detail,
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
@@ -457,6 +458,15 @@ def _android_scoped_presence(sample, closing_mark, sample_seq):
 
 
 def _event_barrier(before, sample, after, *, contract=None, capture=None):
+    try:
+        return _event_barrier_checked(before, sample, after, contract=contract, capture=capture)
+    except BarrierBusy as error:
+        annotate_barrier_busy(error, 'event_barrier', sample=sample, before=before, after=after,
+                              anchor=sample.get('autochess_snapshot_anchor') if isinstance(sample, dict) else None)
+        raise
+
+
+def _event_barrier_checked(before, sample, after, *, contract=None, capture=None):
     """Keep counter baselines quiescent; bound an established event-only prefix.
 
     Event-only paths use sequence and ownership proof from their original
@@ -473,10 +483,10 @@ def _event_barrier(before, sample, after, *, contract=None, capture=None):
         anchor = sample['autochess_snapshot_anchor']
         if (not isinstance(contract, (MuMuAutoChessProbeContract, NativePcProbeContract))
                 or not isinstance(anchor, dict) or sample.get('native_counter_scope') != 'events_only'):
-            raise BarrierBusy('invalid AutoChess event window evidence')
+            raise StreamGap('invalid AutoChess event window evidence')
         context, sequence = verified_autochess_event_window(sample, before, after, anchor=anchor)
         if sample['autochess_context'] != context:
-            raise BarrierBusy('AutoChess event window does not match the published scope')
+            raise StreamGap('AutoChess event window does not match the published scope')
         return sequence
     try:
         return baseline_barrier(before, sample, after, contract=contract)
@@ -709,7 +719,15 @@ class BattleFeed:
 
     @staticmethod
     def _project_event_window(sample, before, after):
-        context, sequence = verified_autochess_event_window(sample, before, after)
+        try:
+            context, sequence = verified_autochess_event_window(sample, before, after)
+        except BarrierBusy as error:
+            annotate_barrier_busy(error, 'project_event_window', sample=sample, before=before, after=after)
+            raise
+        except StreamGap as error:
+            # A failed event-only projection cannot publish the independent
+            # counter anchor as though the requested cross-frame view existed.
+            raise FrameMismatch(str(error)) from error
         anchor = {key: sample[key] for key in ('frame', 'game_time')}
         # A moved event watermark never re-tags the independently read totals.
         if (any(before[key] != after[key] for key in ('frame', 'game_time', 'sequence', 'epoch'))
@@ -726,7 +744,7 @@ class BattleFeed:
         if observer is not None:
             try:
                 mark = _observer_mark(observer)
-            except (CaptureRetry, ObserverReadRetry) as exc:
+            except (BarrierBusy, CaptureRetry, ObserverReadRetry) as exc:
                 raise CaptureRetry(str(exc)) from exc
             except Exception as exc:
                 events = {'error': str(exc)}
@@ -786,7 +804,7 @@ class BattleFeed:
     def _guarded_events(observer, opening, sample, capture=None):
         mark, opening_error = opening
         try:
-            if isinstance(opening_error, (CaptureRetry, ObserverReadRetry)):
+            if isinstance(opening_error, (BarrierBusy, CaptureRetry, ObserverReadRetry)):
                 raise opening_error
             if opening_error is not None:
                 return {'error': str(opening_error)}
@@ -806,12 +824,17 @@ class BattleFeed:
                 accept()
             return dict(before=mark, after=end_mark, sequence=sequence)
         except (BarrierBusy, CaptureRetry, ObserverReadRetry) as exc:
+            annotate_barrier_busy(exc, 'guarded_events', sample=sample, before=mark,
+                                  after=locals().get('end_mark'),
+                                  cursor=getattr(observer, '_committed_sequence', None))
             reject = getattr(observer, 'reject_unverified_frame', None)
             if callable(reject):
                 reason = reject(exc)
                 if reason is not None:
                     return {'error': reason}
             raise CaptureRetry(str(exc)) from exc
+        except FrameMismatch:
+            raise
         except Exception as exc:
             return {'error': str(exc)}
 
@@ -926,7 +949,11 @@ class BattleFeed:
                 return result, False
             try:
                 pending['latest'] = pending_scope_anchor(sample, result, roster.frame, allow_epoch_advance=True)
-            except (StreamGap, BarrierBusy):
+            except BarrierBusy as error:
+                annotate_barrier_busy(error, 'pending_latest', sample=sample,
+                                      before=result.get('before'), after=result.get('after'))
+                raise
+            except StreamGap:
                 # The read can await its first event without proving a new empty endpoint.
                 pass
             return result, True
@@ -950,7 +977,11 @@ class BattleFeed:
                 and result['drain'].get('events') == [] and 'autochess_round_start' not in result['drain']):
             try:
                 anchor = pending_scope_anchor(sample, result, roster.frame)
-            except (StreamGap, BarrierBusy):
+            except BarrierBusy as error:
+                annotate_barrier_busy(error, 'pending_anchor', sample=sample,
+                                      before=result.get('before'), after=result.get('after'))
+                raise
+            except StreamGap:
                 # Legacy snapshots without the new raw independent proof retain
                 # their existing explicit late-baseline behavior; never retag zero.
                 return result, False
@@ -1299,6 +1330,10 @@ class BattleSessions:
             self._last_event_mark = evidence['after']
             self.event_status = 'recording'
             return True
+        except BarrierBusy as error:
+            annotate_barrier_busy(error, 'consume_events', sample=observation.sample,
+                                  before=evidence.get('before'), after=evidence.get('after'))
+            raise
         except Exception as exc:
             self.capture.close()
             self.event_status, self.event_error = 'gap', str(exc)
@@ -1695,9 +1730,31 @@ class BattleSessions:
                                   contract=contract, capture=capture) != through:
                     return {}
                 contract.validate_batch(sample, through, drained, stream=stream)
+            except BarrierBusy:
+                raise
             except (KeyError, StreamGap):
                 return {}
         return source_attribution_batch(drained, after, through, sample=sample, mark=evidence.get('after'))
+
+    def preflight_event_window(self, observation):
+        evidence = observation.events or {}
+        if (observation.sample is None or evidence.get('error') or
+                not all(key in evidence for key in ('before', 'after', 'sequence'))):
+            return
+        try:
+            _event_barrier(evidence['before'], observation.sample, evidence['after'],
+                           capture=self.capture if observation.generation == self.generation else None)
+        except BarrierBusy as error:
+            annotate_barrier_busy(error, 'consume_preflight', sample=observation.sample,
+                                  before=evidence['before'], after=evidence['after'],
+                                  anchor=observation.sample.get('autochess_snapshot_anchor'),
+                                  cursor=(self.adapter.event_stream.sequence if self.adapter is not None
+                                          and self.adapter.event_stream is not None else None))
+            raise
+        except (KeyError, StreamGap):
+            # Preserve the established fatal/gap handling. This is not a
+            # second validator and grants no acceptance of malformed evidence.
+            return
 
     def consume(self, observation):
         if (observation.feed != self.feed_id or
@@ -1706,6 +1763,7 @@ class BattleSessions:
             return False
         if observation.kind not in ('sample', 'terminal', 'gap', 'end', 'waiting', 'preparing', 'scope_unavailable'):
             raise ValueError('unknown observation kind')
+        self.preflight_event_window(observation)
         if (observation.events or {}).get('capture_pause_tail') is True:
             if (observation.kind not in ('sample', 'terminal') or self.adapter is None
                     or observation.generation != self.generation):
@@ -1812,6 +1870,8 @@ class BattleSessions:
                     try:
                         bootstrap = verified_autochess_round_start(observation.sample,
                             observation.events['drain'], observation.events.get('after'))
+                    except BarrierBusy:
+                        raise
                     except StreamGap as exc:
                         # Keep the independent current snapshot, but never ACK
                         # an advertised historical prefix whose proof failed.
@@ -2042,6 +2102,7 @@ class BattleRuntime:
         receipt = self.feed._emitted_cursor
         if receipt is not None and receipt[0] == observation.sequence and receipt[1] is not None:
             check_cursor_lifetime(receipt[1], receipt[2])
+        self.sessions.preflight_event_window(observation)
         self.record(observation)
         try:
             consumed = self.sessions.consume(observation)
@@ -2175,6 +2236,9 @@ class BattleRuntime:
                     observation = self._acquire(collector, observer)
             consumed = self._consume(observation)
             self._acknowledge_observation(observation, observer, consumed)
+        except BarrierBusy as error:
+            annotate_barrier_busy(error, 'runtime_poll', cursor=getattr(observer, '_committed_sequence', None))
+            raise CaptureRetry(str(error)) from error
         except CaptureRetry:
             raise
         except (SampleUnavailable, RosterUnavailable, FrameMismatch, ReadFailure) as exc:

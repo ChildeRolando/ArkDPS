@@ -516,6 +516,13 @@
           <ComboBoxItem Content="ArkPie" Tag="native" ToolTip="{StaticResource NativeEventBackendAdvice}" AutomationProperties.HelpText="{StaticResource NativeEventBackendAdvice}"/>
          </ComboBox>
          <TextBlock x:Name="NativeEventBackendHint" Text="{StaticResource NativeEventBackendAdvice}" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
+         <TextBlock Text="事件队列内存上限" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
+         <DockPanel Margin="0,0,0,6">
+          <Button Content="保存上限" DockPanel.Dock="Right" Click="SaveEventQueueMemory" Margin="8,0,0,0" AutomationProperties.Name="保存事件队列内存上限"/>
+          <TextBox x:Name="EventQueueMemory" Text="1024" AutomationProperties.Name="事件队列内存上限（MiB）" ToolTip="512–2048 MiB；保存后下次游戏启动生效"/>
+         </DockPanel>
+         <TextBlock Text="MiB · 512–2048。全进程采集队列预算，包含元数据与事件内容，不代表程序总内存。保存后下次游戏启动生效。" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,6"/>
+         <TextBlock x:Name="EventQueueMemoryStatus" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12" AutomationProperties.LiveSetting="Polite"/>
          <StackPanel x:Name="NativeHookNotes" Visibility="Collapsed">
           <TextBlock Text="启动步骤" Foreground="{DynamicResource Ink}" FontSize="13" FontWeight="SemiBold" Margin="0,2,0,8"/>
           <TextBlock Foreground="{DynamicResource Muted}" FontSize="13" LineHeight="22" TextWrapping="Wrap">

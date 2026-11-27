@@ -142,6 +142,61 @@ _ASYNC_UNAVAILABLE = frozenset(('missing', 'invalid_schema', 'identity_unavailab
     'invalid_sample_row', 'unsupported_semantics'))
 
 
+def sanitize_native_queue_memory(data):
+    """Validate the native queue's own bounded memory accounting, never RSS."""
+    numbers = ('requested_budget_mib', 'budget_bytes', 'maximum_storage_bytes',
+        'prepared_storage_bytes', 'fixed_capture_working_bytes', 'slot_capacity',
+        'arena_capacity', 'prepared_slot_capacity', 'prepared_arena_capacity',
+        'maximum_banks', 'prepared_banks', 'free_banks', 'trimmed', 'prepare_failures')
+    if (type(data) is not dict or type(data.get('version')) is not int or data['version'] != 1
+            or data.get('enabled') is not True
+            or any(type(data.get(key)) is not int or not 0 <= data[key] <= 2**64-1 for key in numbers)):
+        return None
+    mib = data['requested_budget_mib']
+    if (not 512 <= mib <= 2048 or data['budget_bytes'] != mib * 1024**2
+            or not data['prepared_storage_bytes'] <= data['maximum_storage_bytes'] <= data['budget_bytes']
+            or data['arena_capacity'] + 24 * data['slot_capacity'] > data['maximum_storage_bytes']
+            or data['prepared_arena_capacity'] + 24 * data['prepared_slot_capacity'] > data['prepared_storage_bytes']
+            or data['prepared_arena_capacity'] > data['arena_capacity']
+            or data['prepared_slot_capacity'] > data['slot_capacity']
+            or not 1 <= data['maximum_banks'] <= 128
+            or not data['free_banks'] <= data['prepared_banks'] <= data['maximum_banks']):
+        return None
+    return dict(version=1, enabled=True, **{key: data[key] for key in numbers})
+
+
+def sanitize_native_queue_failure(data):
+    """Only the fixed first-overflow snapshot may cross the failure boundary."""
+    if (type(data) is not dict or type(data.get('version')) is not int or data['version'] != 1
+            or type(data.get('failure_code')) is not int or data['failure_code'] != 4
+            or type(data.get('lane')) is not int or not 0 <= data['lane'] < 16
+            or type(data.get('attempted_bytes')) is not int or not 0 < data['attempted_bytes'] <= 4 * 1024**2):
+        return None
+    ticket = data.get('ticket')
+    if (type(ticket) is not str or not 1 <= len(ticket) <= 20 or not ticket.isascii()
+            or not ticket.isdecimal() or len(ticket) > 1 and ticket[0] == '0' or int(ticket) > 2**64-1):
+        return None
+    private = data.get('private_queue')
+    private_keys = ('slot_capacity', 'arena_capacity', 'used_slots', 'used_bytes')
+    if (type(private) is not dict
+            or any(type(private.get(key)) is not int or not 0 <= private[key] <= 2048 * 1024**2 for key in private_keys)
+            or not private['used_slots'] <= private['slot_capacity']
+            or not private['used_bytes'] <= private['arena_capacity']):
+        return None
+    spill = data.get('spill')
+    spill_keys = ('configured_banks', 'prepared_banks', 'free_banks', 'owned_banks',
+        'foreign_owned_banks', 'busy_banks', 'unprepared_banks', 'slot_rejections',
+        'byte_rejections', 'oversize_rejections')
+    if (type(spill) is not dict
+            or any(type(spill.get(key)) is not int or not 0 <= spill[key] <= 256 for key in spill_keys)
+            or not 1 <= spill['configured_banks'] <= 128
+            or any(spill[key] > spill['configured_banks'] for key in spill_keys[:7])
+            or spill['free_banks'] > spill['prepared_banks']):
+        return None
+    return dict(version=1, failure_code=4, ticket=ticket, lane=data['lane'], attempted_bytes=data['attempted_bytes'],
+                private_queue={key: private[key] for key in private_keys}, spill={key: spill[key] for key in spill_keys})
+
+
 def sanitize_native_async_capture(data, *, native=None, identity=None):
     """Only fixed-schema bounded diagnostics; invalid evidence stays unavailable.
 
@@ -201,6 +256,13 @@ def sanitize_native_async_capture(data, *, native=None, identity=None):
         return unavailable('invalid_numbers')
     result = dict(schema=1, version=1, available=True, pid=bound[0], process_created_filetime=bound[1])
     result.update((key, data[key]) for key in numbers + booleans)
+    if 'event_queue_memory' in data:
+        result['event_queue_memory'] = (sanitize_native_queue_memory(data['event_queue_memory'])
+            or dict(available=False, reason='invalid_schema'))
+    if data.get('queue_failure') is not None:
+        failure = sanitize_native_queue_failure(data['queue_failure'])
+        if failure is not None:
+            result['queue_failure'] = failure
     if 'sampling' in data:
         sampling = data['sampling']
         reasons = ('', 'sampling_plan_unavailable', 'sampling_callback_active', 'sampling_raw_prefix_open',

@@ -204,7 +204,8 @@ def run_capture(args, *, session_factory=CollectionSession, native_pc_observer_f
             journal.flush()
 
         audit('metadata', metadata)
-        session_options = dict(frida_remote=args.frida_remote, audit=audit)
+        session_options = dict(frida_remote=args.frida_remote, audit=audit,
+                               event_queue_memory_mib=getattr(args, 'event_queue_memory_mib', 1024))
         regeneration = None
         pc_source = PcEventSource(state_dir, observer_factory=native_pc_observer_factory, collector_root=root)
         if platform == 'native_pc':

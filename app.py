@@ -16,7 +16,7 @@ from pathlib import Path
 
 from collector import DEFAULT_ADB, DEFAULT_SERIAL, ROOT
 from collection_session import DEFAULT_FRIDA_REMOTE
-from connection import PC_EVENT_BACKENDS, ConnectionConfigStore, native_event_feed_path
+from connection import PC_EVENT_BACKENDS, ConnectionConfigStore, native_event_feed_path, event_queue_memory_argument
 
 WPF_LAUNCH = 'python app.py（或 start.cmd）启动 WPF'
 WPF_ACCEPTANCE = 'python acceptance/verify_wpf.py'
@@ -74,6 +74,8 @@ def parser_for():
                         help='select the game platform for this launch')
     parser.add_argument('--native-game-root',
                         help='set the directory containing the PC client Arknights.exe')
+    parser.add_argument('--event-queue-memory-mib', type=event_queue_memory_argument,
+                        help='ArkPie 全进程采集队列内存上限（512–2048 MiB，默认1024；下次游戏启动生效）')
     parser.add_argument('--native-pc-event-backend', choices=PC_EVENT_BACKENDS,
                         help='override the saved PC event kernel for this launch')
     parser.add_argument('--native-pc-event-feed', type=native_event_feed_path,
@@ -169,6 +171,7 @@ def main(*, native_pc_observer_factory=None):
         from desktop_launcher import launch
         return launch(args)
     saved = ConnectionConfigStore(ROOT / 'runtime' / 'connection.json').load().config
+    args.event_queue_memory_mib = args.event_queue_memory_mib if args.event_queue_memory_mib is not None else saved.event_queue_memory_mib
     args.platform = args.platform or ('native_pc' if args.native_game_root else saved.platform)
     capture_options = {}
     if args.platform == 'native_pc':
