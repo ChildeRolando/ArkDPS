@@ -24,6 +24,38 @@ struct CaptureConfiguration {
     std::shared_ptr<const CaptureGraph> scope, publication;
 };
 
+inline HpIoLayout derive_hp_io_layout(const std::vector<ObservationField>& fields,
+                                      const std::vector<std::string>& roles,bool leave) {
+    HpIoLayout result;
+    static constexpr const char* names[]{"hp.identity","hp.born","hp.id","hp.before","clock_open","clock_close","hp.closing","attributes.count","attributes.slot0"};
+    static constexpr unsigned counts[]{2,1,1,1,2,0,2,1,3};
+    static constexpr unsigned kinds[][3]{{2,1,0},{0,0,0},{4,0,0},{3,0,0},{1,3,0},{1,3,0},{1,3,0},{1,0,0},{2,2,0}};
+    static constexpr unsigned offsets[][3]{{0,24,0},{0,0,0},{0,0,0},{0,0,0},{0,4,0},{0,4,0},{0,40,0},{0,0,0},{0,8,16}};
+    if(fields.empty()||fields.size()>16)return result;
+    result.signature="v1";
+    unsigned at=5;
+    for(unsigned index=0;index<fields.size();++index){
+        const auto& field=fields[index];unsigned slot=0;
+        while(slot<static_cast<unsigned>(HpIoSlot::total)&&field.name!=names[slot])++slot;
+        if(slot==static_cast<unsigned>(HpIoSlot::total)||result.fields[slot].index!=UINT16_MAX
+            ||(leave?slot<4:slot>5)||!field.raw.role_id||field.raw.role_id>roles.size())return {};
+        const bool clock=slot==4||slot==5;
+        if(roles[field.raw.role_id-1]!=(clock?names[slot]:"body")||field.raw.selector!=(clock?-2:-1))return {};
+        if((slot==2)!=(field.raw.kind==1))return {};
+        const auto count=field.values.size();
+        if(slot==5?(count!=1&&count!=2):count!=counts[slot])return {};
+        for(unsigned n=0;n<count;++n)if(field.values[n].kind!=kinds[slot][n]||field.values[n].offset!=offsets[slot][n])return {};
+        result.fields[slot]={static_cast<std::uint16_t>(index),static_cast<std::uint16_t>(at+1),field.raw.role_id,static_cast<std::uint8_t>(count)};
+        if(!clock)result.body_role=field.raw.role_id;
+        result.signature+="|"+field.name+":"+roles[field.raw.role_id-1]+":"+std::to_string(field.raw.kind)+":"+std::to_string(field.raw.bytes)+":"+std::to_string(field.raw.max_units);
+        for(const auto& value:field.values)result.signature+=":"+std::to_string(value.kind)+"@"+std::to_string(value.offset);
+        at+=1+count;
+    }
+    for(unsigned slot=0;slot<static_cast<unsigned>(HpIoSlot::total);++slot)
+        if((leave?slot>=4:slot<=5)&&result.fields[slot].index==UINT16_MAX)return {};
+    result.supported=true;return result;
+}
+
 // Worker mutates ownership; producers only acquire a published immutable
 // pointer while their invocation is already counted in native active.
 class CaptureConfigurations final {
@@ -65,6 +97,7 @@ public:
                 edge.push_back(std::move(output));
             }
             compiled.hp_observations_ready=true;
+            for(unsigned edge=0;edge<2;++edge)compiled.hp_io_layouts[edge]=derive_hp_io_layout(compiled.hp_observations[edge],roles,edge==1);
         }
     }
     const CaptureConfiguration* pin(std::uint64_t epoch) const noexcept {

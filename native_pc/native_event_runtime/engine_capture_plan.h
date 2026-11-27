@@ -34,6 +34,11 @@ struct OwnedReadProgram {unsigned tiers=0;std::vector<OwnedReadField> fields;std
 
 struct ObservationSpec {std::uint16_t source_index=0;std::string name;std::vector<ObservationValue> values;};
 struct ObservationField {OwnedReadField raw;std::uint16_t presence_id=0;std::string name;std::vector<ObservationValue> values;};
+// Mechanical method slots over the existing HP observation fields. This is
+// derived once at setup; it does not add a capture layout or business policy.
+enum class HpIoSlot : unsigned {identity,born,id,hp,clock_open,clock_close,closing,count,words,total};
+struct HpIoField {std::uint16_t index=UINT16_MAX,value_at=0,role=0;std::uint8_t values=0;};
+struct HpIoLayout {bool supported=false;std::uint16_t body_role=0;std::string signature;std::array<HpIoField,static_cast<unsigned>(HpIoSlot::total)> fields{};};
 struct SavedEntryRoot {
     std::uint8_t slot=0, index=0;
     Root root=Root::arg;
@@ -48,6 +53,7 @@ struct CompiledPlan {
     std::vector<std::string> roles;
     std::vector<ObservationSpec> observation_specs;
     std::array<std::vector<ObservationField>,2> hp_observations;
+    std::array<HpIoLayout,2> hp_io_layouts;
     bool hp_observations_ready=false;std::uintptr_t hook_address=0;
     // Initialized once; callback dispatch never reads the mutable role registry.
     std::array<std::uint8_t,max_fields> field_stage{};

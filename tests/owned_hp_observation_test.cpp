@@ -136,6 +136,6 @@ int main(){
  // installing the sealed owner; production always uses the default true.
  auto* legacy=JS_NewContext(runtime);owned::install(legacy,[]()noexcept{poisoned=true;},false);
  auto object=JS_GetGlobalObject(legacy);auto absent=JS_GetPropertyStr(legacy,object,"__nativeOwnedProvider");assert(JS_IsUndefined(absent));JS_FreeValue(legacy,absent);JS_FreeValue(legacy,object);JS_FreeContext(legacy);
- JS_FreeRuntime(runtime);std::cout<<"PASS_RAW_HP_OBSERVATION actual compiled fields/capture/view/primitive UTF16/deferred failures/auto overlap/unique/lease/mode\n";
+ JS_FreeRuntime(runtime);std::cout<<"PASS_RAW_HP_OBSERVATION actual compiled fields/capture/view/primitive UTF16/deferred failures/auto overlap/unique/lease/mode\n";return 0;
 }
 

@@ -17,7 +17,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--compiler', default='g++')
     parser.add_argument('--optimization', choices=['O0', 'O2'], default='O0')
-    parser.add_argument('--fixture', choices=['bounded', 'production-hp'], default='bounded')
+    parser.add_argument('--fixture', choices=['bounded', 'production-hp', 'hp-opaque'], default='bounded')
     parser.add_argument('--build-only', action='store_true')
     args = parser.parse_args()
     output = args.output.resolve()
@@ -41,17 +41,28 @@ def main():
     for header, symbol in [('bridge_source.h','arkdps_bridge_source'), ('publication_source.h','arkdps_publication_source'), ('cold_plan_source.h','arkdps_cold_plan_source')]:
         (deps / header).write_text('// Syntax/link declaration only; never executed.\ninline constexpr const char ' + symbol + '[]="";\n')
     binary = output / 'owned-batch-test.exe'
+    fixture = {'bounded':'owned_bounded_replay_test.cpp','production-hp':'production_hp_actual_engine.cpp','hp-opaque':'owned_hp_opaque_io_test.cpp'}[args.fixture]
+    tracked = [*sorted((ROOT/'native_pc/native_event_runtime').glob('*.h')), ROOT/'native_pc/native_event_runtime/engine.cpp', ROOT/'native_pc/native_event_runtime/native_capture.cpp', ROOT/'native_pc/native_event_runtime/bridge.js', *sorted((ROOT/'tests').glob('owned_*test.cpp')), ROOT/'tests/production_hp_actual_engine.cpp']
+    source_before = {str(p.relative_to(ROOT)):digest(p) for p in tracked}
     command = [args.compiler, '-std=c++17', '-static', '-' + args.optimization, '-pthread', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
                '-I', str(ROOT/'native_pc/native_event_runtime'), '-isystem', str(deps),
-               str(ROOT/'tests'/('production_hp_actual_engine.cpp' if args.fixture=='production-hp' else 'owned_bounded_replay_test.cpp')), str(ROOT/'native_pc/native_event_runtime/native_capture.cpp'),
+               str(ROOT/'tests'/fixture), str(ROOT/'native_pc/native_event_runtime/native_capture.cpp'),
                *[str(deps/name) for name in named], '-lpsapi', '-o', str(binary)]
     build = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=90)
     (output/'build.log').write_text(build.stdout + build.stderr)
     assert build.returncode == 0, (build.returncode, build.stdout, build.stderr)
+    assert source_before == {str(p.relative_to(ROOT)):digest(p) for p in tracked}, 'source changed during compilation'
+    identity = {'source_sha256':source_before, 'command':command}
     if args.build_only:
-        (output/'build-receipt.json').write_text(json.dumps({'executed':False,'fixture':args.fixture,'optimization':args.optimization,'binary_sha256':digest(binary),'dependency_sha256':{str(p):digest(p) for p in inputs}},indent=2))
+        (output/'build-receipt.json').write_text(json.dumps({**identity,'executed':False,'fixture':args.fixture,'optimization':args.optimization,'binary_sha256':digest(binary),'dependency_sha256':{str(p):digest(p) for p in inputs}},indent=2))
         print('BUILT_OWNED_REPLAY', binary)
         return
+    if args.fixture=='hp-opaque':
+        run=subprocess.run([str(binary),str(ROOT/'native_pc/native_event_runtime/bridge.js')],cwd=ROOT,capture_output=True,text=True,timeout=15)
+        (output/'opaque.log').write_text(run.stdout+run.stderr)
+        assert run.returncode==0 and 'PASS_NATIVE_HP_OPAQUE_IO' in run.stdout, (run.returncode,run.stdout,run.stderr)
+        (output/'receipt.json').write_text(json.dumps({**identity,'scope':'self-owned immutable replay bytes / actual native HP IO / QuickJS','excluded':['game','detours','IPC','throughput','FPS'],'binary_sha256':digest(binary),'pass':True},indent=2))
+        print('PASS_NATIVE_HP_OPAQUE_IO',output/'receipt.json');return
     assert args.fixture=='bounded', 'production HP fixture requires --build-only and its explicit workload runner'
     cases = []
     for case in ['normal', 'fault', 'early', 'pending', 'string', 'nan', 'lease', 'health', 'nativefault', 'mode', 'phase', 'root', 'cp', 'hook', 'status', 'planned', 'false-health', 'no-cap', 'bool-cap', 'mutable-cap']:
@@ -59,7 +70,7 @@ def main():
         (output/(case+'.log')).write_text(run.stdout + run.stderr)
         assert run.returncode == 0 and 'PASS_OWNED_BATCH' in run.stdout, (case, run.returncode, run.stdout, run.stderr)
         cases.append({'case': case, 'pass': True})
-    receipt = {'scope': 'actual engine prepare/finalize/controller + OwnedReplayView + QuickJS, self-owned memory',
+    receipt = {**identity,'scope': 'actual engine prepare/finalize/controller + OwnedReplayView + QuickJS, self-owned memory',
                'excluded': ['detours', 'assembly ingress', 'IPC', 'production HP business source', 'throughput', 'Game FPS'],
                'optimization': args.optimization, 'cases': cases, 'binary_sha256': digest(binary),
                'dependency_sha256': {str(p): digest(p) for p in inputs}}
