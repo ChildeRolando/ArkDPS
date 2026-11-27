@@ -2236,10 +2236,17 @@ class CollectionWorker:
                                 self._retry_connection(current_revision)
                             except Exception as exc:
                                 capture_health.reset()
+                                preserve = getattr(self.session, 'preserve_host_stream_gap', None)
+                                try:
+                                    preserve_source = callable(preserve) and preserve(exc) is True
+                                except Exception:
+                                    preserve_source = False
                                 audit('capture_error', {'error_type': type(exc).__name__,
+                                      'code': 'host_gap_source_preserved' if preserve_source else None,
                                       'reason': str(exc).partition('\n')[0][:200],
                                       'cursor_failure': getattr(exc, 'cursor_failure', None),
                                       'window_failure': barrier_failure_context(exc),
+                                      'stream_gap_failure': getattr(exc, 'stream_gap_failure', None),
                                       'monotonic': time.monotonic()})
                                 self.events.put(('error', str(exc)))
                                 diag = getattr(exc, 'diagnostics', None)
@@ -2250,7 +2257,10 @@ class CollectionWorker:
                                 retry_allowed = not (
                                     current_config.platform == 'native_pc'
                                     and getattr(diag, 'code', None) in NATIVE_ACTION_REQUIRED_CODES)
-                                usable = False
+                                # A host evidence failure closes event coverage,
+                                # not an independently verified one-shot native
+                                # input. Unknown/failed transport stays fatal.
+                                usable = preserve_source
                             if clock_retry_delay is None:
                                 clock_burst = None
                             if usable:

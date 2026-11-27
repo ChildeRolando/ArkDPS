@@ -25,7 +25,7 @@ from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
 from event_observer import ObserverReadRetry
 from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
-                         annotate_barrier_busy,
+                         annotate_barrier_busy, stream_gap_failure_context,
                          autochess_event_mark_context, verified_autochess_event_window,
                          autochess_root_failure, autochess_scope_detail,
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
@@ -44,6 +44,21 @@ from roster import RosterSnapshot
 NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED = 'native_pc_autochess_scope_unverified'
 ANDROID_PRESENCE_INTERVAL = 1.
 ANDROID_PRESENCE_UNIT_LIMIT = 128
+
+
+@dataclass(frozen=True)
+class _RejectedPendingPrefix:
+    """Host rejection certificate, never source acceptance or another ledger."""
+    observer: object
+    cursor_lifetime: object
+    generation: int
+    anchor_sequence: int
+    through: int
+
+    def __deepcopy__(self, memo):
+        # Terminal reducer copies must retain the actual source identity, not
+        # clone its transport/locks or mint a different cursor capability.
+        return self
 
 
 def _native_pc_autochess(metadata, stage):
@@ -935,6 +950,12 @@ class BattleFeed:
         """Retain an empty late anchor until its first explicitly acquired prefix."""
         check_cursor_lifetime(observer, cursor_lifetime)
         pending = self._pending_scope
+        rejected = getattr(published_capture, 'rejected_pending_prefix', None)
+        if (isinstance(rejected, _RejectedPendingPrefix) and observer is rejected.observer
+                and cursor_lifetime is rejected.cursor_lifetime):
+            # A new scope/baseline is not proof that the failed old prefix was
+            # consumed. Keep this observer's rejected source range unacked.
+            return {'error': 'rejected pending prefix remains unacknowledged'}, False
         if pending is not None:
             if observer is not pending['observer']:
                 raise CaptureRetry('pending scope observer unavailable before its prefix committed')
@@ -1858,6 +1879,7 @@ class BattleSessions:
             if observation.generation > self.generation:
                 segment_reason = getattr(self, 'capture_segment_reason', None)
                 previous_stream = self.adapter.event_stream if self.adapter is not None else None
+                rejected_pending = getattr(self.capture, 'rejected_pending_prefix', None)
                 pending_bootstrap = (None if segment_reason else verified_pending_scope_start(
                     observation.sample, observation.events,
                     previous_sequence=previous_stream.sequence if previous_stream is not None else None))
@@ -1890,6 +1912,8 @@ class BattleSessions:
                 self.adapter = adapter
                 self.capture = LiveEventCapture(None)
                 self.capture.adapter = adapter
+                if rejected_pending is not None:
+                    self.capture.rejected_pending_prefix = rejected_pending
                 self.event_status, self.event_error = 'unavailable', None
                 self.generation = observation.generation
                 self.preparing_generation = None
@@ -2085,6 +2109,19 @@ class BattleRuntime:
         """Seal an observation fragment without inventing a new native battle."""
         if self._pending_event_ack is not None:
             raise CaptureRetry('原事件前缀尚未确认，不能切换采集片段')
+        rejected = getattr(self.sessions.capture, 'rejected_pending_prefix', None)
+        if rejected is not None:
+            accepted = self._accepted_event_observer
+            accepted_replacement = (
+                accepted is not None and len(accepted) > 2
+                and accepted[1] == self.sessions.generation
+                and probe_cursor_lifetime(accepted[0]) is accepted[2]
+                and (accepted[0] is not rejected.observer
+                     or accepted[2] is not rejected.cursor_lifetime)
+                and not self.sessions.capture.closed
+                and self.sessions.event_status in ('recording', 'finished'))
+            if not accepted_replacement:
+                raise CaptureRetry('被拒绝的旧事件前缀尚未处理，不能切换采集片段')
         previous_feed = self.feed.id
         # Only the host observation namespace changes. Acquired game identities
         # remain untouched, and the existing durable history queue retains ownership.
@@ -2114,6 +2151,21 @@ class BattleRuntime:
                         and stream.frame == observation.sample['frame']
                         and (not self.sessions.capture.closed or 'pending_scope_exit' in evidence
                              or 'pending_scope_end' in evidence)):
+                    self.feed._pending_scope = None
+                elif ('pending_scope_start' in evidence
+                        and observation.generation == pending['generation']
+                        and evidence['pending_scope_start']['anchor'] == pending['anchor']
+                        and observation.generation == self.sessions.generation
+                        and self.sessions.capture is not None and self.sessions.capture.closed
+                        and self.sessions.event_status == 'gap'):
+                    # The validated transaction established this generation,
+                    # but its event coverage was terminally rejected. Retire
+                    # only the host handoff; raw source records remain unacked.
+                    # Replaying it next poll would reinitialize the generation.
+                    self.sessions.capture.rejected_pending_prefix = _RejectedPendingPrefix(
+                        observer=pending['observer'], cursor_lifetime=pending['cursor_lifetime'],
+                        generation=observation.generation, through=evidence['sequence'],
+                        anchor_sequence=pending['anchor']['sequence'])
                     self.feed._pending_scope = None
             return consumed
         except MappingUnavailable as exc:
@@ -2207,6 +2259,19 @@ class BattleRuntime:
                 self.sessions.terminal_acknowledged(confirmed)
             if confirmed:
                 pending_ack = None
+                rejected = getattr(self.sessions.capture, 'rejected_pending_prefix', None)
+                accepted = self._accepted_event_observer
+                if (rejected is not None and accepted is not None and len(accepted) > 2
+                        and accepted[0] is observer and accepted[1] == self.sessions.generation
+                        and probe_cursor_lifetime(observer) is accepted[2]
+                        and (observer is not rejected.observer
+                             or accepted[2] is not rejected.cursor_lifetime)
+                        and not self.sessions.capture.closed
+                        and self.sessions.event_status in ('recording', 'finished')):
+                    # Only a genuinely admitted replacement can retire the old
+                    # source capability from its own current capture. This ACK
+                    # belongs solely to the replacement, never the rejected tail.
+                    del self.sessions.capture.rejected_pending_prefix
         self._pending_event_ack = pending_ack
 
     def poll(self, collector, observer=None, *, prepare_observer=None):
@@ -2214,10 +2279,12 @@ class BattleRuntime:
         from collector import SampleUnavailable, BattleChanged, ProcessChanged, SnapshotGap
         from roster import RosterUnavailable
         from tools.stage_global_state.memory import ReadFailure
+        stage = 'acquire'
         try:
             observation = self._acquire(collector, observer)
             if (prepare_observer is not None and observation.kind in ('sample', 'scope_unavailable')
                     and observation.generation != self.sessions.generation):
+                stage = 'prepare_observer'
                 retry, observer = prepare_observer(observation)
                 if retry:
                     # Preserve independent native counters before a new
@@ -2233,8 +2300,11 @@ class BattleRuntime:
                                               events=None, round_reset=None, autochess_successor=None))
                     else:
                         self._consume(replace(observation, sample=native, events=None, autochess_successor=None))
+                    stage = 'acquire'
                     observation = self._acquire(collector, observer)
+            stage = 'consume'
             consumed = self._consume(observation)
+            stage = 'acknowledge'
             self._acknowledge_observation(observation, observer, consumed)
         except BarrierBusy as error:
             annotate_barrier_busy(error, 'runtime_poll', cursor=getattr(observer, '_committed_sequence', None))
@@ -2254,6 +2324,9 @@ class BattleRuntime:
                 self._consume(self.feed.gap('read_unavailable', error=exc))
             raise CaptureRetry(str(exc)) from exc
         except Exception as exc:
+            diagnostic = stream_gap_failure_context(exc, stage)
+            if diagnostic is not None:
+                exc.stream_gap_failure = diagnostic
             self._consume(self.feed.gap('read_unavailable', error=exc))
             raise
         return observation

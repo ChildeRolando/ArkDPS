@@ -437,6 +437,38 @@ class CollectionSession:
             raise RuntimeError('collection session is not connected')
         return self._read_lifecycle()
 
+    def preserve_host_stream_gap(self, error):
+        """Retain ownership, never admit the rejected event or acknowledge it.
+
+        Only an intact, process-bound native transport proves that reconnecting
+        would destroy a still-owned one-shot source. Unknown health fails closed.
+        """
+        from event_probe import StreamGap
+        from native_pc.native_hook_source import NativeHookEventProbe, NativePipe
+        observer = self.observer
+        if (not isinstance(error, StreamGap) or self.closed or not self._is_native_pc()
+                or not isinstance(observer, NativeHookEventProbe)
+                or observer.collector is not self.collector
+                or observer.status != ObserverStatus.READY
+                or observer.can_restart_in_process is not False):
+            return False
+        pipe = observer._pipe
+        if (not isinstance(pipe, NativePipe) or pipe._poisoned is not False
+                or pipe.handle is None):
+            return False
+        process = self.collector.process
+        owned = observer._owned_process_instance
+        instance = getattr(process, 'process_instance', None)
+        if (type(owned) is not tuple or len(owned) != 2
+                or any(type(value) is not int or value <= 0 for value in owned)
+                or type(instance) not in (tuple, list) or tuple(instance) != owned
+                or getattr(process, 'pid', None) != owned[0]):
+            return False
+        try:
+            return process.process_alive() is True
+        except Exception:
+            return False
+
     def _read_lifecycle(self):
         from snapshot_adapter import FrameMismatch
         from roster import RosterUnavailable

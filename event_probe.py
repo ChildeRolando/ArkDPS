@@ -583,6 +583,79 @@ def barrier_failure_context(error):
     return None
 
 
+_STREAM_GAP_REASONS = {
+    'pending scope transaction cannot reinitialize an established generation': 'pending_reinitialize',
+    'conflicting pending scope handoff transactions': 'pending_conflict',
+    'pending scope anchor does not match the accepted source cursor': 'pending_cursor_binding',
+    'pending scope release changed its source/generation': 'pending_source_binding',
+    'pending scope release clock or cursor regressed': 'pending_clock_regression',
+    'pending scope prefix exceeds byte budget': 'pending_byte_budget',
+    'incomplete pending scope prefix reply': 'pending_prefix_incomplete',
+    'pending scope prefix cursor is outside its budget': 'pending_cursor_budget',
+    'pending scope release changed its scope/accounts': 'pending_scope_binding',
+    'observer cursor lifetime changed': 'cursor_lifetime',
+    'event probe must support commit acknowledgements': 'ack_capability',
+    'event sequence gap': 'event_sequence_gap',
+    'AutoChess event mark has an invalid native source binding': 'event_source_binding',
+    'AutoChess producer mark failed or stopped': 'event_mark_unavailable',
+    'AutoChess event mark contains an invalid available scope': 'event_scope_binding',
+    'event observation barrier was altered': 'event_barrier_changed',
+    'pending empty scope handoff changed its process/match/accounts': 'pending_handoff_binding',
+    'pending empty scope handoff has an unread tail or nonquiet source': 'pending_handoff_tail',
+    'pending empty reset lacks a strict source-generation fence': 'pending_reset_fence',
+}
+_STREAM_GAP_FRAMES = {
+    'battle_lifecycle': frozenset(('poll', '_acquire', 'acquire', '_consume', 'consume',
+        '_acknowledge_observation', 'settle_event_ack', '_read_pair', '_read_marked_snapshot',
+        '_guarded_events', '_pending_scope_drain', '_events', '_drain', '_event_barrier',
+        '_event_barrier_checked', '_verified_pending_empty_handoff', '_source_attribution')),
+    'event_probe': frozenset(('contract_for', 'validate_binding', 'validate_batch', 'ack_scope',
+        'validate_ack_mark', 'verified_pending_scope_start', '_verified_pending_scope_anchor',
+        'pending_scope_anchor', 'pending_scope_successor', '_verified_autochess_event_window',
+        'verified_autochess_event_window', 'bind_native_autochess_pair', 'check_cursor_lifetime')),
+    'event_capture': frozenset(('read_pending_scope_prefix', 'acknowledge_event_batch',
+        'read_event_batch', 'ingest', 'baseline', '_read_long_round_start_prefix')),
+    'event_stream': frozenset(('baseline_barrier', 'ingest', 'consume')),
+}
+
+def sanitize_stream_gap_failure(value):
+    if (type(value) is not dict or set(value) != {'version', 'reason', 'stage', 'frames'}
+            or type(value.get('version')) is not int or value['version'] != 1
+            or type(value.get('reason')) is not str
+            or value['reason'] not in {*_STREAM_GAP_REASONS.values(), 'unclassified'}
+            or value.get('stage') not in ('acquire', 'prepare_observer', 'consume', 'acknowledge')
+            or type(value.get('frames')) is not list or len(value['frames']) > 8):
+        return None
+    frames = []
+    for frame in value['frames']:
+        if (type(frame) is not dict or set(frame) != {'module', 'function', 'line'}
+                or type(frame.get('module')) is not str or frame['module'] not in _STREAM_GAP_FRAMES
+                or type(frame.get('function')) is not str or frame['function'] not in _STREAM_GAP_FRAMES[frame['module']]
+                or type(frame.get('line')) is not int or not 1 <= frame['line'] <= 100000):
+            return None
+        frames.append(dict(frame))
+    return dict(version=1, reason=value['reason'], stage=value['stage'], frames=frames)
+
+
+def stream_gap_failure_context(error, stage):
+    """Classify only known errors/sites; never log exception text, paths or locals."""
+    if not isinstance(error, StreamGap) or isinstance(error, BarrierBusy):
+        return None
+    if stage not in ('acquire', 'prepare_observer', 'consume', 'acknowledge'):
+        return None
+    frames = []
+    trace = error.__traceback__
+    while trace is not None:
+        frame = trace.tb_frame
+        module = frame.f_globals.get('__name__')
+        function = frame.f_code.co_name
+        if module in _STREAM_GAP_FRAMES and function in _STREAM_GAP_FRAMES[module]:
+            frames.append(dict(module=module, function=function, line=trace.tb_lineno))
+        trace = trace.tb_next
+    return dict(version=1, reason=_STREAM_GAP_REASONS.get(str(error), 'unclassified'),
+                stage=stage, frames=frames[-8:])
+
+
 def verified_autochess_event_window(sample, before, after, *, anchor=None):
     try:
         return _verified_autochess_event_window(sample, before, after, anchor=anchor)

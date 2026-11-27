@@ -10,6 +10,7 @@ import time
 from uuid import uuid4
 
 from log_context import LogContext
+from event_probe import sanitize_stream_gap_failure
 from metrics import sanitize_native_async_capture, sanitize_native_queue_failure, NATIVE_CAPTURE_RETRY_REASONS
 
 
@@ -264,7 +265,7 @@ KEY_EVENTS = {
     'capture_health': None,  # Sanitized before the journal mode is applied.
     'event_gap': ('error_type', 'code'),
     'capture_retry': ('error_type', 'code', 'window_failure'),
-    'capture_error': ('error_type', 'code', 'cursor_failure', 'window_failure'),
+    'capture_error': ('error_type', 'code', 'cursor_failure', 'window_failure', 'stream_gap_failure'),
     'history_error': ('code',),
     'history_saved': ('written',),
     'stopped': (),
@@ -433,6 +434,11 @@ def _event_fields(data, fields):
             if clean is not None:
                 result[name] = clean
             continue
+        if name == 'stream_gap_failure':
+            clean = sanitize_stream_gap_failure(value)
+            if clean is not None:
+                result[name] = clean
+            continue
         if name == 'window_failure':
             clean = sanitize_window_failure(value)
             if clean is not None:
@@ -579,6 +585,9 @@ class DesktopCaptureJournal:
                 window = sanitize_window_failure(data.pop('window_failure', None))
                 if window is not None:
                     data['window_failure'] = window
+                gap = sanitize_stream_gap_failure(data.pop('stream_gap_failure', None))
+                if gap is not None:
+                    data['stream_gap_failure'] = gap
             detailed = bool(self.debug_enabled())
             if detailed != self._detailed:
                 previous = self._detailed
