@@ -28,7 +28,7 @@ struct Binding {
     bool active = false;
     bool concurrent = false;
     bool js_exception = false;
-    std::uint64_t lease_calls=0,status_calls=0,hp_opaque_issued=0;
+    std::uint64_t lease_calls=0,status_calls=0,hp_typed_issued=0;
     const capture::CaptureConfiguration* configuration=nullptr;
     std::uint64_t scope_revision=0,publication_revision=0,graph_mode=0;
     std::uint32_t graph_checkpoint=0;
@@ -39,6 +39,12 @@ struct Binding {
     std::uint64_t hp_mode=0;bool hp_issued=false;
     std::array<std::uint16_t,16> hp_status{};
     JSContext* hp_packet_context=nullptr;JSValue hp_packet=JS_UNDEFINED;
+    JSContext* hp_token_context=nullptr;JSValue hp_token=JS_UNDEFINED;
+    const capture::CompiledPlan* hp_packet_plan=nullptr;
+    const capture::CaptureConfiguration* hp_packet_configuration=nullptr;
+    std::uint64_t hp_packet_configuration_id=0,hp_packet_nonce=0,hp_packet_ticket=0,hp_packet_mode=0,hp_packet_scope=0,hp_packet_publication=0;
+    std::uintptr_t hp_packet_root=0;std::uint32_t hp_packet_checkpoint=0;
+    capture::Phase hp_packet_phase=capture::Phase::checkpoint;
     JSContext* graph_packet_context=nullptr;JSValue graph_packet=JS_UNDEFINED;
     const capture::CaptureConfiguration* graph_packet_configuration=nullptr;
     const ReadProgram* graph_packet_program=nullptr;
@@ -50,9 +56,23 @@ inline void error(capture::Error value) noexcept {
     auto& owner=binding();owner.error=value;
     if (capture::OwnedReplayView::structural(value) && owner.poison) owner.poison();
 }
+// The native owner retires the JS frame token before releasing its held bytes.
+// Defining an own data property runs no user getter/setter. A retired token is
+// immutable false; an error poisons the stream rather than lending old values.
+inline bool invalidate_hp_token() noexcept {
+    auto& owner=binding();if(!owner.hp_token_context)return true;
+    auto* c=owner.hp_token_context;
+    const bool good=JS_DefinePropertyValueStr(c,owner.hp_token,"hp_io_active",JS_FALSE,0)>=0;
+    JS_FreeValue(c,owner.hp_token);owner.hp_token=JS_UNDEFINED;owner.hp_token_context=nullptr;
+    if(!good){auto pending=JS_GetException(c);JS_FreeValue(c,pending);error(capture::Error::invalid_plan);}
+    return good;
+}
 inline void release_hp_packet() noexcept {
     auto& owner=binding();if(owner.hp_packet_context)JS_FreeValue(owner.hp_packet_context,owner.hp_packet);
     owner.hp_packet=JS_UNDEFINED;owner.hp_packet_context=nullptr;owner.hp_issued=false;
+    owner.hp_packet_plan=nullptr;owner.hp_packet_configuration=nullptr;
+    owner.hp_packet_configuration_id=owner.hp_packet_nonce=owner.hp_packet_ticket=owner.hp_packet_mode=owner.hp_packet_scope=owner.hp_packet_publication=0;
+    owner.hp_packet_root=0;owner.hp_packet_checkpoint=0;owner.hp_packet_phase=capture::Phase::checkpoint;
 }
 inline void release_graph_packet() noexcept {
     auto& owner=binding();if(owner.graph_packet_context)JS_FreeValue(owner.graph_packet_context,owner.graph_packet);
@@ -65,6 +85,7 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
                            const std::byte* payload,std::size_t payload_bytes,
                            const std::vector<std::string>& roles,std::uint64_t ticket,
                            capture::Error record_error,bool concurrent=false) noexcept {
+    if(!invalidate_hp_token()){binding().active=false;return binding().error;}
     release_hp_packet();release_graph_packet();auto& owner=binding();owner.roles=&roles;owner.ticket=ticket;owner.concurrent=concurrent;
     owner.active=false;
     if(owner.lease_nonce==UINT64_MAX){error(capture::Error::invalid_plan);return owner.error;}
@@ -77,7 +98,7 @@ inline capture::Error begin(const void* segments,std::size_t segment_count,
     return owner.error;
 }
 inline void end() noexcept {
-    release_hp_packet();release_graph_packet();auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;owner.view.reset();
+    invalidate_hp_token();release_hp_packet();release_graph_packet();auto& owner=binding();owner.active=false;owner.concurrent=false;owner.ticket=0;owner.roles=nullptr;owner.configuration=nullptr;owner.hp_plan=nullptr;owner.hp_issued=false;owner.view.reset();
 }
 struct Lease {
     Lease()=default;Lease(const Lease&)=delete;Lease& operator=(const Lease&)=delete;
@@ -279,7 +300,9 @@ inline JSValue execute_read_batch(JSContext* c,const ReadProgram& plan,unsigned 
 }
 inline void bind_hp_observation(const capture::CompiledPlan* plan,capture::Phase phase,std::uintptr_t root,
                                 std::uint32_t checkpoint,std::uint64_t mode=0) noexcept {
-    release_hp_packet();auto& owner=binding();owner.hp_plan=plan;owner.hp_phase=phase;owner.hp_root=root;
+    auto& owner=binding();
+    if(owner.hp_plan!=plan||owner.hp_phase!=phase||owner.hp_root!=root||owner.hp_checkpoint!=checkpoint||owner.hp_mode!=mode)invalidate_hp_token();
+    release_hp_packet();owner.hp_plan=plan;owner.hp_phase=phase;owner.hp_root=root;
     owner.hp_checkpoint=checkpoint;owner.hp_mode=mode;owner.hp_issued=false;
 }
 // QuickJS's pinned UTF8 decoder accepts surrogate code points and preserves
@@ -332,178 +355,47 @@ inline JSValue prepare_hp_observation(JSContext* c) {
     if(failed||JS_DefinePropertyValueStr(c,result,"length",JS_NewUint32(c,cursor),0)<0||JS_PreventExtensions(c,result)<0){
         JS_FreeValue(c,result);conversion_exception();return JS_EXCEPTION;
     }
-    owner.hp_packet_context=c;owner.hp_packet=JS_DupValue(c,result);owner.hp_issued=true;error(capture::Error::ok);return result;
+    owner.hp_packet_context=c;owner.hp_packet=JS_DupValue(c,result);owner.hp_issued=true;
+    owner.hp_packet_plan=owner.hp_plan;owner.hp_packet_configuration=owner.configuration;
+    owner.hp_packet_configuration_id=owner.configuration?owner.configuration->id:0;
+    owner.hp_packet_nonce=owner.lease_nonce;owner.hp_packet_ticket=owner.ticket;owner.hp_packet_mode=owner.hp_mode;
+    owner.hp_packet_scope=owner.scope_revision;owner.hp_packet_publication=owner.publication_revision;
+    owner.hp_packet_root=owner.hp_root;owner.hp_packet_checkpoint=owner.hp_checkpoint;owner.hp_packet_phase=owner.hp_phase;
+    error(capture::Error::ok);return result;
 }
-// Private native IO is only an adapter over an already issued immutable packet.
-// It never reads a new HP value or owns any shared HP reduction policy.
-inline JSClassID hp_io_class_id=0;
-struct HpOpaqueIo {
-    JSContext* context=nullptr;const capture::CompiledPlan* plan=nullptr;
-    const capture::CaptureConfiguration* configuration=nullptr;std::uint64_t configuration_id=0;
-    std::uint64_t nonce=0,ticket=0,mode=0;std::uintptr_t root=0;std::uint32_t checkpoint=0;
-    capture::Phase phase=capture::Phase::checkpoint;
-    JSValue token=JS_UNDEFINED;JSAtom active_atom=JS_ATOM_NULL;
-    JSValue packet=JS_UNDEFINED,root_value=JS_UNDEFINED,integer=JS_UNDEFINED,diagnostic=JS_UNDEFINED,attributes=JS_UNDEFINED;
-    std::array<std::uint16_t,16> statuses{};
-};
-inline void hp_io_finalize(JSRuntime* rt,JSValue value) {
-    auto* io=static_cast<HpOpaqueIo*>(JS_GetOpaque(value,hp_io_class_id));if(!io)return;
-    for(auto held:{io->packet,io->root_value,io->integer,io->diagnostic,io->attributes,io->token})JS_FreeValueRT(rt,held);
-    // No retired plan/role/configuration is dereferenced by finalization.
-    JS_FreeAtomRT(rt,io->active_atom);io->~HpOpaqueIo();js_free_rt(rt,io);
-}
-inline void hp_io_mark(JSRuntime* rt,JSValueConst value,JS_MarkFunc* mark) {
-    auto* io=static_cast<HpOpaqueIo*>(JS_GetOpaque(value,hp_io_class_id));if(!io)return;
-    for(auto held:{io->packet,io->root_value,io->integer,io->diagnostic,io->attributes,io->token})JS_MarkValue(rt,held,mark);
-}
-inline bool hp_io_current(JSContext* c,const HpOpaqueIo* io) noexcept {
-    const auto native=[&]() noexcept {const auto& owner=binding();
-        return io&&io->context==c&&owner.active&&io->nonce==owner.lease_nonce&&io->ticket==owner.ticket
-            &&io->plan==owner.hp_plan&&io->configuration==owner.configuration
-            &&(!owner.configuration||io->configuration_id==owner.configuration->id)
-            &&io->root==owner.hp_root&&io->phase==owner.hp_phase
-            &&io->checkpoint==owner.hp_checkpoint&&io->mode==owner.hp_mode;};
-    if(!native()||!JS_IsObject(io->token))return false;
-    const auto active=JS_GetProperty(c,io->token,io->active_atom);
-    const bool logical=JS_IsBool(active)&&JS_ToBool(c,active)==1;JS_FreeValue(c,active);
-    return logical&&native();
-}
-inline JSValue hp_io_fail(JSContext* c,const HpOpaqueIo* io,capture::Error status,
-                          std::uint16_t role_id=0,std::uint32_t checkpoint=0) {
-    // Native structural poison is independent of the bridge diagnostic throwing.
-    error(status);
-    if(io&&io->context==c&&JS_IsFunction(c,io->diagnostic)){
-        const auto& owner=binding();const std::string* name=nullptr;
-        if(owner.active&&owner.roles&&role_id&&role_id<=owner.roles->size())name=&(*owner.roles)[role_id-1];
-        JSValue args[]{JS_NewInt32(c,static_cast<int>(status)),name?JS_NewStringLen(c,name->data(),name->size()):JS_NewString(c,"body"),JS_NewUint32(c,checkpoint)};
-        auto result=JS_Call(c,io->diagnostic,JS_UNDEFINED,3,args);for(auto arg:args)JS_FreeValue(c,arg);
-        if(JS_IsException(result))return result;
-        JS_FreeValue(c,result);
-    }
-    // A missing/broken/returning diagnostic can never turn failure into data.
-    return JS_ThrowInternalError(c,"native HP IO observation failed");
-}
-inline HpOpaqueIo* hp_io_this(JSContext* c,JSValueConst value) {
-    auto* io=static_cast<HpOpaqueIo*>(JS_GetOpaque(value,hp_io_class_id));
-    if(!hp_io_current(c,io)){hp_io_fail(c,io,capture::Error::invalid_plan,0,binding().active?binding().hp_checkpoint:0);return nullptr;}
-    return io;
-}
-inline bool hp_io_receiver(JSContext* c,HpOpaqueIo* io,int count,JSValueConst* args) {
-    if(count<1){hp_io_fail(c,io,capture::Error::invalid_plan,0,io->checkpoint);return false;}
-    auto converted=JS_Call(c,io->integer,JS_UNDEFINED,1,args);
-    if(JS_IsException(converted)){error(capture::Error::invalid_plan);return false;}
-    // The original converter may execute a user coercion; recheck the whole
-    // lease before comparison or accessing the immutable compiled layout.
-    if(!hp_io_current(c,io)){JS_FreeValue(c,converted);hp_io_fail(c,io,capture::Error::invalid_plan,0,binding().hp_checkpoint);return false;}
-    const auto equal=JS_SameValue(c,converted,io->root_value);JS_FreeValue(c,converted);
-    if(equal!=1){if(equal<0)error(capture::Error::invalid_plan);else hp_io_fail(c,io,capture::Error::invalid_plan,0,io->checkpoint);return false;}
-    return true;
-}
-inline bool hp_io_fact(JSContext* c,const HpOpaqueIo* io,capture::HpIoSlot slot,std::uint16_t& at) {
-    // Every caller checked the nonce before this first plan dereference.
-    const auto& field=io->plan->hp_io_layouts[io->phase==capture::Phase::entry?0:1].fields[static_cast<unsigned>(slot)];
-    if(field.index==UINT16_MAX){hp_io_fail(c,io,capture::Error::missing_plan_field,0,io->checkpoint);return false;}
-    const auto raw=io->statuses[field.index];
-    if(raw){const auto status=raw==UINT16_MAX?capture::Error::missing_plan_field:raw<=10?static_cast<capture::Error>(raw):capture::Error::invalid_plan;
-        hp_io_fail(c,io,status,field.role,io->checkpoint);return false;}
-    at=field.value_at;return true;
-}
-inline JSValue hp_io_tuple(JSContext* c,const HpOpaqueIo* io,std::initializer_list<unsigned> offsets) {
-    auto result=JS_NewArray(c);if(JS_IsException(result)){conversion_exception();return result;}
-    unsigned index=0;
-    for(auto offset:offsets){
-        auto value=JS_GetPropertyUint32(c,io->packet,offset);
-        if(JS_IsException(value)||JS_DefinePropertyValueUint32(c,result,index++,value,JS_PROP_C_W_E)<0){JS_FreeValue(c,result);conversion_exception();return JS_EXCEPTION;}
-    }
-    return result;
-}
-enum class HpIoMethod : int {identity,born,id,hp,clock,closing,trap,attributes,count,words};
-inline JSValue hp_io_method(JSContext* c,JSValueConst self,int count,JSValueConst* args,int magic) {
-    auto* io=hp_io_this(c,self);if(!io)return JS_EXCEPTION;
-    const auto method=static_cast<HpIoMethod>(magic);
-    if(method!=HpIoMethod::clock&&method!=HpIoMethod::count&&method!=HpIoMethod::words
-        &&!hp_io_receiver(c,io,count,args))return JS_EXCEPTION;
-    if(method==HpIoMethod::attributes){
-        if(JS_IsUndefined(io->attributes)){
-            io->attributes=JS_NewObjectProto(c,JS_NULL);
-            if(JS_IsException(io->attributes)||JS_PreventExtensions(c,io->attributes)<0){conversion_exception();return JS_EXCEPTION;}
-        }
-        // The handle has no reference back to IO; identity alone admits it.
-        return JS_DupValue(c,io->attributes);
-    }
-    if(method==HpIoMethod::count||method==HpIoMethod::words){
-        if(count<1||!JS_IsObject(args[0])||!JS_IsObject(io->attributes)
-            ||JS_VALUE_GET_PTR(args[0])!=JS_VALUE_GET_PTR(io->attributes))return hp_io_fail(c,io,capture::Error::invalid_plan,0,io->checkpoint);
-    }
-    if(method==HpIoMethod::trap){
-        const auto role_id=io->plan->hp_io_layouts[io->phase==capture::Phase::entry?0:1].body_role;
-        const auto observed=binding().view.read(role_id,io->checkpoint,std::nullopt,io->root,8);
-        const auto status=observed.error==capture::Error::ok&&binding().concurrent?capture::Error::changed_guard:observed.error;
-        if(status!=capture::Error::ok)return hp_io_fail(c,io,status,role_id,io->checkpoint);
-        std::uint64_t value;std::memcpy(&value,observed.data,8);error(capture::Error::ok);return allocated(JS_NewBigUint64(c,value));
-    }
-    if(method==HpIoMethod::clock){
-        std::uint16_t open=0,close=0;
-        if(!hp_io_fact(c,io,capture::HpIoSlot::clock_open,open)||!hp_io_fact(c,io,capture::HpIoSlot::clock_close,close))return JS_EXCEPTION;
-        const auto& layout=io->plan->hp_io_layouts[io->phase==capture::Phase::entry?0:1];
-        return layout.fields[static_cast<unsigned>(capture::HpIoSlot::clock_close)].values==2
-            ?hp_io_tuple(c,io,{open,static_cast<unsigned>(open+1),close,static_cast<unsigned>(close+1)})
-            :hp_io_tuple(c,io,{open,static_cast<unsigned>(open+1),close});
-    }
-    const auto slot=method==HpIoMethod::identity?capture::HpIoSlot::identity:method==HpIoMethod::born?capture::HpIoSlot::born
-        :method==HpIoMethod::id?capture::HpIoSlot::id:method==HpIoMethod::hp?capture::HpIoSlot::hp
-        :method==HpIoMethod::closing?capture::HpIoSlot::closing:method==HpIoMethod::count?capture::HpIoSlot::count:capture::HpIoSlot::words;
-    std::uint16_t at=0;if(!hp_io_fact(c,io,slot,at))return JS_EXCEPTION;
-    if(method==HpIoMethod::identity||method==HpIoMethod::closing)return hp_io_tuple(c,io,{at,static_cast<unsigned>(at+1)});
-    if(method==HpIoMethod::words)return hp_io_tuple(c,io,{at,static_cast<unsigned>(at+1),static_cast<unsigned>(at+2)});
-    return allocated(JS_GetPropertyUint32(c,io->packet,at));
-}
-inline bool hp_io_class(JSContext* c) {
-    auto* rt=JS_GetRuntime(c);if(!hp_io_class_id)JS_NewClassID(&hp_io_class_id);
-    if(!JS_IsRegisteredClass(rt,hp_io_class_id)){
-        JSClassDef definition{};definition.class_name="ArkDPS.HpObservation";definition.finalizer=hp_io_finalize;definition.gc_mark=hp_io_mark;
-        if(JS_NewClass(rt,hp_io_class_id,&definition)<0)return false;
-    }
-    auto old=JS_GetClassProto(c,hp_io_class_id);const bool present=JS_IsObject(old);JS_FreeValue(c,old);if(present)return true;
-    auto proto=JS_NewObjectProto(c,JS_NULL);if(JS_IsException(proto))return false;
-    static constexpr const char* names[]{"identity","born","id","hp","clock","closing","trapClass","attributes","attributeCount","attributeWords"};
-    for(unsigned method=0;method<10;++method){
-        auto function=JS_NewCFunctionMagic(c,hp_io_method,names[method],method==4?0:1,JS_CFUNC_generic_magic,method);
-        if(JS_IsException(function)||JS_DefinePropertyValueStr(c,proto,names[method],function,0)<0){JS_FreeValue(c,proto);return false;}
-    }
-    if(JS_PreventExtensions(c,proto)<0){JS_FreeValue(c,proto);return false;}
-    JS_SetClassProto(c,hp_io_class_id,proto);return true;
-}
-inline JSValue hp_io_private_function(JSContext* c,const char* name) {
-    auto global=JS_GetGlobalObject(c);const auto atom=JS_NewAtom(c,name);JSPropertyDescriptor descriptor{};
-    const auto found=JS_GetOwnProperty(c,&descriptor,global,atom);JS_FreeAtom(c,atom);JS_FreeValue(c,global);
-    if(found<0)return JS_EXCEPTION;
-    if(found!=1)return JS_UNDEFINED;
-    const bool valid=JS_IsFunction(c,descriptor.value)&&!(descriptor.flags&(JS_PROP_WRITABLE|JS_PROP_CONFIGURABLE));
+// Recognition of immutable primitive packets, not a per-field native reader.
+// One logical frame can issue multiple IOs; native Begin/End actively retire
+// that frame, so JS getters reject a native lifetime change without an FFI read.
+inline bool retain_hp_frame(JSContext* c) {
+    auto& owner=binding();const auto nonce=owner.lease_nonce;
+    auto global=JS_GetGlobalObject(c);const auto atom=JS_NewAtom(c,"__arkdpsHpIoToken");JSPropertyDescriptor descriptor{};
+    const int found=JS_GetOwnProperty(c,&descriptor,global,atom);JS_FreeAtom(c,atom);JS_FreeValue(c,global);
+    if(found<0){conversion_exception();return false;}
+    if(found!=1){error(capture::Error::invalid_plan);return false;}
+    const bool function=JS_IsFunction(c,descriptor.value)&&!(descriptor.flags&(JS_PROP_WRITABLE|JS_PROP_CONFIGURABLE));
     JS_FreeValue(c,descriptor.getter);JS_FreeValue(c,descriptor.setter);
-    if(!valid){JS_FreeValue(c,descriptor.value);return JS_UNDEFINED;}return descriptor.value;
-}
-inline JSValue make_hp_opaque_io(JSContext* c) {
-    auto& owner=binding();const auto* plan=owner.hp_plan;const auto phase=owner.hp_phase;const auto nonce=owner.lease_nonce;
-    const auto& layout=plan->hp_io_layouts[phase==capture::Phase::entry?0:1];
-    if(!layout.supported)return JS_NULL; // Static optimization miss, not a failed read.
-    if(!hp_io_class(c)){conversion_exception();return JS_EXCEPTION;}
-    auto result=JS_NewObjectClass(c,hp_io_class_id);if(JS_IsException(result)){conversion_exception();return result;}
-    auto* io=static_cast<HpOpaqueIo*>(js_malloc(c,sizeof(HpOpaqueIo)));
-    if(!io){JS_FreeValue(c,result);conversion_exception();return JS_EXCEPTION;}
-    new(io)HpOpaqueIo;JS_SetOpaque(result,io);
-    io->context=c;io->plan=plan;io->phase=phase;io->nonce=nonce;io->ticket=owner.ticket;
-    io->configuration=owner.configuration;io->configuration_id=owner.configuration?owner.configuration->id:0;
-    io->root=owner.hp_root;io->checkpoint=owner.hp_checkpoint;io->mode=owner.hp_mode;
-    io->packet=JS_DupValue(c,owner.hp_packet);io->statuses=owner.hp_status;
-    io->root_value=JS_NewBigUint64(c,io->root);io->active_atom=JS_NewAtom(c,"hp_io_active");
-    io->integer=hp_io_private_function(c,"__arkdpsHpIoInteger");io->diagnostic=hp_io_private_function(c,"__arkdpsHpIoDiagnostic");
-    auto token_function=hp_io_private_function(c,"__arkdpsHpIoToken");
-    if(JS_IsFunction(c,token_function))io->token=JS_Call(c,token_function,JS_UNDEFINED,0,nullptr);
-    JS_FreeValue(c,token_function);
-    if(JS_IsException(io->root_value)||!io->active_atom||!JS_IsFunction(c,io->integer)||!JS_IsFunction(c,io->diagnostic)||!hp_io_current(c,io)
-        ||JS_PreventExtensions(c,result)<0){JS_FreeValue(c,result);if(!owner.js_exception)error(capture::Error::invalid_plan);return JS_ThrowInternalError(c,"native HP IO bridge unavailable");}
-    ++owner.hp_opaque_issued;return result;
+    if(!function){JS_FreeValue(c,descriptor.value);error(capture::Error::invalid_plan);return false;}
+    JSValue token=JS_Call(c,descriptor.value,JS_UNDEFINED,0,nullptr);JS_FreeValue(c,descriptor.value);
+    if(JS_IsException(token)){conversion_exception();return false;}
+    if(!JS_IsObject(token)){JS_FreeValue(c,token);error(capture::Error::invalid_plan);return false;}
+    auto record=JS_GetPropertyStr(c,token,"record");
+    if(JS_IsException(record)||!JS_IsObject(record)){
+        const bool exception=JS_IsException(record);JS_FreeValue(c,record);JS_FreeValue(c,token);
+        if(exception)conversion_exception();else error(capture::Error::invalid_plan);return false;
+    }
+    auto ticket=JS_GetPropertyStr(c,record,"ticket");
+    auto active=JS_GetPropertyStr(c,token,"hp_io_active");
+    std::size_t length=0;const auto* text=JS_IsString(ticket)?JS_ToCStringLen(c,&length,ticket):nullptr;
+    char expected[20];const auto encoded=std::to_chars(expected,expected+sizeof expected,owner.ticket);
+    const bool same=text&&encoded.ec==std::errc{}&&std::string_view(text,length)==std::string_view(expected,encoded.ptr-expected);
+    if(text)JS_FreeCString(c,text);
+    JS_FreeValue(c,ticket);JS_FreeValue(c,record);
+    const bool valid=same&&JS_IsBool(active)&&JS_ToBool(c,active)==1&&owner.active&&owner.lease_nonce==nonce&&owner.hp_packet_context==c&&owner.hp_issued;
+    JS_FreeValue(c,active);
+    if(!valid){JS_FreeValue(c,token);error(capture::Error::invalid_plan);return false;}
+    if(owner.hp_token_context==c&&JS_IsObject(owner.hp_token)&&JS_VALUE_GET_PTR(owner.hp_token)==JS_VALUE_GET_PTR(token)){JS_FreeValue(c,token);return true;}
+    if(!invalidate_hp_token()){JS_FreeValue(c,token);return false;}
+    owner.hp_token_context=c;owner.hp_token=token;return true;
 }
 
 inline JSValue hp_observation(JSContext* c,JSValueConst,int count,JSValueConst* args) {
@@ -516,7 +408,13 @@ inline JSValue hp_observation(JSContext* c,JSValueConst,int count,JSValueConst* 
     }
     if(count>=3){
         if(count==5){double format=0;if(!number(c,args[3],format,2,2)||!JS_IsString(args[4])){if(!owner.js_exception)error(capture::Error::invalid_plan);return unavailable();}}
-        if(!owner.hp_issued||owner.hp_packet_context!=c||!JS_IsObject(args[2])||!JS_IsObject(owner.hp_packet)
+        if(!owner.hp_issued||owner.hp_packet_context!=c||owner.hp_packet_plan!=owner.hp_plan
+            ||owner.hp_packet_configuration!=owner.configuration
+            ||(owner.configuration&&owner.hp_packet_configuration_id!=owner.configuration->id)
+            ||owner.hp_packet_nonce!=owner.lease_nonce||owner.hp_packet_ticket!=owner.ticket||owner.hp_packet_mode!=owner.hp_mode
+            ||owner.hp_packet_scope!=owner.scope_revision||owner.hp_packet_publication!=owner.publication_revision
+            ||owner.hp_packet_root!=owner.hp_root||owner.hp_packet_checkpoint!=owner.hp_checkpoint||owner.hp_packet_phase!=owner.hp_phase
+            ||!JS_IsObject(args[2])||!JS_IsObject(owner.hp_packet)
             ||JS_VALUE_GET_PTR(args[2])!=JS_VALUE_GET_PTR(owner.hp_packet)) {error(capture::Error::invalid_plan);return JS_UNDEFINED;}
         if(count==5){
             const auto& layout=owner.hp_plan->hp_io_layouts[owner.hp_phase==capture::Phase::entry?0:1];
@@ -525,7 +423,8 @@ inline JSValue hp_observation(JSContext* c,JSValueConst,int count,JSValueConst* 
             if(!text){conversion_exception();return JS_EXCEPTION;}
             const bool same=std::string_view(text,length)==layout.signature;JS_FreeCString(c,text);
             if(!same){error(capture::Error::invalid_plan);return JS_UNDEFINED;}
-            return make_hp_opaque_io(c);
+            if(!retain_hp_frame(c))return unavailable();
+            ++owner.hp_typed_issued;return JS_DupValue(c,owner.hp_packet);
         }
         return JS_DupValue(c,owner.hp_packet);
     }
@@ -544,7 +443,9 @@ inline JSValue consume_hp_failure(JSContext* c,JSValueConst,int count,JSValueCon
 // Exact record configuration is selected by engine, never by a JS supplied id.
 inline void bind_graphs(const capture::CaptureConfiguration* config,std::uint64_t scope,
                         std::uint64_t publication,std::uint64_t mode,std::uint32_t checkpoint=0) noexcept {
-    release_graph_packet();auto& owner=binding();owner.configuration=config;owner.scope_revision=scope;
+    auto& owner=binding();
+    if(owner.configuration!=config||owner.scope_revision!=scope||owner.publication_revision!=publication||owner.graph_mode!=mode||owner.graph_checkpoint!=checkpoint)invalidate_hp_token();
+    release_graph_packet();owner.configuration=config;owner.scope_revision=scope;
     owner.publication_revision=publication;owner.graph_mode=mode;owner.graph_checkpoint=checkpoint;
 }
 inline JSValue graph_batch(JSContext* c,int count,JSValueConst* args,bool check) {
@@ -620,7 +521,7 @@ inline JSValue lease(JSContext* c,JSValueConst,int count,JSValueConst* args) {
     if(!matches) error(capture::Error::invalid_plan);
     return JS_NewBool(c,matches);
 }
-inline void install(JSContext* c,void(*poison)() noexcept,bool sealed=true,bool opaque=true) {
+inline void install(JSContext* c,void(*poison)() noexcept,bool sealed=true,bool typed=true) {
     binding().poison=poison;
     auto global=JS_GetGlobalObject(c);auto bundle=JS_NewObjectProto(c,JS_NULL);
     bool failed=JS_IsException(global)||JS_IsException(bundle);
@@ -630,9 +531,9 @@ inline void install(JSContext* c,void(*poison)() noexcept,bool sealed=true,bool 
     };
     define("version",JS_NewUint32(c,1));define("__nativeOwnedNumericAddress",JS_TRUE);
     define("__nativeOwnedGraphTypedPackets",JS_NewUint32(c,1));
-    if(opaque){
-        define("__nativeOwnedHpOpaqueIo",JS_NewUint32(c,1));
-        if(!failed&&JS_SetPropertyStr(c,global,"__nativeOwnedHpOpaqueIo",JS_NewUint32(c,1))<0)failed=true;
+    if(typed){
+        define("__nativeOwnedHpTypedPackets",JS_NewUint32(c,1));
+        if(!failed&&JS_SetPropertyStr(c,global,"__nativeOwnedHpTypedPackets",JS_NewUint32(c,1))<0)failed=true;
     }
     if(!failed&&JS_SetPropertyStr(c,global,"__nativeOwnedGraphTypedPackets",JS_NewUint32(c,1))<0)failed=true;
     if(!failed&&JS_SetPropertyStr(c,global,"__nativeOwnedNumericAddress",JS_TRUE)<0)failed=true;

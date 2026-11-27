@@ -8,9 +8,7 @@ function __integer(value) {
  return BigInt(value);
 }
 Object.defineProperties(globalThis,{
- __arkdpsHpIoInteger:{value:__integer},
- __arkdpsHpIoToken:{value:function(){if(__arkdpsReplay===null||!__arkdpsReplay.native)__arkdpsReplayGap('HP IO outside replay');return __arkdpsReplay;}},
- __arkdpsHpIoDiagnostic:{value:function(status,role,checkpoint){return __arkdpsReplayCheckpoint(role,checkpoint,()=>__arkdpsNativeReadFailure(status));}}
+ __arkdpsHpIoToken:{value:function(){if(__arkdpsReplay===null||!__arkdpsReplay.native)__arkdpsReplayGap('HP IO outside replay');return __arkdpsReplay;}}
 });
 // QuickJS builds may represent asUintN(64, high-bit BigInt) as signed.
 // Preserve already canonical unsigned values and normalize only out-of-range
@@ -183,14 +181,14 @@ function __arkdpsSealedProvider(){
  const required=['__nativeOwnedLease','__nativeOwnedRead','__nativeOwnedScalar','__nativeOwnedStatus','__nativeOwnedPoint'];
  const optional=['__nativeOwnedHpObservation','__nativeOwnedConsumeHpFailure','__nativeOwnedGraphReadBatch','__nativeOwnedGraphCheck','__nativeOwnedGraphFailure'];
  for(const key of keys){
-  if(typeof key!=='string'||(key!=='version'&&key!=='__nativeOwnedNumericAddress'&&key!=='__nativeOwnedGraphTypedPackets'&&key!=='__nativeOwnedHpOpaqueIo'&&!required.includes(key)&&!optional.includes(key)))throw Error('unexpected native owned provider member');
+  if(typeof key!=='string'||(key!=='version'&&key!=='__nativeOwnedNumericAddress'&&key!=='__nativeOwnedGraphTypedPackets'&&key!=='__nativeOwnedHpTypedPackets'&&!required.includes(key)&&!optional.includes(key)))throw Error('unexpected native owned provider member');
   const descriptor=__arkdpsProviderDescriptor(bundle,key);
   if(!descriptor||!__arkdpsProviderHasOwn(descriptor,'value')||descriptor.writable!==false||descriptor.configurable!==false)throw Error('native owned provider member is mutable');
  }
  const version=__arkdpsProviderDescriptor(bundle,'version'),numeric=__arkdpsProviderDescriptor(bundle,'__nativeOwnedNumericAddress');
  if(version?.value!==1||numeric?.value!==true)throw Error('invalid native owned provider bundle version');
  const typed=__arkdpsProviderDescriptor(bundle,'__nativeOwnedGraphTypedPackets');if(typed!==undefined&&(typed.value!==1||typeof __arkdpsProviderDescriptor(bundle,'__nativeOwnedGraphCheck')?.value!=='function'||typeof __arkdpsProviderDescriptor(bundle,'__nativeOwnedGraphFailure')?.value!=='function'))throw Error('invalid native graph typed capability');
- const opaque=__arkdpsProviderDescriptor(bundle,'__nativeOwnedHpOpaqueIo');if(opaque!==undefined&&(opaque.value!==1||typeof __arkdpsProviderDescriptor(bundle,'__nativeOwnedHpObservation')?.value!=='function'))throw Error('invalid native HP IO capability');
+ const typedHp=__arkdpsProviderDescriptor(bundle,'__nativeOwnedHpTypedPackets');if(typedHp!==undefined&&(typedHp.value!==1||typeof __arkdpsProviderDescriptor(bundle,'__nativeOwnedHpObservation')?.value!=='function'))throw Error('invalid native HP IO capability');
  for(const key of required)if(typeof __arkdpsProviderDescriptor(bundle,key)?.value!=='function')throw Error('native owned provider member unavailable');
  for(const key of optional){const descriptor=__arkdpsProviderDescriptor(bundle,key);if(descriptor!==undefined&&typeof descriptor.value!=='function')throw Error('invalid optional native owned provider');}
  for(const pair of [['__nativeOwnedHpObservation','__nativeOwnedConsumeHpFailure'],['__nativeOwnedGraphCheck','__nativeOwnedGraphFailure']])if(__arkdpsProviderHasOwn(bundle,pair[0])!==__arkdpsProviderHasOwn(bundle,pair[1]))throw Error('incomplete native owned provider pair');
@@ -207,15 +205,15 @@ function __arkdpsReplayBegin(record,controlled=null){
   let native=__arkdpsSealedProvider();
   if(native===null){
   const lease=globalThis.__nativeOwnedLease,read=globalThis.__nativeOwnedRead,scalar=globalThis.__nativeOwnedScalar,
-   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,hpObservation=globalThis.__nativeOwnedHpObservation,hpFailure=globalThis.__nativeOwnedConsumeHpFailure,graphCheck=globalThis.__nativeOwnedGraphCheck,graphFailure=globalThis.__nativeOwnedGraphFailure,graphBatch=globalThis.__nativeOwnedGraphReadBatch,graphTyped=globalThis.__nativeOwnedGraphTypedPackets,hpOpaque=globalThis.__nativeOwnedHpOpaqueIo;
+   status=globalThis.__nativeOwnedStatus,point=globalThis.__nativeOwnedPoint,numeric=globalThis.__nativeOwnedNumericAddress===true,hpObservation=globalThis.__nativeOwnedHpObservation,hpFailure=globalThis.__nativeOwnedConsumeHpFailure,graphCheck=globalThis.__nativeOwnedGraphCheck,graphFailure=globalThis.__nativeOwnedGraphFailure,graphBatch=globalThis.__nativeOwnedGraphReadBatch,graphTyped=globalThis.__nativeOwnedGraphTypedPackets,hpTyped=globalThis.__nativeOwnedHpTypedPackets;
   if(graphTyped!==undefined&&(graphTyped!==1||typeof graphCheck!=='function'||typeof graphFailure!=='function'))throw Error('invalid native graph typed capability');
-  if(hpOpaque!==undefined&&(hpOpaque!==1||typeof hpObservation!=='function'))throw Error('invalid native HP IO capability');
+  if(hpTyped!==undefined&&(hpTyped!==1||typeof hpObservation!=='function'))throw Error('invalid native HP IO capability');
   if(typeof lease!=='function'||typeof read!=='function'||typeof scalar!=='function'||typeof status!=='function'||typeof point!=='function')
    throw new Error('native owned provider unavailable');
   if((hpObservation!==undefined||hpFailure!==undefined)&&(typeof hpObservation!=='function'||typeof hpFailure!=='function'))throw new Error('native HP observation provider unavailable');
   native=__arkdpsNativeProvider;
-  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedHpObservation!==hpObservation||native.__nativeOwnedConsumeHpFailure!==hpFailure||native.__nativeOwnedGraphCheck!==graphCheck||native.__nativeOwnedGraphFailure!==graphFailure||native.__nativeOwnedGraphReadBatch!==graphBatch||native.__nativeOwnedGraphTypedPackets!==graphTyped||native.__nativeOwnedHpOpaqueIo!==hpOpaque)
-   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedHpObservation:hpObservation,__nativeOwnedConsumeHpFailure:hpFailure,__nativeOwnedGraphCheck:graphCheck,__nativeOwnedGraphFailure:graphFailure,__nativeOwnedGraphReadBatch:graphBatch,__nativeOwnedGraphTypedPackets:graphTyped,__nativeOwnedHpOpaqueIo:hpOpaque});
+  if(!native||native.__nativeOwnedLease!==lease||native.__nativeOwnedRead!==read||native.__nativeOwnedScalar!==scalar||native.__nativeOwnedStatus!==status||native.__nativeOwnedPoint!==point||native.__nativeOwnedNumericAddress!==numeric||native.__nativeOwnedHpObservation!==hpObservation||native.__nativeOwnedConsumeHpFailure!==hpFailure||native.__nativeOwnedGraphCheck!==graphCheck||native.__nativeOwnedGraphFailure!==graphFailure||native.__nativeOwnedGraphReadBatch!==graphBatch||native.__nativeOwnedGraphTypedPackets!==graphTyped||native.__nativeOwnedHpTypedPackets!==hpTyped)
+   native=__arkdpsNativeProvider=Object.freeze({__nativeOwnedLease:lease,__nativeOwnedRead:read,__nativeOwnedScalar:scalar,__nativeOwnedStatus:status,__nativeOwnedPoint:point,__nativeOwnedNumericAddress:numeric,__nativeOwnedHpObservation:hpObservation,__nativeOwnedConsumeHpFailure:hpFailure,__nativeOwnedGraphCheck:graphCheck,__nativeOwnedGraphFailure:graphFailure,__nativeOwnedGraphReadBatch:graphBatch,__nativeOwnedGraphTypedPackets:graphTyped,__nativeOwnedHpTypedPackets:hpTyped});
   }
   if(typeof record.ticket!=='string'||!/^\d+$/.test(record.ticket)||(controlled===null&&native.__nativeOwnedLease(record.ticket)!==true))throw new Error('native owned lease unavailable');
   __arkdpsReplay={hp_io_active:true,record,native,role:record.edge,checkpoint,fieldId:0,structural:[],unreadable:0};if(controlled!==null)__arkdpsControlledFrames.set(__arkdpsReplay,controlled);return;
@@ -342,7 +340,7 @@ function __arkdpsReplayEnd(compact=false){
 
  if(compact===true)return complete;
  return Object.freeze({complete,structural_gaps:Object.freeze([...replay.structural]),unreadable_reads:replay.unreadable});
- }finally{owner.hp_io_active=false;__arkdpsReplay=null;}
+ }finally{if(owner.hp_io_active!==false)owner.hp_io_active=false;__arkdpsReplay=null;}
 }
 // Failure-only, bounded labels. Raw reasons never cross the native transport.
 function __arkdpsReplayDiagnostic(replay){
@@ -408,39 +406,50 @@ function __arkdpsNativeAddress(address){
 }
 // Read geometry comes from the same immutable compiled capture contract;
 // there is no independent HP read-plan registry. Values belong to this lease.
-const __arkdpsHpObservationGeometry=new WeakMap(),__arkdpsPreparedHpObservations=new WeakMap();
+const __arkdpsHpObservationGeometry=new WeakMap(),__arkdpsPreparedHpObservations=new WeakMap(),__arkdpsHpInteger=__integer;
+const __arkdpsHpIoInstances=new WeakSet(),__arkdpsHpGapOwner=__arkdpsReplayGap;
+function __arkdpsHpIoGap(message,native=__arkdpsReplay?.native){
+ // Error path only. A source-level receiver/lifetime failure must also poison
+ // the native stream, independently of whether a diagnostic is caught.
+ if(typeof native?.__nativeOwnedConsumeHpFailure==='function')try{native.__nativeOwnedConsumeHpFailure(-1);}catch(ignored){}
+ __arkdpsHpGapOwner(message);throw Error('HP observation rejected');
+}
 class __ArkDpsHpObservation {
- #replay;#packet;#geometry;#root;#attributes=null;
- constructor(replay,packet,geometry,receiver,root){this.#replay=replay;this.#packet=packet;this.#geometry=geometry;this.#root=root;Object.freeze(this);}
- #active(){if(this.#replay!==__arkdpsReplay)__arkdpsReplayGap('HP observation lease ended');}
- #object(receiver){this.#active();let root;try{root=__integer(receiver);}catch(error){__arkdpsReplayGap('invalid HP observation receiver');}if(root!==this.#root)__arkdpsReplayGap('HP observation receiver changed');}
+ #replay;#packet;#geometry;#root;#attributes=null;#typed=false;
+ constructor(replay,packet,geometry,receiver,root,typed=false){this.#typed=typed;this.#replay=replay;this.#packet=packet;this.#geometry=geometry;this.#root=root;__arkdpsHpIoInstances.add(this);Object.freeze(this);}
+ #fail(message){return __arkdpsHpIoGap(message,this.#replay.native);}
+ #active(){if(this.#replay!==__arkdpsReplay||this.#replay.hp_io_active!==true)this.#fail('HP observation lease ended');}
+ #object(receiver){this.#active();let root;try{root=__arkdpsHpInteger(receiver);}catch(error){this.#fail('invalid HP observation receiver');}this.#active();if(root!==this.#root)this.#fail('HP observation receiver changed');}
  #fact(name){
   const field=this.#geometry.names[name];
-  if(!field){__arkdpsNativeCall('__nativeOwnedConsumeHpFailure',-1);__arkdpsReplayGap('missing HP observation descriptor');}
+  if(!field){__arkdpsNativeCall('__nativeOwnedConsumeHpFailure',-1);this.#fail('missing HP observation descriptor');}
   const status=this.#packet[field.at];
-  if(!Number.isInteger(status)||status<0||(status>10&&status!==65535))__arkdpsReplayGap('invalid HP observation status');
+  if(!Number.isInteger(status)||status<0||(status>10&&status!==65535))this.#fail('invalid HP observation status');
   if(status!==0)return __arkdpsReplayCheckpoint(field.role,this.#replay.record.checkpoint??0,()=>{
    __arkdpsNativeCall('__nativeOwnedConsumeHpFailure',field.index);__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
   });
-  for(let i=0;i<field.kinds.length;i++){
+  if(!this.#typed)for(let i=0;i<field.kinds.length;i++){
    const value=this.#packet[field.at+1+i],kind=field.kinds[i];
-   if(kind==='u8'||kind==='u32'){if(!Number.isInteger(value)||value<0||value>(kind==='u8'?255:4294967295))__arkdpsReplayGap('invalid HP observation integer');}
-   else if(kind==='u64'||kind==='i64'){if(typeof value!=='bigint'||value<(kind==='u64'?0n:-0x8000000000000000n)||value>(kind==='u64'?0xffffffffffffffffn:0x7fffffffffffffffn))__arkdpsReplayGap('invalid HP observation bigint');}
-   else if(typeof value!=='string'||value.length>field.max_units)__arkdpsReplayGap('invalid HP observation string');
+   if(kind==='u8'||kind==='u32'){if(!Number.isInteger(value)||value<0||value>(kind==='u8'?255:4294967295))this.#fail('invalid HP observation integer');}
+   else if(kind==='u64'||kind==='i64'){if(typeof value!=='bigint'||value<(kind==='u64'?0n:-0x8000000000000000n)||value>(kind==='u64'?0xffffffffffffffffn:0x7fffffffffffffffn))this.#fail('invalid HP observation bigint');}
+   else if(typeof value!=='string'||value.length>field.max_units)this.#fail('invalid HP observation string');
   }
   return field.at+1;
  }
- identity(receiver){this.#object(receiver);const at=this.#fact('hp.identity');return [this.#packet[at],this.#packet[at+1]];}
- born(receiver){this.#object(receiver);return this.#packet[this.#fact('hp.born')];}
- id(receiver){this.#object(receiver);return this.#packet[this.#fact('hp.id')];}
- hp(receiver){this.#object(receiver);return this.#packet[this.#fact('hp.before')];}
- clock(){this.#active();const open=this.#fact('clock_open'),close=this.#fact('clock_close'),values=[this.#packet[open],this.#packet[open+1],this.#packet[close]];if(this.#geometry.names.clock_close.kinds.length>1)values.push(this.#packet[close+1]);return values;}
- closing(receiver){this.#object(receiver);const at=this.#fact('hp.closing');return [this.#packet[at],this.#packet[at+1]];}
- trapClass(receiver){this.#object(receiver);return __arkdpsReplayCheckpoint('body',this.#replay.record.checkpoint??0,()=>ptr(receiver).readPointer().value);}
- attributes(receiver){this.#object(receiver);return this.#attributes??(this.#attributes=Object.freeze({}));}
- attributeCount(handle){this.#active();if(handle!==this.#attributes||handle===null)__arkdpsReplayGap('foreign HP attribute observation');return this.#packet[this.#fact('attributes.count')];}
- attributeWords(handle){this.#active();if(handle!==this.#attributes||handle===null)__arkdpsReplayGap('foreign HP attribute observation');const at=this.#fact('attributes.slot0');return [this.#packet[at],this.#packet[at+1],this.#packet[at+2]];}
+ identity(receiver){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#object(receiver);const at=this.#fact('hp.identity');return [this.#packet[at],this.#packet[at+1]];}
+ born(receiver){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#object(receiver);return this.#packet[this.#fact('hp.born')];}
+ id(receiver){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#object(receiver);return this.#packet[this.#fact('hp.id')];}
+ hp(receiver){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#object(receiver);return this.#packet[this.#fact('hp.before')];}
+ clock(){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#active();const open=this.#fact('clock_open'),close=this.#fact('clock_close'),values=[this.#packet[open],this.#packet[open+1],this.#packet[close]];if(this.#geometry.names.clock_close.kinds.length>1)values.push(this.#packet[close+1]);return values;}
+ closing(receiver){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#object(receiver);const at=this.#fact('hp.closing');return [this.#packet[at],this.#packet[at+1]];}
+ trapClass(receiver){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#object(receiver);return __arkdpsReplayCheckpoint('body',this.#replay.record.checkpoint??0,()=>ptr(receiver).readPointer().value);}
+ attributes(receiver){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#object(receiver);return this.#attributes??(this.#attributes=Object.freeze({}));}
+ attributeCount(handle){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#active();if(handle!==this.#attributes||handle===null)this.#fail('foreign HP attribute observation');return this.#packet[this.#fact('attributes.count')];}
+ attributeWords(handle){if(!__arkdpsHpIoInstances.has(this))__arkdpsHpIoGap('foreign HP observation receiver');this.#active();if(handle!==this.#attributes||handle===null)this.#fail('foreign HP attribute observation');const at=this.#fact('attributes.slot0');return [this.#packet[at],this.#packet[at+1],this.#packet[at+2]];}
 }
+// A public prototype supplies methods, never a native proof or constructor.
+Object.setPrototypeOf(__ArkDpsHpObservation.prototype,null);
+Object.freeze(__ArkDpsHpObservation.prototype);
 function __arkdpsCreateHpObservation(contract,receiver,prepared){
  const replay=__arkdpsReplay;if(!replay?.native)__arkdpsReplayGap('HP observation requires native replay');
  const native=replay.native;
@@ -475,23 +484,20 @@ function __arkdpsCreateHpObservation(contract,receiver,prepared){
  const geometry=layouts[replay.record.edge];if(!geometry)__arkdpsReplayGap('invalid HP observation phase');
  let root,hook;try{root=__integer(receiver);hook=__integer(contract.address);}catch(error){__arkdpsReplayGap('invalid HP observation receiver');}
  if(root<=0n||root>0xffffffffffffffffn||hook<=0n||hook>0xffffffffffffffffn)__arkdpsReplayGap('invalid HP observation receiver');
- const nativeOpaque=native.__nativeOwnedHpOpaqueIo===1;
- const packet=nativeOpaque&&prepared!==undefined?prepared:__arkdpsNativeCall('__nativeOwnedHpObservation',__arkdpsNativeAddress(hook),__arkdpsNativeAddress(root),prepared);
+ const nativeTyped=native.__nativeOwnedHpTypedPackets===1;
+ const packet=nativeTyped&&prepared!==undefined?prepared:__arkdpsNativeCall('__nativeOwnedHpObservation',__arkdpsNativeAddress(hook),__arkdpsNativeAddress(root),prepared);
  if(packet===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
  if(prepared!==undefined&&packet!==prepared)__arkdpsReplayGap('prepared HP packet identity changed');
  if(!Array.isArray(packet)||packet.length!==geometry.length||packet[0]!==1||packet[1]!==geometry.count||packet[2]!== (replay.record.edge==='entry'?0:1)||packet[3]!== (replay.record.checkpoint??0)||packet[4]!==replay.record.facts?.mode_epoch)__arkdpsReplayGap('invalid HP observation packet');
- if(nativeOpaque){
+ let typed=false;
+ if(nativeTyped){
   if(replay!==__arkdpsReplay)__arkdpsReplayGap('HP IO lease changed during acquisition');
-  let opaque;try{opaque=native.__nativeOwnedHpObservation(__arkdpsNativeAddress(hook),__arkdpsNativeAddress(root),packet,2,geometry.signature);}catch(error){__arkdpsReplayGap('native HP IO recognition failed');}
-  if(opaque===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
-  if(opaque!==null){
-   if(typeof opaque!=='object'||replay!==__arkdpsReplay)__arkdpsReplayGap('invalid native HP IO result');
-   if(prepared!==undefined)__arkdpsPreparedHpObservations.set(opaque,{replay,contract,root});
-   return opaque;
-  }
+  let issued;try{issued=native.__nativeOwnedHpObservation(__arkdpsNativeAddress(hook),__arkdpsNativeAddress(root),packet,2,geometry.signature);}catch(error){__arkdpsReplayGap('native HP typed recognition failed');}
+  if(issued===undefined)__arkdpsNativeReadFailure(__arkdpsNativeCall('__nativeOwnedStatus'));
+  if(issued!==null){if(issued!==packet||replay!==__arkdpsReplay)__arkdpsReplayGap('unissued native HP packet');typed=true;}
  }
- try{Object.freeze(packet);}catch(error){__arkdpsReplayGap('mutable HP observation packet');}
- const io=new __ArkDpsHpObservation(replay,packet,geometry,receiver,root);
+ if(!typed)try{Object.freeze(packet);}catch(error){__arkdpsReplayGap('mutable HP observation packet');}
+ const io=new __ArkDpsHpObservation(replay,packet,geometry,receiver,root,typed);
  if(prepared!==undefined)__arkdpsPreparedHpObservations.set(io,{replay,contract,root});
  return io;
 }

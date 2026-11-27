@@ -38,8 +38,8 @@ int main(int argc,char** argv){
  };
  const auto close=[&](){statement(c,"globalThis.summary=__arkdpsReplayEnd();");owned::end();};
  open();statement(c,"globalThis.io=__arkdpsOwnedHpObservation(contract,enemy);");
- auto global=JS_GetGlobalObject(c);auto io=JS_GetPropertyStr(c,global,"io");assert(JS_GetOpaque(io,owned::hp_io_class_id));JS_FreeValue(c,io);JS_FreeValue(c,global);
- ensure(c,"Object.isFrozen(io)&&Object.isFrozen(Object.getPrototypeOf(io))&&Object.getPrototypeOf(Object.getPrototypeOf(io))===null&&io.constructor===undefined&&!Reflect.set(io,'identity',()=>0)");
+ assert(owned::binding().hp_typed_issued==1);ensure(c,"io instanceof __ArkDpsHpObservation");
+ ensure(c,"Object.isFrozen(io)&&Object.isFrozen(Object.getPrototypeOf(io))&&Object.getPrototypeOf(Object.getPrototypeOf(io))===null&&io.constructor===__ArkDpsHpObservation&&!Reflect.set(io,'identity',()=>0)");
  ensure(c,"io.identity(enemy)[0]===18446744073709551615n&&io.identity(enemy)[1]===73&&io.born(enemy)===1&&io.hp(enemy)===-9223372036854775808n");
  ensure(c,"(()=>{const x=io.clock();return x.length===3&&x[0]===30&&x[1]===-4294967296n&&x[2]===30})()");
  ensure(c,"(()=>{const s=io.id(enemy);return s.length===9&&[65,0,0x4e2d,0xd800,66,0xdfff,67,0xd83d,0xde00].every((v,i)=>s.charCodeAt(i)===v)})()");
@@ -60,6 +60,12 @@ int main(int argc,char** argv){
  }
  // Same raw ticket, pointer, phase, cp and mode still has a fresh Begin nonce.
  open();statement(c,"globalThis.io=__arkdpsOwnedHpObservation(contract,enemy);");begin(code,config,memory,*snapshot);ensure(c,"reject(()=>io.identity(enemy))");assert(poisoned);close();
+ // Native End must expire the logical IO before the bridge's JS End runs.
+ open();statement(c,"globalThis.io=__arkdpsOwnedHpObservation(contract,enemy);");owned::end();ensure(c,"reject(()=>io.identity(enemy))");assert(poisoned);close();ensure(c,"!summary.complete");
+ // Rebinding a different immutable configuration retires already issued IOs.
+ open();statement(c,"globalThis.io=__arkdpsOwnedHpObservation(contract,enemy);");CaptureConfiguration changed_configuration;changed_configuration.id=99;owned::bind_graphs(&changed_configuration,0,0,0,0);ensure(c,"reject(()=>io.identity(enemy))");assert(poisoned);close();
+ // A copied authentic array has values, but no authority to mint an IO.
+ open();statement(c,"globalThis.authenticPacket=__nativeOwnedHpObservation(36864n,enemy.value);");ensure(c,"reject(()=>__arkdpsPreparedHpObservation(contract,enemy,authenticPacket.slice()))");assert(poisoned);close();
  for(const auto& receiver:{"enemy.value+1n","enemy.value+0x10000000000000000n","9007199254740992","({value:enemy.value})"}){
   open();statement(c,"globalThis.io=__arkdpsOwnedHpObservation(contract,enemy);");ensure(c,std::string("reject(()=>io.identity(")+receiver+"))");assert(poisoned);close();
  }

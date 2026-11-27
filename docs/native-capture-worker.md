@@ -454,3 +454,31 @@ C 的受控原生完成校验、D 的精确认领及当前 item 的关闭时钟�
    所有游戏回调继续不依赖消费者 VM；扩大 arena 或缓冲不能替代持续吞吐通过。
 6. 离线与实机分开验收。私有包交付时列明尚未通过的压力/实机条件，不能用局部 PASS
    宣称游戏 FPS 已改善；数据过期和未核实命中继续按各自根因分类。
+
+### 2026-11-27 事实包取值与真实并发反例
+
+当前共享 JS HP IO 已替代 `deeb101` 的 C++ 逐字段 IO 实验；产品中不保留两套 HP 业务或取值类。
+原生继续从同一 CompiledPlan/OwnedReplayView 生成不可变原始 packet，精确认领实际对象，
+绑定配置、plan、ticket、nonce、phase、root、checkpoint、mode 与 scope/publication。
+匹配布局后共享 JS IO 直接读原始整数，省逐字段 FFI；业务解释仍是 applyHpEntry/Leave。
+原生 Begin/End 和重绑定会主动把实际 JS frame 的失效字段置为只读 false；
+接收对象转换后再检查失效，拒收还会立即设置原生结构故障。
+所有原 assert(poisoned) 负例保留；新增 Native End 早于 JS End、配置重绑、数组复制伪造用例。
+旧能力缺失保原始完整检查；认领失败不能走成功回退。
+
+同二进制 2000 setters 对照的完整业务事件 JSON 一致：回血约6399→7439/s，
+unchanged约12868→13693/s，damage约5245→5574/s。这是单组小样本，不是持续目标通过。
+`runtime/hp-typed-packet/engine/io-pair/receipt.json` 保存当时实际 binary/JS/input 的哈希。
+
+此前 C++ IO 候选的真实并发夹具复用 pin_mode_entry、CaptureConfigurations、
+capture_scope_point、CaptureLanes、prepare/finalize/drain 和完整生产 JS；不操作游戏。
+每次先 active 再 pin config，同一 config 配对 E/L；完整 scope64/publication1604。
+1k/s、1000 setters、500ms 暂停在约94ms追平且全部闭合发布。
+30k/s、300000 setters 目标在25703个 setters 后 code4 失败，实际供给约29688/s。
+失败见 `runtime/paced-real-engine/target-30k-10s/receipt.json`，不能标为10秒成功；
+这是先前 C++ IO 候选，不能冒称当前 JS packet 候选已经跑过该持续目标。
+每笔 p99 发布、60秒真实混合负载及游戏FPS仍未验收。
+
+下一阶段做后台叶子事实配对与源侧受控批量归约，首先证明无合并的语义对照。
+原始边界、完整现场证据、首笔回血、regen tick、嵌套与终局/read/ACK 水位仍需保留；
+不能把增大容量、隐藏过期、低频输出或减少业务输出条数当成消费吞吐修复。
