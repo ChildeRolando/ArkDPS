@@ -1,6 +1,5 @@
 from copy import deepcopy
 import json
-from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +8,7 @@ from event_observer import ObserverStatus
 from event_probe import NATIVE_PC_LIVE_CONTRACT, ObserverReadRetry
 from native_pc import live_event_source
 from native_pc_collector import NativePcCollector
+from native_pc.probe_native_pc_battle import NativePcBattleProbe
 
 
 INSTANCE = (42, 132245567890001234)
@@ -37,13 +37,18 @@ def _mark(sequence=0, frame=0, **fields):
                      native_stage_id=STAGE, native_process_pid=INSTANCE[0], native_generation=7), **fields)
 
 
-class _Collector:
-    observer_binding = NativePcCollector.observer_binding
-
+class _Collector(NativePcCollector):
+    """Real binding implementation over owned sampler state, never a process."""
     def __init__(self):
-        self.process = SimpleNamespace(pid=INSTANCE[0], process_instance=INSTANCE,
-                                       process_alive=lambda: True, battle_serial_for=lambda *_: 1)
-        self.diagnostics = SimpleNamespace(version_actual=BUILD)
+        super().__init__(None, collect_actions=False)
+        process = object.__new__(NativePcBattleProbe)
+        process.pid, process.process_instance = INSTANCE[0], INSTANCE
+        process.process_alive = lambda: True
+        process._identity = tuple(int(ROOTS[key], 16) for key in
+                                  ('controller', 'native', 'logger', 'stats', 'level'))
+        process._stage_id, process._serial, process._last_clock = STAGE, 1, (0, 0)
+        self.process = process
+        self.diagnostics.version_actual = BUILD
 
 
 class _Host:
@@ -170,16 +175,16 @@ def test_live_feed_fails_closed_when_producer_changes_identity(setup_feed, bad_m
 def test_live_feed_waits_on_temporary_native_binding_without_dropping_record(setup_feed):
     probe, collector, path, _ = setup_feed()
     _append(path, dict(mark=_mark(), events=[]))
-    original = collector.observer_binding
+    original = collector.observer_binding_with_scope
 
     def busy(**fields):
         raise SampleUnavailable('controlled frame was busy')
 
-    collector.observer_binding = busy
+    collector.observer_binding_with_scope = busy
     probe.start()
     with pytest.raises(ObserverReadRetry, match='controlled frame was busy'):
         probe.mark()
-    collector.observer_binding = original
+    collector.observer_binding_with_scope = original
     assert probe.mark()['sequence'] == 0
 
 
