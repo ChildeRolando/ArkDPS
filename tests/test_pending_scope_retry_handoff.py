@@ -1,4 +1,4 @@
-"""An admitted pending baseline has one continuation owner, even after retry."""
+"""A pending installation commits its baseline and current prefix atomically."""
 import pytest
 
 from battle_lifecycle import BattleSessions
@@ -11,10 +11,16 @@ from test_pending_scope_start import pending_case, start_pending
 
 @pytest.mark.parametrize('error', [MappingUnavailable, BarrierBusy, CaptureRetry, FrameMismatch])
 @pytest.mark.parametrize('extra_hit', [False, True])
-def test_admitted_baseline_retires_pending_on_current_retry_without_ack(monkeypatch, error, extra_hit):
+def test_pending_install_retry_preserves_old_state_and_recovers_without_ack(monkeypatch, error, extra_hit):
     case = pending_case(monkeypatch)
     source = case.fixture
     start_pending(case)
+    runtime = source.runtime
+    old_generation = runtime.sessions.generation
+    old_capture = runtime.sessions.capture
+    old_multiplayer = runtime.sessions.multiplayer.result()
+    old_records = len(case.records)
+    pending = runtime.feed._pending_scope
     case.advance(2, amount=75)
     original = BattleStatisticsAdapter.update
     calls = []
@@ -31,10 +37,11 @@ def test_admitted_baseline_retires_pending_on_current_retry_without_ack(monkeypa
             source.poll()
     assert calls == [1.5, 2]
     runtime = source.runtime
-    assert runtime.feed._pending_scope is None
-    assert runtime.sessions.capture.baseline_sequence == 1
-    assert runtime.sessions.adapter.event_stream.sequence == 1
-    assert runtime.sessions.capture.last_sample['game_time'] == 1.5
+    assert runtime.feed._pending_scope is pending
+    assert runtime.sessions.generation == old_generation
+    assert runtime.sessions.capture is old_capture
+    assert runtime.sessions.multiplayer.result() == old_multiplayer
+    assert len(case.records) == old_records
     assert runtime._pending_event_ack is None
     assert source.commits == [0, 1] and len(source.queue) == 1
     if extra_hit:
@@ -46,6 +53,10 @@ def test_admitted_baseline_retires_pending_on_current_retry_without_ack(monkeypa
     source.poll()
     assert runtime.sessions.multiplayer.result()['players'][2]['observed_damage'] == player['observed_damage']
     assert source.queue == []
+    replay = BattleSessions(runtime.feed.id)
+    for observation in case.records:
+        replay.consume(observation)
+    assert replay.multiplayer.result() == runtime.sessions.multiplayer.result()
 
 
 @pytest.mark.parametrize('fault', ['before_baseline', 'inside_baseline', 'cursor', 'observer'])

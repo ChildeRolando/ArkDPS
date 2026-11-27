@@ -25,7 +25,7 @@ from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
 from event_observer import ObserverReadRetry
 from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
-                         annotate_barrier_busy, stream_gap_failure_context,
+                         annotate_barrier_busy, annotate_pending_handoff_failure, stream_gap_failure_context,
                          autochess_event_mark_context, verified_autochess_event_window,
                          autochess_root_failure, autochess_scope_detail,
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
@@ -222,6 +222,8 @@ def _native_pc_guarded_clock_reset(previous, successor):
 
 def _verified_pending_empty_handoff(anchor, latest, successor):
     """Distinguish a real empty serial reset from a legal late zero-output exit."""
+    def rejected(message, condition, fence='none'):
+        return annotate_pending_handoff_failure(StreamGap(message), condition, fence, anchor, latest, successor)
     origin, _, _ = _verified_pending_scope_anchor(anchor)
     previous, _, _ = _verified_pending_scope_anchor(latest, allow_epoch_advance=True)
     evidence = {key: latest[key] for key in ('before', 'after', 'sequence', 'drain')}
@@ -229,54 +231,78 @@ def _verified_pending_empty_handoff(anchor, latest, successor):
     verified_pending_scope_start(previous, evidence, previous_sequence=anchor['sequence'])
     current, _ = verified_pending_scope_successor(successor)
     old_scene, new_scene = autochess_scene(previous), autochess_scene(current)
-    if (old_scene is None or new_scene is None or old_scene.match != new_scene.match
-            or old_scene.collection_mode != new_scene.collection_mode
-            or old_scene.scope == new_scene.scope):
-        raise StreamGap('pending empty scope handoff changed its process/match/accounts')
+    condition = ('old_scene_missing' if old_scene is None else 'new_scene_missing' if new_scene is None
+        else 'match_changed' if old_scene.match != new_scene.match
+        else 'collection_changed' if old_scene.collection_mode != new_scene.collection_mode
+        else 'scope_unchanged' if old_scene.scope == new_scene.scope else None)
+    if condition:
+        raise rejected('pending empty scope handoff changed its process/match/accounts', condition)
     mark, before, after = latest['after'], successor['before'], successor['after']
-    for fence in (mark, before, after):
-        if (type(fence.get('sequence')) is not int or fence['sequence'] != anchor['sequence']
-                or type(fence.get('epoch')) is not int or fence['epoch'] != mark['epoch']
-                or type(fence.get('active')) is not int or fence['active'] != 0
-                or fence.get('active_hooks') != [] or fence.get('stopped') is not False
-                or fence.get('error') is not None or fence.get('retry', False) is not False
-                or fence.get('terminal_boundary') is not None
-                or type(fence.get('native_battle_state')) is not int or fence['native_battle_state'] != 2
-                or 'native_quiet_boundary_version' in fence or 'native_deferred_callbacks' in fence):
-            raise StreamGap('pending empty scope handoff has an unread tail or nonquiet source')
-    if (before['frame'] != after['frame'] or before['game_time'] != after['game_time']
-            or type(mark.get('native_generation')) is not int):
-        raise StreamGap('pending empty scope handoff crossed a source clock')
+    for name, fence in (('latest_after', mark), ('successor_before', before), ('successor_after', after)):
+        # Same short-circuit order as the original rejection; the finite label
+        # replaces the boolean, so no validation is repeated for diagnostics.
+        condition = ('sequence_type' if type(fence.get('sequence')) is not int
+            else 'sequence_changed' if fence['sequence'] != anchor['sequence']
+            else 'epoch_type' if type(fence.get('epoch')) is not int
+            else 'epoch_changed' if fence['epoch'] != mark['epoch']
+            else 'active_type' if type(fence.get('active')) is not int
+            else 'active_nonzero' if fence['active'] != 0
+            else 'active_hooks' if fence.get('active_hooks') != []
+            else 'stopped' if fence.get('stopped') is not False
+            else 'error' if fence.get('error') is not None
+            else 'retry' if fence.get('retry', False) is not False
+            else 'terminal' if fence.get('terminal_boundary') is not None
+            else 'native_state_type' if type(fence.get('native_battle_state')) is not int
+            else 'native_state' if fence['native_battle_state'] != 2
+            else 'quiet_boundary' if 'native_quiet_boundary_version' in fence
+            else 'deferred_callbacks' if 'native_deferred_callbacks' in fence else None)
+        if condition:
+            raise rejected('pending empty scope handoff has an unread tail or nonquiet source', condition, name)
+    condition = ('frame_changed' if before['frame'] != after['frame']
+        else 'game_time_changed' if before['game_time'] != after['game_time']
+        else 'native_generation_type' if type(mark.get('native_generation')) is not int else None)
+    if condition:
+        raise rejected('pending empty scope handoff crossed a source clock', condition,
+                       'latest_after' if condition == 'native_generation_type' else 'successor_after')
     reset = _native_pc_guarded_clock_reset(previous, current)
     if reset:
-        if (anchor['after']['epoch'] != mark['epoch']
-                or any(type(fence.get('native_generation')) is not int
-                       or fence['native_generation'] != mark['native_generation'] + 1
-                       or fence.get('native_identity') != mark.get('native_identity')
-                       or fence.get('native_process_pid') != mark.get('native_process_pid')
-                       for fence in (before, after))):
-            raise StreamGap('pending empty reset lacks a strict source-generation fence')
+        condition = 'reset_anchor_epoch' if anchor['after']['epoch'] != mark['epoch'] else None
+        name = 'anchor_after'
+        if condition is None:
+            for name, fence in (('successor_before', before), ('successor_after', after)):
+                condition = ('reset_generation_type' if type(fence.get('native_generation')) is not int
+                    else 'reset_generation_changed' if fence['native_generation'] != mark['native_generation'] + 1
+                    else 'reset_identity_changed' if fence.get('native_identity') != mark.get('native_identity')
+                    else 'reset_pid_changed' if fence.get('native_process_pid') != mark.get('native_process_pid') else None)
+                if condition:
+                    break
+        if condition:
+            raise rejected('pending empty reset lacks a strict source-generation fence', condition, name)
         # No callback was entered during the entire witnessed pre-start fragment.
         # Retained uncertainty must not be silently discarded with that fragment.
-        for fence in (anchor['after'], mark, before, after):
-            if (fence.get('enemy_damage_unknown') is not False
-                    or fence.get('damage_unknown') is not False
-                    or fence.get('damage_settlement_unlocalized_unknown') is not False
-                    or fence.get('damage_settlement_source_issues') != []):
-                raise StreamGap('pending empty reset contains unresolved source evidence')
+        for name, fence in (('anchor_after', anchor['after']), ('latest_after', mark), ('successor_before', before), ('successor_after', after)):
+            condition = ('enemy_damage_unknown' if fence.get('enemy_damage_unknown') is not False
+                else 'damage_unknown' if fence.get('damage_unknown') is not False
+                else 'unlocalized_unknown' if fence.get('damage_settlement_unlocalized_unknown') is not False
+                else 'source_issues' if fence.get('damage_settlement_source_issues') != [] else None)
+            if condition:
+                raise rejected('pending empty reset contains unresolved source evidence', condition, name)
         return 'reset'
-    if (not _autochess_successor_ends_round(old_scene, new_scene)
-            or current['native_session'] != previous['native_session']
-            or tuple(current['battle_identity']) != tuple(previous['battle_identity'])
-            or current['frame'] <= previous['frame'] or current['game_time'] <= previous['game_time']):
-        raise StreamGap('pending zero-output scope exit is not an independently proved successor')
-    for fence in (before, after):
-        if (fence.get('native_generation') != mark.get('native_generation')
-                or fence.get('native_identity') != mark.get('native_identity')
-                or type(fence.get('damage_settlement_scope')) is not int
-                or fence['damage_settlement_scope'] != mark.get('damage_settlement_scope')
-                or not _same_autochess_boundary_quality(previous, mark, fence)):
-            raise StreamGap('pending zero-output scope exit changed raw source quality/roots')
+    condition = ('successor_round' if not _autochess_successor_ends_round(old_scene, new_scene)
+        else 'session_changed' if current['native_session'] != previous['native_session']
+        else 'battle_identity_changed' if tuple(current['battle_identity']) != tuple(previous['battle_identity'])
+        else 'frame_not_advanced' if current['frame'] <= previous['frame']
+        else 'time_not_advanced' if current['game_time'] <= previous['game_time'] else None)
+    if condition:
+        raise rejected('pending zero-output scope exit is not an independently proved successor', condition)
+    for name, fence in (('successor_before', before), ('successor_after', after)):
+        condition = ('source_generation_changed' if fence.get('native_generation') != mark.get('native_generation')
+            else 'source_identity_changed' if fence.get('native_identity') != mark.get('native_identity')
+            else 'settlement_scope_type' if type(fence.get('damage_settlement_scope')) is not int
+            else 'settlement_scope_changed' if fence['damage_settlement_scope'] != mark.get('damage_settlement_scope')
+            else 'boundary_quality' if not _same_autochess_boundary_quality(previous, mark, fence) else None)
+        if condition:
+            raise rejected('pending zero-output scope exit changed raw source quality/roots', condition, name)
     return 'scope_end'
 
 
@@ -1935,6 +1961,32 @@ class BattleSessions:
                 pending_bootstrap = (None if segment_reason else verified_pending_scope_start(
                     observation.sample, observation.events,
                     previous_sequence=previous_stream.sequence if previous_stream is not None else None))
+                if not getattr(self, '_installing_generation', False):
+                    # Build the entire generation with the existing consumer,
+                    # while the authoritative old battle remains untouched.
+                    # The candidate only reads the old stream/settlement scope;
+                    # installation below creates fresh reducers and metadata.
+                    candidate = object.__new__(type(self))
+                    candidate.__dict__ = self.__dict__.copy()
+                    candidate._archives = deque()
+                    candidate._archived = True
+                    candidate._installing_generation = True
+                    try:
+                        consumed = candidate.consume(observation)
+                    except (MappingUnavailable, BarrierBusy, CaptureRetry, FrameMismatch) as error:
+                        # This short-lived receipt proves entry into the already
+                        # validated installation, not acceptance of its events.
+                        error._generation_install_retry = (self, observation)
+                        raise
+                    if consumed:
+                        self._archive('new_battle', successor=observation)
+                        archives = self._archives
+                        archives.extend(candidate._archives)
+                        installed = candidate.__dict__.copy()
+                        installed.pop('_installing_generation', None)
+                        installed['_archives'] = archives
+                        self.__dict__.update(installed)
+                    return consumed
                 self._archive('new_battle', successor=observation)
                 previous_multiplayer = self.multiplayer
                 bootstrap = pending_bootstrap
@@ -1989,7 +2041,8 @@ class BattleSessions:
                 self._snapshot_open = False
                 if bootstrap is not None:
                     zero_observation = replace(observation, sample=zero_sample, roster=zero_roster,
-                        events=dict(before=zero_mark, after=zero_mark,
+                        events=dict(before=(observation.events['pending_scope_start']['anchor']['before']
+                                            if pending_bootstrap is not None else zero_mark), after=zero_mark,
                                     sequence=zero_mark['sequence'], drain=zero_drain))
                     self._events(zero_observation)
                     adapter.update(observation.sample, observation.roster)
@@ -2202,40 +2255,22 @@ class BattleRuntime:
         self._accepted_event_observer = None
         return dict(reason=reason, previous_feed=previous_feed, feed=self.feed.id)
 
-    def _retire_started_pending_on_retry(self, observation):
-        """Transfer an admitted baseline to its capture without accepting its tail."""
-        pending = self.feed._pending_scope
-        start = (observation.events or {}).get('pending_scope_start')
-        capture = self.sessions.capture
-        receipt = self.feed._emitted_cursor
-        if (pending is None or not isinstance(start, dict) or start.get('anchor') != pending['anchor']
-                or observation.generation != pending['generation']
-                or observation.generation != self.sessions.generation
-                or receipt is None or receipt[0] != observation.sequence
-                or receipt[1] is not pending['observer'] or receipt[2] is not pending['cursor_lifetime']
-                or probe_cursor_lifetime(pending['observer']) is not pending['cursor_lifetime']
-                or capture is None or capture.closed or self.sessions.event_status != 'recording'):
+    def _retire_old_scope_on_install_retry(self, error, observation):
+        receipt = getattr(error, '_generation_install_retry', None)
+        if hasattr(error, '_generation_install_retry'):
+            del error._generation_install_retry
+        sessions = self.sessions
+        if (not isinstance(receipt, tuple) or len(receipt) != 2
+                or receipt[0] is not sessions or receipt[1] is not observation
+                or observation.kind != 'sample' or observation.generation <= sessions.generation
+                or sessions.adapter is None or sessions._archived):
             return
-        stream = capture.adapter.event_stream
-        anchor = pending['anchor']
-        # Revalidate this exact bootstrap, rather than inferring admission from
-        # the new generation or an allocated adapter. Only zero _events has run.
-        bootstrap = verified_pending_scope_start(observation.sample, observation.events,
-                                                 previous_sequence=anchor['sequence'])
-        if bootstrap is None:
-            return
-        baseline, mark, _, _ = bootstrap
-        if (stream is not None and capture.last_sample == baseline
-                and stream.session == observation.sample['session']
-                and type(capture.baseline_sequence) is int and capture.baseline_sequence == anchor['sequence']
-                and type(stream.sequence) is int and stream.sequence == anchor['sequence']
-                and type(stream.baseline_frame) is int and stream.baseline_frame == baseline['frame']
-                and type(stream.frame) is int and stream.frame == baseline['frame']
-                and stream.game_time == baseline['game_time']
-                and self.sessions._last_event_mark == mark):
-            # The existing capture owns continuation from this real positive
-            # baseline. Retained source records and all ACK watermarks stay put.
-            self.feed._pending_scope = None
+        # The guarded successor independently retires the old scope. Its new
+        # reducers and event prefix remain uncommitted until a complete retry.
+        retirement = replace(observation, kind='preparing', events=None,
+                             reason='awaiting_generation_install')
+        if sessions.consume(retirement):
+            self.record(retirement)
 
     @timed('event_consume')
     def _consume(self, observation):
@@ -2245,9 +2280,12 @@ class BattleRuntime:
         if receipt is not None and receipt[0] == observation.sequence and receipt[1] is not None:
             check_cursor_lifetime(receipt[1], receipt[2])
         self.sessions.preflight_event_window(observation)
-        self.record(observation)
         try:
             consumed = self.sessions.consume(observation)
+            # A typed retry has not committed this observation. Recording it
+            # before consume lets replay install a generation that live rolled
+            # back, then reject the real retry as a duplicate pending start.
+            self.record(observation)
             pending = self.feed._pending_scope
             evidence = observation.events or {}
             if consumed and pending is not None and ('pending_scope_start' in evidence or 'pending_scope_superseded' in evidence):
@@ -2274,12 +2312,12 @@ class BattleRuntime:
                     self.feed._pending_scope = None
             return consumed
         except MappingUnavailable as exc:
-            self._retire_started_pending_on_retry(observation)
+            self._retire_old_scope_on_install_retry(exc, observation)
             # The native battle and event attachment remain valid while
             # ownership settles. Preserve the queue and the last good view.
             raise MappingRetry(str(exc), observation) from exc
-        except (BarrierBusy, CaptureRetry, FrameMismatch):
-            self._retire_started_pending_on_retry(observation)
+        except (BarrierBusy, CaptureRetry, FrameMismatch) as error:
+            self._retire_old_scope_on_install_retry(error, observation)
             raise
 
     @timed('capture_acquire')

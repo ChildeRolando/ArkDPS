@@ -618,8 +618,78 @@ _STREAM_GAP_FRAMES = {
     'event_stream': frozenset(('baseline_barrier', 'ingest', 'consume')),
 }
 
+_PENDING_HANDOFF_FENCES = frozenset(('none', 'anchor_after', 'latest_after', 'successor_before', 'successor_after'))
+_PENDING_HANDOFF_CONDITIONS = frozenset((
+    'unknown', 'old_scene_missing', 'new_scene_missing', 'match_changed', 'collection_changed', 'scope_unchanged',
+    'sequence_type', 'sequence_changed', 'epoch_type', 'epoch_changed', 'active_type', 'active_nonzero',
+    'active_hooks', 'stopped', 'error', 'retry', 'terminal', 'native_state_type', 'native_state',
+    'quiet_boundary', 'deferred_callbacks', 'frame_changed', 'game_time_changed', 'native_generation_type',
+    'reset_anchor_epoch', 'reset_generation_type', 'reset_generation_changed', 'reset_identity_changed', 'reset_pid_changed',
+    'enemy_damage_unknown', 'damage_unknown', 'unlocalized_unknown', 'source_issues',
+    'successor_round', 'session_changed', 'battle_identity_changed', 'frame_not_advanced', 'time_not_advanced',
+    'source_generation_changed', 'source_identity_changed', 'settlement_scope_type', 'settlement_scope_changed', 'boundary_quality'))
+_PENDING_HANDOFF_INTS = ('sequence', 'epoch', 'frame', 'native_generation', 'active', 'active_hook_count',
+                         'native_battle_state', 'source_issues_count')
+_PENDING_HANDOFF_BOOLS = ('stopped', 'has_error', 'retry', 'terminal', 'quiet_boundary_present',
+    'deferred_callbacks_present', 'enemy_damage_unknown', 'damage_unknown', 'unlocalized_unknown')
+
+
+def sanitize_pending_handoff_failure(value):
+    """A fixed four-point numeric/flag summary, never source identities or text."""
+    if (type(value) is not dict or set(value) != {'version', 'condition', 'fence', 'points'}
+            or type(value.get('version')) is not int or value['version'] != 1
+            or type(value.get('condition')) is not str or value['condition'] not in _PENDING_HANDOFF_CONDITIONS
+            or type(value.get('fence')) is not str or value['fence'] not in _PENDING_HANDOFF_FENCES
+            or type(value.get('points')) is not dict
+            or set(value['points']) != _PENDING_HANDOFF_FENCES - {'none'}):
+        return None
+    points = {}
+    for name, point in value['points'].items():
+        if (type(point) is not dict or set(point) != set(_PENDING_HANDOFF_INTS + _PENDING_HANDOFF_BOOLS)
+                or any(point[key] is not None and (type(point[key]) is not int
+                    or not 0 <= point[key] <= 2**64-1) for key in _PENDING_HANDOFF_INTS)
+                or any(point[key] is not None and type(point[key]) is not bool for key in _PENDING_HANDOFF_BOOLS)):
+            return None
+        points[name] = dict(point)
+    return dict(version=1, condition=value['condition'], fence=value['fence'], points=points)
+
+
+def annotate_pending_handoff_failure(error, condition, fence, anchor, latest, successor):
+    """Failure-only reads of already-owned dictionaries; unknown stays null."""
+    if not isinstance(error, StreamGap) or isinstance(error, BarrierBusy):
+        return error
+    def point(raw):
+        present = type(raw) is dict
+        raw = raw if type(raw) is dict else {}
+        def integer(key):
+            value = raw.get(key)
+            return value if type(value) is int and 0 <= value <= 2**64-1 else None
+        def boolean(key):
+            value = raw.get(key)
+            return value if type(value) is bool else None
+        hooks, issues = raw.get('active_hooks'), raw.get('damage_settlement_source_issues')
+        return dict(**{key: integer(key) for key in _PENDING_HANDOFF_INTS if key not in ('active_hook_count', 'source_issues_count')},
+            active_hook_count=len(hooks) if type(hooks) is list else None,
+            source_issues_count=len(issues) if type(issues) is list else None,
+            stopped=boolean('stopped'), has_error=raw['error'] is not None if 'error' in raw else None,
+            retry=boolean('retry'), terminal=raw['terminal_boundary'] is not None if 'terminal_boundary' in raw else None,
+            quiet_boundary_present='native_quiet_boundary_version' in raw if present else None,
+            deferred_callbacks_present='native_deferred_callbacks' in raw if present else None,
+            enemy_damage_unknown=boolean('enemy_damage_unknown'), damage_unknown=boolean('damage_unknown'),
+            unlocalized_unknown=boolean('damage_settlement_unlocalized_unknown'))
+    def edge(raw, key):
+        return raw.get(key) if type(raw) is dict else None
+    detail = dict(version=1, condition=condition, fence=fence, points=dict(
+        anchor_after=point(edge(anchor, 'after')), latest_after=point(edge(latest, 'after')),
+        successor_before=point(edge(successor, 'before')), successor_after=point(edge(successor, 'after'))))
+    clean = sanitize_pending_handoff_failure(detail)
+    if clean is not None:
+        error.handoff_failure = clean
+    return error
+
 def sanitize_stream_gap_failure(value):
-    if (type(value) is not dict or set(value) != {'version', 'reason', 'stage', 'frames'}
+    if (type(value) is not dict or not {'version', 'reason', 'stage', 'frames'} <= set(value)
+            or set(value) - {'version', 'reason', 'stage', 'frames', 'handoff'}
             or type(value.get('version')) is not int or value['version'] != 1
             or type(value.get('reason')) is not str
             or value['reason'] not in {*_STREAM_GAP_REASONS.values(), 'unclassified'}
@@ -634,7 +704,11 @@ def sanitize_stream_gap_failure(value):
                 or type(frame.get('line')) is not int or not 1 <= frame['line'] <= 100000):
             return None
         frames.append(dict(frame))
-    return dict(version=1, reason=value['reason'], stage=value['stage'], frames=frames)
+    result = dict(version=1, reason=value['reason'], stage=value['stage'], frames=frames)
+    handoff = sanitize_pending_handoff_failure(value.get('handoff'))
+    if handoff is not None:
+        result['handoff'] = handoff
+    return result
 
 
 def stream_gap_failure_context(error, stage):
@@ -652,8 +726,12 @@ def stream_gap_failure_context(error, stage):
         if module in _STREAM_GAP_FRAMES and function in _STREAM_GAP_FRAMES[module]:
             frames.append(dict(module=module, function=function, line=trace.tb_lineno))
         trace = trace.tb_next
-    return dict(version=1, reason=_STREAM_GAP_REASONS.get(str(error), 'unclassified'),
-                stage=stage, frames=frames[-8:])
+    result = dict(version=1, reason=_STREAM_GAP_REASONS.get(str(error), 'unclassified'),
+                  stage=stage, frames=frames[-8:])
+    handoff = sanitize_pending_handoff_failure(getattr(error, 'handoff_failure', None))
+    if handoff is not None:
+        result['handoff'] = handoff
+    return result
 
 
 def verified_autochess_event_window(sample, before, after, *, anchor=None):
