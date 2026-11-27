@@ -4,11 +4,26 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const {fixture} = require('./native_pc_frida_probe_fixture.js');
 
-function scenario(platform, order, fault = null, withoutLegacyWire = false) {
+function scenario(platform, order, fault = null, withoutLegacyWire = false, trackEnemyHp = null) {
   const f = fixture({platform, settlement: true, traceHpContext: true,
+    enemyHpState: trackEnemyHp !== null,
+    globals: trackEnemyHp === false ? {arkdpsEnemyHpEvents: false} : {},
     sourcePath: path.join(__dirname, '..', platform === 'native_pc' ?
       'event_probe_native_pc.js' : 'event_probe_android2791.js')});
   f.clock(30, 4294967296n);
+  if (trackEnemyHp !== null) {
+    const {scenario: enemyHpScenario} = require('./event_probe_enemy_hp_fixture.js');
+    const enemyHp = enemyHpScenario(platform, false, 'enemy_regen', {f, nextUid: 68}, {scopeObserver: false});
+    if (trackEnemyHp) {
+      enemyHp.setHp(110);
+    } else {
+      for (const method of ['SetHpInternal', 'SetHpInternalDirectly', 'OnAttributeDirty']) {
+        assert.throws(() => f.callback(method, f.entity), /Production callback installed/);
+      }
+      f.write(enemyHp.enemy.add(0x40), 110n * 4294967296n);
+    }
+    f.callback('OnFinish', f.enemyClass);
+  }
   if(withoutLegacyWire)f.vm.runInContext(`{
     const original=record;record=function(source,kind,...args){
       if(['damage','hp_damage','elemental_burst'].includes(kind))return undefined;
@@ -91,6 +106,15 @@ function scenario(platform, order, fault = null, withoutLegacyWire = false) {
   assert.equal(settlement.proof.evidence_method, 'Unit.OnTakeDamage+Entity.ApplyModifier');
   return {mark, batch, raw_damage: damage, settlement,
     synthetic: 'Actual production callbacks; controlled method order and owned target memory'};
+}
+
+if (process.argv.includes('--enemy-hp-opt-out')) {
+  const order = 'target_return_before_apply_commit';
+  process.stdout.write(JSON.stringify({
+    default: scenario('native_pc', order, null, false, true),
+    disabled: scenario('native_pc', order, null, false, false),
+  }));
+  process.exit(0);
 }
 
 const report = {};

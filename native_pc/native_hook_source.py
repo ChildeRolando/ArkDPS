@@ -417,24 +417,31 @@ def native_hook_binary(root, *, _read_capture=None):
     return binary
 
 
-def _effective_native_environment():
+def _effective_native_environment(enemy_hp_events=None):
     hp = os.environ.get('ARKDPS_TRACE_HP_CONTEXT') == '1'
-    return hp, hp and os.environ.get('ARKDPS_TRACE_NESTED_PARENT') == '1', os.environ.get('ARKDPS_COALESCE_ENEMY_HP') != '0'
+    if enemy_hp_events is None:
+        enemy_hp_events = os.environ.get('ARKDPS_ENEMY_HP_EVENTS') != '0'
+    return (hp, hp and os.environ.get('ARKDPS_TRACE_NESTED_PARENT') == '1',
+            os.environ.get('ARKDPS_COALESCE_ENEMY_HP') != '0',
+            enemy_hp_events)
 
 
-def _native_source(root, autochess_enabled=None, *, read_file=None, effective_env=None):
+def _native_source(root, autochess_enabled=None, *, read_file=None, effective_env=None, enemy_hp_events=None):
     assembled = assemble_probe_source('native_pc', directory=root, read_file=read_file)
     source = assembled.source
     if autochess_enabled is not None:
         source = 'globalThis.arkdpsAutoChessMode = ' + json.dumps(
             'all' if autochess_enabled() else 'local') + ';\n' + source
-    hp, nested, coalesce = _effective_native_environment() if effective_env is None else effective_env
+    hp, nested, coalesce, enemy_hp = (
+        _effective_native_environment(enemy_hp_events) if effective_env is None else effective_env)
     if hp:
         source = 'globalThis.arkdpsTraceHpContext = true;\n' + source
         if nested:
             source = 'globalThis.arkdpsTraceNestedParent = true;\n' + source
     if not coalesce:
         source = 'globalThis.arkdpsCoalesceEnemyHp = false;\n' + source
+    if not enemy_hp:
+        source = 'globalThis.arkdpsEnemyHpEvents = false;\n' + source
     return assembled, source
 
 
@@ -468,14 +475,14 @@ class NativeHookMaterial:
     provenance: tuple = field(repr=False)
 
 
-def prepare_native_hook_material(root):
+def prepare_native_hook_material(root, *, enemy_hp_events=None):
     """Run every existing hash gate once, assemble from those exact JS reads.
 
     A new call always revalidates. Callers may keep this immutable result only
     for their current root/environment lifecycle, before arming their watch.
     """
     root = Path(root).resolve()
-    environment = _effective_native_environment()
+    environment = _effective_native_environment(enemy_hp_events)
     captured = {}
     binary = native_hook_binary(root, _read_capture=captured)
     binary_key, manifest_key = binary.resolve(), binary.with_suffix('.build.json').resolve()
@@ -489,7 +496,7 @@ def prepare_native_hook_material(root):
             _capture_material_bytes(captured, path, Path(path).read_bytes())
         return captured[key]
     assembled, source = _native_source(root, None, read_file=source_read, effective_env=environment)
-    if _effective_native_environment() != environment:
+    if _effective_native_environment(enemy_hp_events) != environment:
         raise RuntimeError('原生探针环境参数在完整校验期间改变')
     image_hash = sha256(image).hexdigest()
     if _portable_json(manifest_bytes).get('sha256') != image_hash:
@@ -517,12 +524,14 @@ class PreparedNativeHooks:
 
     valid_seconds = 120.0
 
-    def __init__(self, game_root, *, root=None, runtime_dir=None, loader_factory=WindowsDllLoader, material=None):
+    def __init__(self, game_root, *, root=None, runtime_dir=None, loader_factory=WindowsDllLoader, material=None,
+                 enemy_hp_events=None):
         self.game_root = Path(game_root).expanduser().resolve()
         self.root = Path(root).resolve() if root else Path(__file__).resolve().parents[1]
         self.runtime_dir = Path(runtime_dir) if runtime_dir else self.root / 'runtime/native-pc/native-hook-sessions'
         self.loader_factory = loader_factory
         self.material = material
+        self.enemy_hp_events = enemy_hp_events
         self.process_instance = None
         self.prepared_at = self.expires_at = self.prepared_wall_time = None
         self.claimed = False
@@ -564,11 +573,11 @@ class PreparedNativeHooks:
             self.source_build = source_build
             material = self.material
             if material is None:
-                material = prepare_native_hook_material(self.root)
+                material = prepare_native_hook_material(self.root, enemy_hp_events=self.enemy_hp_events)
             if (type(material) is not NativeHookMaterial or material.root != self.root
-                    or type(material.effective_env) is not tuple or len(material.effective_env) != 3
+                    or type(material.effective_env) is not tuple or len(material.effective_env) != 4
                     or any(type(value) is not bool for value in material.effective_env)
-                    or material.effective_env != _effective_native_environment()
+                    or material.effective_env != _effective_native_environment(self.enemy_hp_events)
                     or type(material.image) is not bytes or type(material.source) is not str
                     or type(material.assembled) is not AssembledProbeSource
                     or sha256(material.image).hexdigest() != material.image_sha256):
@@ -625,10 +634,9 @@ class PreparedNativeHooks:
                     or probe.collector.diagnostics.version_actual != self.source_build):
                 raise RuntimeError('原生预加载与采集器进程实例、游戏路径、源码目录或客户端版本不匹配')
             self._identity()
-            # The immutable prepared program contains no UI preference prefix.
-            # Preferences use the existing typed mark control, not a weaker
-            # source comparison or a rewrite of already consumed config bytes.
-            _, requested_source = _native_source(probe.root, None)
+            # Hook installation options belong to the prepared runtime.
+            # The live multiplayer display preference uses typed mark control.
+            _, requested_source = _native_source(probe.root, None, enemy_hp_events=self.enemy_hp_events)
             if requested_source != self._source:
                 raise RuntimeError('原生预加载的探针源码或采集参数已变化，不能重新初始化或加载')
             if (sha256(self._config.read_bytes()).hexdigest() != self._config_sha256

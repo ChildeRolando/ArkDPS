@@ -1678,6 +1678,7 @@ class CollectionWorker:
         try:
             return self.pc_source.select(enabled=config.platform == 'native_pc' and enabled,
                 game_root=config.native_game_root, backend=config.native_pc_event_backend,
+                enemy_hp_events=config.native_enemy_hp_events,
                 feed_path=config.native_pc_event_feed, explicit_retry=explicit_retry,
                 startup_trace=self._trace_pc_startup, admission=self._request_lock,
                 cancelled=self.stop.is_set, on_start_error=lambda exc: self.events.put(('warning', str(exc))))

@@ -517,6 +517,10 @@
          </ComboBox>
          <TextBlock x:Name="NativeEventBackendHint" Text="{StaticResource NativeEventBackendAdvice}" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
          <StackPanel x:Name="NativeHookNotes" Visibility="Collapsed">
+          <CheckBox x:Name="NativeEnemyHpEvents" Content="连续敌人血量监听" IsChecked="True" Margin="0,0,0,4"
+                    AutomationProperties.Name="连续敌人血量监听"/>
+          <TextBlock Text="关闭可减轻采集开销，敌情面板的血量更新会减少。应用设置后重启游戏生效。"
+                     Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,12"/>
           <TextBlock Text="启动步骤" Foreground="{DynamicResource Ink}" FontSize="13" FontWeight="SemiBold" Margin="0,2,0,8"/>
           <TextBlock Foreground="{DynamicResource Muted}" FontSize="13" LineHeight="22" TextWrapping="Wrap">
            <Run Text="1. 选择游戏目录，启用战斗事件观察者。"/><LineBreak/>
@@ -593,7 +597,8 @@
           <TextBlock Text="合作事件文件（可选）" Style="{StaticResource FieldLabel}" Margin="0,0,0,4"/>
           <DockPanel>
            <Button Content="选择文件" DockPanel.Dock="Right" Click="ChooseNativeEventFeed" Margin="8,0,0,0"/>
-           <TextBox x:Name="NativeEventFeed" AutomationProperties.Name="事件数据文件" ToolTip="留空使用 ArkPie 实时采集；填写完整路径则读取合作来源的 JSONL"/>
+           <TextBox x:Name="NativeEventFeed" AutomationProperties.Name="事件数据文件" TextChanged="ConnectionAdbChanged"
+                    ToolTip="留空使用 ArkPie 实时采集；填写完整路径则读取合作来源的 JSONL"/>
           </DockPanel>
          </StackPanel>
         </StackPanel>

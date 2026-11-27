@@ -601,6 +601,34 @@ def test_explicit_observer_factory_is_preserved_for_native_capture(tmp_path):
     assert source.select(enabled=False, backend='native') is None
 
 
+def test_enemy_hp_preference_replaces_native_runtime_only_when_changed(tmp_path, monkeypatch):
+    created = []
+
+    class Runtime:
+        closed = False
+
+        def __init__(self, game_root, runtime_dir, *, collector_root, enemy_hp_events):
+            self.enemy_hp_events = enemy_hp_events
+            self.observer_factory = object()
+            created.append(self)
+
+        def start(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(event_source, '_native_pc_hook_runtime', Runtime)
+    source = event_source.PcEventSource(tmp_path)
+    connection = dict(enabled=True, backend='native', game_root=tmp_path)
+    first = source.select(**connection, enemy_hp_events=False)
+    assert source.select(**connection, enemy_hp_events=False) is first
+    second = source.select(**connection, enemy_hp_events=True)
+    assert second is not first
+    assert [runtime.enemy_hp_events for runtime in created] == [False, True]
+    assert created[0].closed and not created[1].closed
+
+
 @pytest.fixture
 def prepared_setup(tmp_path, monkeypatch, setup_probe):
     make, loaders, pipes = setup_probe
