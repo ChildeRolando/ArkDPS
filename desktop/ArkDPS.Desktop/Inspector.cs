@@ -195,8 +195,8 @@ public sealed class Inspector : Border
             ? SkillCoverageText(coverageValue) : hasSampledCoverage ? "已观察 "+SkillCoverageText(sampledCoverage) : "—");
         AddStat(splitStats, "技能开启秒", detail.Bool("skill_coverage_complete")
             ? detail.UiInt("skill_active_seconds") : hasSampledCoverage ? "已观察 "+row.UiInt("observed_skill_active_seconds") : "—",showZero:true);
-        AddStat(splitStats, "在场秒", row.Bool("presence_complete")
-            ? row.UiInt("presence_seconds") : row.Number("observed_presence_seconds",0)>0 ? "已观察 "+row.UiInt("observed_presence_seconds") : "—",showZero:true);
+        AddStat(splitStats, "在场秒", detail.Bool("presence_complete")
+            ? detail.UiInt("presence_seconds") : row.Number("observed_presence_seconds",0)>0 ? "已观察 "+row.UiInt("observed_presence_seconds") : "—",showZero:true);
         body.Children.Add(splitStats);
         if (double.IsFinite(split.Fraction))
         {
@@ -635,8 +635,8 @@ public sealed class Inspector : Border
             double sampledCoverage=row.Number("observed_skill_coverage",double.NaN);
             bool hasSampledCoverage=sampledCoverage is >= 0 and <= 1;
             double observedSeconds=row.Number("observed_presence_seconds",double.NaN);
-            double seconds=row.Number("presence_seconds",double.NaN);
-            string presence=row.Bool("presence_complete") && seconds>=0 && seconds<TimeSpan.MaxValue.TotalSeconds
+            double seconds=detail.Number("presence_seconds",double.NaN);
+            string presence=detail.Bool("presence_complete") && seconds>=0 && seconds<TimeSpan.MaxValue.TotalSeconds
                 ? FormatTime(seconds) : observedSeconds>0 && observedSeconds<TimeSpan.MaxValue.TotalSeconds
                     ? "已观察 "+FormatTime(observedSeconds) : "—";
             bool side=sideHeading!=null;

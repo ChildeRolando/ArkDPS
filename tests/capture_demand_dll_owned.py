@@ -146,12 +146,59 @@ def run(binary,helper,source_root,out,missing=False,mismatch=False,early_ack=Fal
    f.close()
  return receipt
 
+def run_ordinary(binary,helper,source_root,out):
+ """First raw-ticket-zero cold sampling; game frame remains explicitly 30."""
+ out.mkdir(parents=True,exist_ok=True);text=source(source_root,helper,ordinary=True);(out/'source.js').write_text(text,encoding='utf-8')
+ receipt={'case':'ordinary-first-cold-future-graphs-nested-read-ack','source_sha256':sha256(text.encode()).hexdigest(),'product_sha256':{name:sha256((source_root/name).read_bytes()).hexdigest()for name in ['event_probe_native_pc.js','event_probe_runtime.js','event_probe_autochess.js','event_probe_store.js']}}
+ with TemporaryDirectory(prefix='arkdps-ordinary-dll-')as temp:
+  f=OwnedFixture(Path(temp)/'child',binary,helper);pipe=None
+  try:
+   receipt['identity']=f.identity;f.configure(source=text);f.command('load');pipe=NativePipe(f.pipe_name,f.identity['pid'],timeout=20);hello=pipe.request('initialize',token=f.token);ready=hello['ready'];assert 'fixture_setup_error'not in ready,ready
+   (out/'ready.json').write_text(json.dumps(hello,indent=2),encoding='utf-8');world=ready.pop('world');(out/'world.json').write_text(json.dumps(world),encoding='utf-8');receipt['world_sha256']=sha256((out/'world.json').read_bytes()).hexdigest()
+   assert ready['ordinary']and ready['scope_fields']==ready['publication_fields']==ready['setup_graph_publications']==0,ready
+   receipt['setup']=f.command('install-world',world=world)
+   first=pipe.request('mark',sampling='fresh',timeout=10);receipt['first_mark']=first;receipt['first_audit']=pipe.request('capture_status');assert not first.get('retry'),first
+   assert first['frame']==30 and first['sequence']==ready['initial_sequence']and 'native_autochess_context'not in first,first
+   counters=first['native_async_capture'];assert counters['reserved_ticket']==counters['processed_ticket']==counters['closed_ticket']==counters['published_ticket']==0,counters
+   handoff=receipt['first_audit']['dll_audit'];cold=[r for r in handoff['records']if r['facts'].get('cold_revision')]
+   assert cold and all('scope_revision'not in r['facts']and 'publication_revision'not in r['facts']for r in cold),handoff
+   assert all(r['kind']=='sampling_checkpoint'and r['ticket']=='0'for r in cold),cold
+   graphs=handoff['graphs'];assert any(not g['publication']for g in graphs)and any(g['publication']for g in graphs),handoff
+   assert all(g['active']and g['facts'].get('cold_revision')for g in graphs),graphs
+   # A separate later sample proves geometry is used only for future records.
+   warm=pipe.request('mark',sampling='fresh',timeout=10);receipt['warm_mark']=warm;assert not warm.get('retry'),warm
+   receipt['warm_audit']=pipe.request('capture_status');warm_records=receipt['warm_audit']['dll_audit']['records'];assert any(r['facts'].get('scope_revision')and r['facts'].get('publication_revision')and 'cold_revision'not in r['facts']for r in warm_records),warm_records
+   receipt['calls']=[f.command('run-route',route=0)]
+   mark=pipe.request('mark',sampling='fresh',timeout=10);receipt['mark']=mark;assert not mark.get('retry'),mark
+   through=mark['sequence'];batch=pipe.request('read',publication_token=mark['native_publication']['token'],after=0,through=through);receipt['read']=batch
+   events=[e for e in batch['events']if e['sequence']>ready['initial_sequence']];damage=[e for e in events if e['kind']=='damage_settlement'];assert len(damage)==2,events
+   assert all(e['settlement_complete']is True and e['target']==ready['expected_actors']['target']['cid']and e['target_instance']==ready['expected_actors']['target']['address']for e in damage),damage
+   assert sorted((e['damage_type'],e['amount'],e['nominal_amount'])for e in damage)==[(2,40,40),(5,60,60)],damage
+   assert all(e.get('native_autochess_scope')is None for e in events),events
+   assert any(e['kind']=='elemental_bar'and e['amount']==5 for e in events),events
+   normal=next(e for e in damage if e['damage_type']==2);elemental=next(e for e in damage if e['damage_type']==5)
+   assert (normal['hp_before'],normal['hp_after'],normal['real_delta'])==(100,60,-40)and (elemental['hp_before'],elemental['hp_after'],elemental['real_delta'])==(60,0,-60),(normal,elemental)
+   nested=normal['proof']['nested_settlement'];assert (nested['parent_hp_before'],nested['parent_hp_after'],nested['parent_real_delta'],nested['child_hp_before'],nested['child_hp_after'],nested['child_real_delta'])==(100,60,-40,60,0,-60),nested
+   counters=mark['native_async_capture'];assert counters['failure_code']==0 and counters['reserved_ticket']==counters['processed_ticket']==counters['closed_ticket']==counters['published_ticket']==8,counters
+   ack=pipe.request('ack',sequence=through);receipt['ack']=ack;assert ack['acknowledged']==through,ack
+   final=pipe.request('mark',sampling='confirm',publication_token=mark['native_publication']['token']);receipt['final']=final;assert final['native_async_capture']['delivered_event_sequence']==through,final
+   receipt['final_ack']=pipe.request('ack',sequence=through);assert receipt['final_ack']['acknowledged']==through
+   receipt['result']='PASS'
+  except BaseException as e:
+   receipt.update(result='FAIL',error_type=type(e).__name__,error=str(e));raise
+  finally:
+   (out/'receipt.json').write_text(json.dumps(receipt,indent=2),encoding='utf-8')
+   if pipe:pipe.close()
+   f.close()
+ return receipt
+
 def main():
- p=argparse.ArgumentParser();p.add_argument('--binary',type=Path,required=True);p.add_argument('--source-root',type=Path,default=ROOT);p.add_argument('--output',type=Path,required=True);p.add_argument('--compiler',default='C:/msys64/ucrt64/bin/g++.exe');p.add_argument('--mismatch',action='store_true');p.add_argument('--pre-read-ack',action='store_true');a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True);binary=a.binary.resolve();helper=build_helper(out/'helper',a.compiler);receipt={'binary_sha256':sha256(binary.read_bytes()).hexdigest(),'helper_sha256':sha256(helper.read_bytes()).hexdigest(),'cases':[]}
+ p=argparse.ArgumentParser();p.add_argument('--binary',type=Path,required=True);p.add_argument('--source-root',type=Path,default=ROOT);p.add_argument('--output',type=Path,required=True);p.add_argument('--compiler',default='C:/msys64/ucrt64/bin/g++.exe');p.add_argument('--mismatch',action='store_true');p.add_argument('--pre-read-ack',action='store_true');p.add_argument('--ordinary',action='store_true');p.add_argument('--ordinary-only',action='store_true');a=p.parse_args();out=a.output.resolve();out.mkdir(parents=True,exist_ok=True);binary=a.binary.resolve();helper=build_helper(out/'helper',a.compiler);receipt={'binary_sha256':sha256(binary.read_bytes()).hexdigest(),'helper_sha256':sha256(helper.read_bytes()).hexdigest(),'cases':[]}
  try:
-  for missing in [False,True]:receipt['cases'].append(run(binary,helper,a.source_root.resolve(),out/('missing'if missing else'valid'),missing))
+  for missing in ([]if a.ordinary_only else[False,True]):receipt['cases'].append(run(binary,helper,a.source_root.resolve(),out/('missing'if missing else'valid'),missing))
   if a.mismatch:receipt['cases'].append(run(binary,helper,a.source_root.resolve(),out/'mismatch-then-normal',mismatch=True))
   if a.pre_read_ack:receipt['cases'].append(run(binary,helper,a.source_root.resolve(),out/'unserved-ack',early_ack=True))
+  if a.ordinary or a.ordinary_only:receipt['cases'].append(run_ordinary(binary,helper,a.source_root.resolve(),out/'ordinary-cold'))
   receipt['result']='PASS'
  except BaseException as e:receipt.update(result='FAIL',error=str(e));raise
  finally:(out/'receipt.json').write_text(json.dumps(receipt,indent=2),encoding='utf-8')

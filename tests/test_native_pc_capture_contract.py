@@ -1,5 +1,6 @@
 """Bounded owned-memory native capture/replay contracts; never attach to a target."""
 from pathlib import Path
+import os
 import subprocess
 
 import pytest
@@ -24,3 +25,12 @@ def test_native_capture_owned_contract(script, marker):
     completed = subprocess.run(['node', str(ROOT / 'tests' / script)], cwd=ROOT,
                                check=True, capture_output=True, text=True, timeout=20)
     assert marker in completed.stdout
+
+
+def test_normal_cold_binding_publishes_owned_scope_before_nested_settlement():
+    completed = subprocess.run(
+        ['node', str(ROOT / 'tests/native_pc_cold_source_replay_fixture.js')], cwd=ROOT,
+        env={**os.environ, 'ARKDPS_COLD_ORDINARY': '1'}, check=True,
+        capture_output=True, text=True, timeout=20,
+    )
+    assert 'PASS_NORMAL_COLD_SCOPE' in completed.stdout

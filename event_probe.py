@@ -436,7 +436,7 @@ def android_autochess_mark_context(sample, mark):
     return None
 
 
-def _native_pc_autochess_scope_key(sample, mark):
+def _native_pc_mark_binding_valid(sample, mark):
     """Parse only same-read PC binding facts; do not reinterpret a game window."""
     witness = sample.get('native_window_guard')
     metadata = sample.get('battle_metadata') or {}
@@ -490,9 +490,13 @@ def _native_pc_autochess_scope_key(sample, mark):
                 or int(raw_time) > 0x7FFFFFFFFFFFFFFF or type(mark.get('game_time')) not in (int, float)
                 or not isfinite(mark['game_time']) or int(raw_time) / (1 << 32) != mark['game_time']):
             return None
-        return _autochess_scope_key(mark)
+        return True
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
+
+
+def _native_pc_autochess_scope_key(sample, mark):
+    return _autochess_scope_key(mark) if _native_pc_mark_binding_valid(sample, mark) else None
 
 
 def autochess_event_mark_context(sample, mark):
@@ -728,6 +732,101 @@ def _round_start_quality(quality, current_mark):
     fields = (*versions, 'damage_settlement_scope', *_ROUND_START_QUALITY_FLAGS,
               *lists, *_ROUND_START_QUALITY_OPTIONAL)
     return {key: deepcopy(quality[key]) for key in fields if key in quality}
+
+
+def native_battle_start_boundary(payload):
+    """A real ordinary-PC playing transition, never an inferred zero clock."""
+    point = payload.get('initial_boundary') if isinstance(payload, dict) else None
+    if not isinstance(point, dict):
+        return None
+    if (set(point) != {'version', 'source', 'method', 'phase', 'state', 'hooks_ready',
+            'native_identity', 'native_stage_id', 'native_generation', 'native_process_pid',
+            'native_frame', 'native_fixed_time', 'frame', 'game_time', 'sequence', 'epoch',
+            'active', 'damage_settlement_scope'}
+            or type(point.get('version')) is not int or point['version'] != 1
+            or point.get('source') != 'native-pc-producer'
+            or point.get('method') != 'BattleController.set_state' or point.get('phase') != 'leave'
+            or type(point.get('state')) is not int or point['state'] != 2 or point.get('hooks_ready') is not True
+            or any(type(point.get(key)) is not int or point[key] != 0
+                   for key in ('native_frame', 'frame', 'sequence', 'active'))
+            or type(point.get('game_time')) not in (int, float) or point['game_time'] != 0
+            or point.get('native_fixed_time') != '0'
+            or any(type(point.get(key)) is not int or point[key] < 0
+                   for key in ('epoch', 'native_generation', 'damage_settlement_scope'))
+            or type(point.get('native_process_pid')) is not int or point['native_process_pid'] <= 0
+            or not isinstance(point.get('native_stage_id'), str) or not point['native_stage_id']
+            or 'AUTOCHESS' in point['native_stage_id'].upper()
+            or not isinstance(point.get('native_identity'), dict)
+            or set(point['native_identity']) != set(NativePcBinding._roots)):
+        return None
+    for root in point['native_identity'].values():
+        if (not isinstance(root, str) or re.fullmatch(r'0x[0-9a-fA-F]{1,16}', root) is None
+                or not 0x10000 <= int(root, 16) <= 0x7FFFFFFFFFFF or int(root, 16) % 8):
+            return None
+    return point
+
+
+def verified_native_battle_start(sample, drained, mark):
+    """Validate a retained ordinary-PC prefix without changing native snapshots."""
+    fields = ('native_battle_start_events', 'native_battle_start_events_complete')
+    if not isinstance(drained, dict) or not any(key in drained for key in fields):
+        return None
+    point = native_battle_start_boundary(drained)
+    metadata = sample.get('battle_metadata') or {}
+    contract = contract_for(sample=sample, descriptor=drained.get('probe_contract'))
+    if (point is None or metadata.get('platform') != 'native_pc' or type(sample.get('state')) is not int or sample['state'] != 2
+            or not isinstance(contract, NativePcProbeContract) or sample.get('autochess_context')
+            or not isinstance(mark, dict) or native_battle_start_boundary(mark) != point
+            or drained.get('events') != [] or drained.get('error') or drained.get('retry') or drained.get('stopped')
+            or mark.get('error') or mark.get('retry') or mark.get('stopped')
+            or type(mark.get('active')) is not int or mark['active'] != 0 or mark.get('active_hooks') != []
+            or any(not NativePcBinding._same(point[key], mark.get(key))
+                   or not NativePcBinding._same(point[key], drained.get(key))
+                   for key in (*_ROUND_START_BINDING, 'damage_settlement_scope'))
+            or point['native_stage_id'] != metadata.get('stage_id')
+            or type(mark.get('epoch')) is not int or mark['epoch'] < point['epoch']
+            or type(mark.get('sequence')) is not int or not 0 <= mark['sequence'] <= _ROUND_START_PREFIX_LIMIT
+            or not _native_pc_mark_binding_valid(sample, mark)
+            or any(type(drained.get(key)) is not int or drained[key] != expected for key, expected in (
+                ('native_battle_start_read_after', 0), ('native_battle_start_read_through', mark['sequence']),
+                ('native_battle_start_committed_sequence', 0)))
+            or drained.get('native_battle_start_events_complete') is not True):
+        raise StreamGap('invalid native battle-start producer fence')
+    contract.validate_binding(sample, mark, drained)
+    from event_stream import baseline_barrier
+    baseline_barrier(mark, sample, mark, contract=contract)
+    records = drained.get('native_battle_start_events')
+    if not isinstance(records, list) or len(records) != mark['sequence']:
+        raise StreamGap('incomplete native battle-start prefix')
+    previous_frame, previous_time = 0, 0
+    for number, record in enumerate(records, 1):
+        if (not isinstance(record, dict) or type(record.get('sequence')) is not int or record['sequence'] != number
+                or type(record.get('frame')) is not int or not previous_frame <= record['frame'] <= sample['frame']
+                or type(record.get('game_time')) not in (int, float) or not isfinite(record['game_time'])
+                or not previous_time <= record['game_time'] <= sample['game_time']
+                or record['frame'] == previous_frame and record['game_time'] != previous_time
+                or record['frame'] == sample['frame'] and record['game_time'] != sample['game_time']):
+            raise StreamGap('native battle-start prefix has a different scope, sequence or clock')
+        scope = record.get('native_autochess_scope')
+        if 'native_autochess_scope' in record and (not isinstance(scope, dict)
+                or type(scope.get('protocol_version')) is not int or scope['protocol_version'] != 1
+                or scope.get('status') != 'unknown' or scope.get('verified_same_frame') is not False
+                or scope.get('frame') != record['frame'] or scope.get('game_time') != record['game_time']
+                or any(key in scope for key in ('scope_key', 'phase', 'round', 'collection_mode'))):
+            raise StreamGap('ordinary native prefix contains a conflicting AutoChess scope')
+        if any(key in record and not NativePcBinding._same(record[key], mark.get(key))
+               for key in (*_ROUND_START_BINDING, 'native_session', 'source_build', 'damage_settlement_scope')):
+            raise StreamGap('native battle-start event transport binding changed')
+        if ('native_frame' in record and (type(record['native_frame']) is not int
+                or record['native_frame'] != record['frame'])):
+            raise StreamGap('native battle-start event raw frame changed')
+        if 'native_fixed_time' in record:
+            fixed = record['native_fixed_time']
+            if (not isinstance(fixed, str) or re.fullmatch(r'[0-9]{1,19}', fixed) is None
+                    or int(fixed) > (1 << 63) - 1 or int(fixed) / (1 << 32) != record['game_time']):
+                raise StreamGap('native battle-start event raw clock changed')
+        previous_frame, previous_time = record['frame'], record['game_time']
+    return point, records
 
 
 def verified_autochess_round_start(sample, drained, mark):

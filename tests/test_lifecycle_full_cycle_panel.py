@@ -103,3 +103,16 @@ def test_legacy_counter_denominator_still_keeps_its_original_sampling_guard():
     actor, = rows_from_statistics(source)
     assert actor.lifecycle_presence_window is None
     assert actor.full_cycle(Category.DAMAGE) == 60
+
+
+def test_ordinary_native_exact_lifetime_restores_presence_and_skill_coverage_without_promoting_sampling(tmp_path):
+    source = sample(damage=300, counter_snapshot_complete=True, skill_active_seconds=1,
+                    skill_coverage_complete=True)
+    source.update(native_counter_scope='all', event_only_projection=False)
+    original = deepcopy(source)
+    view = DesktopState(tmp_path).view(CONFIG, source)
+    detail = view['details_by_owner']['a']
+    assert detail['presence_seconds'] == 2 and detail['presence_complete']
+    assert detail['skill_coverage'] == .5
+    assert view['source']['a']['presence_seconds'] is None
+    assert source == original

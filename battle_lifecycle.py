@@ -1446,6 +1446,11 @@ class BattleSessions:
                 return False
         elif not self._terminal_boundary_matches_watermark(observation, stream):
             return False
+        # The independently verified final source fence also ends the time
+        # spent by bodies still deployed at battle end. It is not a retreat
+        # callback, and must never be inferred from an ordinary gap/finish().
+        if observation.kind not in ('sample', 'preparing'):
+            self.adapter.statistics.lifecycle_terminal_watermark = stream.game_time
         self.adapter.statistics.invalidate_rates()
         self.adapter.finish()
         self.event_status, self.event_error = 'finished', None
@@ -1692,7 +1697,7 @@ class BattleSessions:
                 contract.validate_batch(sample, through, drained, stream=stream)
             except (KeyError, StreamGap):
                 return {}
-        return source_attribution_batch(drained, after, through)
+        return source_attribution_batch(drained, after, through, sample=sample, mark=evidence.get('after'))
 
     def consume(self, observation):
         if (observation.feed != self.feed_id or

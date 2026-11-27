@@ -861,8 +861,15 @@ function snapshotPublicationGuards(guards){
   return Object.freeze(copy);
  }));
 }
-function publishNativeCapturePublication(binding){
- if(globalThis.arkdpsNativeAsyncCapture!==true||__arkdpsReplayActive())return;
+function publishNativeCapturePublication(binding,capturedRecord=null){
+ if(globalThis.arkdpsNativeAsyncCapture!==true)return;
+ if(__arkdpsReplayActive()){
+  // A completed cold tree may install address/expected geometry for FUTURE
+  // captures. It cannot certify this record from a freshly installed graph.
+  // Accept only the canonical binding just verified and owned by this lease;
+  // nativeBindingPoint's in-progress result and caller copies remain barred.
+  if(capturedRecord!==__arkdpsReplayRecord()||nativeCaptureColdBindings.get(capturedRecord)!==binding)return;
+ }else if(capturedRecord!==null)return;
  if(typeof __publishCapturePublication!=='function')throw new Error('native publication publisher unavailable');
  const body=nativeAutoBodyCache?.body;
  if(!binding)return;
@@ -1069,6 +1076,8 @@ function prepareCapturedColdBinding(record){
  try{
   const binding=__arkdpsReplayPoint('cold.body',()=>nativeBindingPoint(null,true));
   const owned=binding?JSON.parse(JSON.stringify(binding)):null;
-  nativeCaptureColdBindings.set(record,owned);return owned;
+  nativeCaptureColdBindings.set(record,owned);
+  if(owned)publishNativeCapturePublication(owned,record);
+  return owned;
  }finally{nativeCaptureColdRebuilding=false;}
 }

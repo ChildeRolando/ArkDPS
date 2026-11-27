@@ -3,7 +3,7 @@ import json
 from capture_demand_engine_bundle import damage_bundle
 from native_pc.native_event_runtime.smoke import export_offsets
 
-def source(source_root,helper,missing=False,mismatch=False):
+def source(source_root,helper,missing=False,mismatch=False,ordinary=False):
     text=damage_bundle(source_root,{'count':1,'route':0,'profile':False})
     start=text.index('\n// Narrow compatibility surface for the unmodified PC event probe.')
     end=text.index('\n// Execute the production probe with an owned, in-memory IL2CPP fixture.',start)
@@ -12,7 +12,7 @@ def source(source_root,helper,missing=False,mismatch=False):
     # no helper is callable by a business callback during replay.
     prelude=(source_root/'event_probe_store.js').read_text(encoding='utf-8')+'\n'
     prelude+='const dllScopePublisher=__publishCaptureScope,dllPublicationPublisher=__publishCapturePublication;\n'
-    prelude+='globalThis.__ownedGraphPublish=(publication,graph)=>(publication?dllPublicationPublisher:dllScopePublisher)(graph);\n'
+    prelude+='const dllGraphReceipts=[];globalThis.__ownedGraphPublish=(publication,graph)=>{dllGraphReceipts.push({publication,revision:graph.revision,active:__arkdpsReplayActive(),facts:__arkdpsReplayActive()?JSON.parse(JSON.stringify(__arkdpsReplayRecord().facts)):null});return (publication?dllPublicationPublisher:dllScopePublisher)(graph);};\n'
     offsets=export_offsets(helper);prelude+='const dllHelper=Process.getModuleByName("CaptureDemandFixture.dll");\n'
     prelude+='const dllAddresses='+json.dumps([offsets['DemandHook'+str(i)] for i in range(12)])+'.map(offset=>dllHelper.base.add(offset));\n'
     # Give actual producer metadata the real factory method addresses, while
@@ -28,6 +28,28 @@ def source(source_root,helper,missing=False,mismatch=False):
     old="const addresses=hooks.map((_,i)=>hookIds[i]===11||hookIds[i]===12?meta.factory_addresses[hookIds[i]-11]:'0x'+(0x9100+i*16).toString(16));"
     assert text.count(old)==1;text=text.replace(old,'const addresses=dllAddresses.map(p=>p.toString());')
     text=text.replace('if(hookIds[i]!==13){','{')
+    if ordinary:
+        # The first binding and both future graphs must come from the native
+        # sampler's actual cold snapshot, never from a setup-time live mark.
+        warm=[line for line in text.splitlines() if line.startswith('if(true){const warm=f.mark();')]
+        assert len(warm)==1
+        text=text.replace(warm[0],"f.write(f.level.add(0x18),f.text('Obt/Hard/level_hard_07-04'));f.vm.runInContext('nativeAutoStage=null;nativeAutoCache=null;nativeLastBinding=null;discardAutoChessBody();',f.context);")
+        marker='// Serialize the same owned fixture\'s explicit cells.'
+        assert text.count(marker)==1
+        # Match the independently reviewed nested normal/bar/elemental
+        # topology with exact fixed-point values and explicit native writes.
+        ordinary_route=r'''
+const ordinaryChild=f.modifier(f.ptr(0),demandTarget,60,0,5),ordinaryBar=f.modifier(demandSource,demandTarget,5,0,0);
+f.write(ordinaryBar.add(0x60),5);f.write(demandMod.add(0x68),2);
+for(const [mod,before,after]of [[demandMod,40n,40n],[ordinaryChild,60n,60n]]){f.write(mod.add(0x80),before<<32n);f.write(mod.add(0x88),after<<32n);}
+routes.length=0;
+routes.push([
+ en(0,A,[w(demandTarget.add(0x40),100n<<32n),w(demandMod.add(0x48),-40n<<32n)]),en(3,A),lv(3),
+ en(0,[demandTarget,ordinaryBar],[w(demandTarget.add(0x40),60n<<32n)]),en(0,[demandTarget,ordinaryChild]),
+ lv(0,0n,[w(ordinaryChild.add(0x48),-60n<<32n),w(demandTarget.add(0x40),0n)]),lv(0),lv(0)
+]);
+'''
+        text=text.replace(marker,ordinary_route+'\n'+marker)
     marker='const setup={plans:hooks.map(h=>h.arkdpsCaptureContract),routes,ranges:demandRanges};'
     assert text.count(marker)==1;text=text.split(marker)[0]
     tail=r'''
@@ -59,13 +81,23 @@ for(let i=0;i<hooks.length;i++){
  dllHooks.push(Interceptor.attach(dllAddresses[i],callbacks));
 }
 for(const name of ['__arkdpsOnClosedRecord','__arkdpsCaptureModeState','__arkdpsInstallCaptureMode','__arkdpsRetireCaptureGraphs'])globalThis[name]=f.vm.runInContext(name,f.context);
+const dllPrefixReceipts=[],dllRealPrefix=globalThis.__arkdpsOnClosedRecord;
+globalThis.__arkdpsOnClosedRecord=function(record){
+ const beforeFacts=ORDINARY?JSON.stringify(record.facts):null;
+ const projection=dllRealPrefix(record);
+ if(ORDINARY){assertion.equal(JSON.stringify(record.facts),beforeFacts,'future graph publication cannot retrofit this record');dllPrefixReceipts.push({facts:JSON.parse(beforeFacts),ticket:record.ticket,kind:record.kind,frame:projection?.mark?.frame,accepted:!!projection});
+ }
+ return projection;
+};
 Object.assign(rpc.exports,f.context.rpc.exports);
+if(ORDINARY){const status=rpc.exports.captureControlStatus;rpc.exports.captureControlStatus=function(){return {...status(),dll_audit:{records:dllPrefixReceipts.slice(),graphs:dllGraphReceipts.slice()}};};}
 assertion(f.context.__arkdpsSamplingCapturePlan?.complete===true,'real sampler contract must be complete');
 globalThis.__arkdpsSamplingCapturePlan=f.context.__arkdpsSamplingCapturePlan;
 // The store was explicitly bound by the original mixed setup. No shadow store.
-send({ready:true,fixture:'delivered-DLL-real-damage-formula-consumers',missing:removed,mismatch:MISMATCH,
+if(ORDINARY)assertion.equal(dllGraphReceipts.length,0,'ordinary setup must not prepublish any graph');
+send({ready:true,fixture:'delivered-DLL-real-damage-formula-consumers',missing:removed,mismatch:MISMATCH,ordinary:ORDINARY,setup_graph_publications:dllGraphReceipts.length,
  native_sampling_version:1,diagnostic_address:dllDiagnostic.toString(),world:{routes,ranges:demandRanges,diagnostic_address:dllDiagnostic.toString()},contracts:hooks.map(h=>h.arkdpsCaptureContract),
  expected_actors:{source:{cid:'char_shared',address:demandSource.toString(),instance_uid:301,character_data_uid:104},target:{cid:'enemy_mixed_demand',address:demandTarget.toString(),instance_uid:302}},
- initial_sequence:f.vm.runInContext('sequence',f.context),scope_fields:scope.fields.length,publication_fields:publication.chunks.reduce((n,c)=>n+c.fields.length,0)});
+ initial_sequence:f.vm.runInContext('sequence',f.context),scope_fields:scope?.fields.length??0,publication_fields:publication?.chunks.reduce((n,c)=>n+c.fields.length,0)??0});
 '''
-    return prelude+text+tail.replace('MISSING',str(missing).lower()).replace('MISMATCH',str(mismatch).lower())
+    return prelude+text+tail.replace('MISSING',str(missing).lower()).replace('MISMATCH',str(mismatch).lower()).replace('ORDINARY',str(ordinary).lower())

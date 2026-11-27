@@ -103,6 +103,7 @@ class Statistics:
         self.settlement_skill_deployment_unknown = set()
         self.completed_skill_cast_invocations = set()
         self.lifecycle_watermark = start_time
+        self.lifecycle_terminal_watermark = None
         self.skill_windows = {}
         self.skill_seen = set()
         self.skill_unknown = False
@@ -2070,7 +2071,8 @@ class Statistics:
             row.update(self.deployment_lifecycle.result(owner, self.lifecycle_watermark,
                 continuous=self.start_time == 0 and self.event_coverage_start == 0
                     and self.event_coverage and not self.event_coverage_broken,
-                archived=self.end_time is not None, start_time=self.event_coverage_start))
+                archived=self.end_time is not None, start_time=self.event_coverage_start,
+                terminal_watermark=self.lifecycle_terminal_watermark))
             rows[owner] = row
         overkill_complete = bool(rows) and all(
             row['overkill_coverage_complete'] for row in rows.values())

@@ -2,13 +2,13 @@
 // Small fixed-field interpreter for source-only tests. Native capture's own
 // rereads, budgets and TLS ownership are tested independently in C++.
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
-function ownedFields(f,metadata){
+function ownedFields(f,metadata,{reuseBridge=false}={}){
  const c=f.context,P=f.ptr(0).constructor,names=['readByteArray','readPointer','readU8','readU16','readU32','readS32','readU64','readS64','readFloat','readUtf16String','readCString'];
  const old=Object.fromEntries(names.map(n=>[n,P.prototype[n]]));let replaying=false,late=0;
  c.ArrayBuffer=ArrayBuffer;c.NativePointer=P;c.NativeInteger=class{};c.__read=()=>{late++;throw Error('live read');};
- const bridge=fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8');vm.runInContext(bridge.slice(bridge.indexOf('function __integer('),bridge.indexOf('class NativeInteger')),c);
+ if(!reuseBridge){const bridge=fs.readFileSync('native_pc/native_event_runtime/bridge.js','utf8');vm.runInContext(bridge.slice(bridge.indexOf('function __integer('),bridge.indexOf('class NativeInteger')),c);}
  c.fixtureMetadata=metadata;vm.runInContext("nativeCaptureMetadata=fixtureMetadata;nativeCaptureModeHistory.set(0,'all');",c);
- vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/cold_plan.js','utf8'),c);
+ if(!reuseBridge)vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/cold_plan.js','utf8'),c);
  const parents=new Map(),graph=new Map();for(const value of Object.values(metadata.classes)){
   let k=f.ptr(value);const seen=new Set();while(!k.isNull()&&!graph.has(k.toString())){if(seen.has(k.toString()))throw Error('fixture parent cycle');seen.add(k.toString());let p;try{p=old.readPointer.call(k.add(0x58));}catch{p=f.ptr(0);}const b=new ArrayBuffer(8);new DataView(b).setBigUint64(0,p.value,true);parents.set(k.add(0x58).toString()+':8',b);graph.set(k.toString(),p.toString());k=p;}
  }

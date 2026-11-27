@@ -7,11 +7,6 @@ function fullWorld(trace){
  const text=fs.readFileSync(filename,'utf8').split('const plan=JSON.parse(vm.runInContext(')[0].replace('f.write(f.character.add(0x58),f.unitClass);','f.write(f.enemyClass.add(0x58),f.entity);f.write(f.character.add(0x58),f.unitClass);').replace('fixtureOptions:{roundResetMethod:true','fixtureOptions:{globals:{arkdpsTraceHpContext:'+trace+',arkdpsTraceNestedParent:'+trace+'},roundResetMethod:true');
  const m=new Module(filename,module);m.filename=filename;m.paths=Module._nodeModulePaths(path.dirname(filename));m._compile(text+`;module.exports={f,c,live,token,meta:vm.runInContext('nativeCaptureMetadata',c)};`,filename);return m.exports;
 }
-function preparedHelper(){
- const filename=path.resolve('tests/native_pc_owned_field_fixture.js');let text=fs.readFileSync(filename,'utf8');
- for(const fragment of ["vm.runInContext(bridge.slice(bridge.indexOf('function __integer('),bridge.indexOf('class NativeInteger')),c);", "vm.runInContext(fs.readFileSync('native_pc/native_event_runtime/cold_plan.js','utf8'),c);", "vm.runInContext('__arkdpsSealClassHierarchy(fixtureParentGraph)',c);"]){assert(text.includes(fragment));text=text.replace(fragment,'');}
- const m=new Module(filename,module);m.filename=filename;m.paths=Module._nodeModulePaths(path.dirname(filename));m._compile(text,filename);return m.exports.ownedFields;
-}
 function scenario(kind,trace=false,direct=false){
  const auto=['token','amiya','token_nested','amiya_nested','nested_elemental','token_missing_host','amiya_changed_form','missing_guard'].includes(kind),w=auto?fullWorld(trace):null;
  const f=w?w.f:fixture({settlement:true,sourcePath:path.resolve('event_probe_native_pc.js'),globals:{arkdpsTraceHpContext:trace,arkdpsTraceNestedParent:trace}});
@@ -25,7 +20,7 @@ function scenario(kind,trace=false,direct=false){
  const stringClass=w?f.ptr(w.meta.string_class):f.alloc();for(const actor of [source,target,receiver])f.write(actor.add(0x148).readPointer(),stringClass);f.write(f.level.add(0x18).readPointer(),stringClass);
  const meta={clock:f.vm.runInContext('clock',f.context),string_class:stringClass.toString(),skill_offsets:f.vm.runInContext('({...skillF})',f.context),skill_wait:null,immutable_class_parents:true,classes:{Character:f.character.toString(),BObject:f.bObject.toString(),Enemy:f.enemyClass.toString(),BattleController:f.controllerClass.toString(),LevelData:f.level.readPointer().toString()}};
  if(w)Object.assign(meta,w.meta);
- const h=(w?preparedHelper():ownedFields)(f,meta),m=f.context.rpc.exports.mark();f.context.scopeCache={autochess:false,identity:m.native_identity,roots:Object.values(m.native_identity).join(':'),scopeGuards:[],addresses:{}};
+ const h=ownedFields(f,meta,{reuseBridge:!!w}),m=f.context.rpc.exports.mark();f.context.scopeCache={autochess:false,identity:m.native_identity,roots:Object.values(m.native_identity).join(':'),scopeGuards:[],addresses:{}};
  const scope=JSON.parse(f.vm.runInContext(w?'JSON.stringify(nativeCaptureScopeGraph(nativeAutoCache,nativeAutoStage,clock,1))':'JSON.stringify(nativeCaptureScopeGraph(scopeCache,nativeAutoStage,clock,1))',f.context));f.context.scopeGraph=scope;f.vm.runInContext('nativeCaptureScopes.set(1,scopeGraph)',f.context);
  if(process.env.DEMAND_BASELINE){const base=fs.readFileSync('runtime/capture-demand/formula-baseline-native.js','utf8');f.vm.runInContext(base.slice(base.indexOf('function nativeCapturePlan('),base.indexOf('// Publish only',base.indexOf('function nativeCapturePlan('))),f.context);}
  const statuses=[],failedReads=[];let negativeSeen=false;

@@ -84,7 +84,7 @@ class DeploymentLifecycle:
         ledger = self.bodies.get((owner, actor))
         return bool(ledger and instance in ledger['instances'] and instance != ledger['instance'])
 
-    def result(self, owner, watermark, *, continuous, archived, start_time=0):
+    def result(self, owner, watermark, *, continuous, archived, start_time=0, terminal_watermark=None):
         ledgers = [ledger for (o, _), ledger in self.bodies.items() if o == owner]
         bodies = [body for ledger in ledgers for body in ledger['instances'].values()]
         ambiguous = False
@@ -102,7 +102,8 @@ class DeploymentLifecycle:
                 # It becomes complete only after the actual old endpoint arrives.
                 if left['end'] is None or left['end'] > right['start']:
                     ambiguous = True
-        terminal = bool(bodies) and all(b['end'] is not None and b['end'] <= watermark for b in bodies)
+        terminal = bool(bodies) and (all(b['end'] is not None and b['end'] <= watermark for b in bodies)
+                                    or continuous and terminal_watermark == watermark)
         complete = (bool(bodies) and all(b['start'] <= watermark for b in bodies) and continuous
                     and owner not in self.unknown and not ambiguous and (not archived or terminal))
         seconds = sum(max(0.0, min(b['end'] if b['end'] is not None else watermark, watermark) - b['start'])

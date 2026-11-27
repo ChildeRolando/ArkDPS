@@ -321,7 +321,7 @@ class BattleStatisticsAdapter:
         self.last_roster_frame = roster.frame
         self.session_switches += 1
 
-    def start_events(self, *, session, frame, sequence, allow_late_baseline=False):
+    def start_events(self, *, session, frame, sequence, allow_late_baseline=False, retained_zero_origin=False):
         """Start at the guarded frame, normally the initial native baseline."""
         reasons = []
         if self.statistics is None:
@@ -333,6 +333,10 @@ class BattleStatisticsAdapter:
         if frame != self.last_frame:
             reasons.append(f'frame {frame} != {self.last_frame}')
         late = self.last_game_time != self.coverage_start
+        if type(retained_zero_origin) is not bool:
+            reasons.append('retained zero origin must be an explicit boolean')
+        elif retained_zero_origin and (type(sequence) is not int or sequence != 0 or late):
+            reasons.append('retained native zero origin requires the initial uncommitted prefix')
         if late and not allow_late_baseline:
             reasons.append(f'time {self.last_game_time} != coverage start {self.coverage_start}')
         if self.owner_map.unknown_token_cids and not self.source_attribution:
@@ -344,10 +348,22 @@ class BattleStatisticsAdapter:
         if reasons:
             raise ValueError('event barrier does not match the initial baseline: ' + '; '.join(reasons))
         self.statistics.event_coverage = True
+        if retained_zero_origin:
+            # A verified producer prefix extends event observation back to its
+            # real zero fence. Keep every native counter/history read at its
+            # actual acquisition time; this creates no zero counter snapshot.
+            self.coverage_start = self.statistics.start_time = self.statistics.event_coverage_start = 0
+            self.statistics.last_event_time = self.statistics.lifecycle_watermark = 0
+            # The initial counter is still a real physical read. It is no
+            # longer output before event observation, whose complete prefix
+            # now starts at the producer's actual battle inception.
+            self.statistics.initial_damage = {}
         try:
             self.event_stream = EventStream(self.statistics, session=session,
-                                            baseline_frame=frame,
+                                            baseline_frame=0 if retained_zero_origin else frame,
                                             baseline_sequence=sequence)
+            if retained_zero_origin:
+                self.event_stream.game_time = 0
         except ValueError:
             self.statistics.event_coverage = False
             raise
