@@ -7,9 +7,11 @@ from pathlib import Path
 import argparse,json
 ROOT=Path(__file__).resolve().parents[1]
 
-def bundle(count, owned=False, source_root=ROOT, bridge_root=None, full_scope=False, pub_every=1000, queue=None):
+def bundle(count, owned=False, source_root=ROOT, bridge_root=None, full_scope=False, pub_every=1000, queue=None, light=False):
     files={name:(source_root/name).read_text(encoding='utf-8') for name in ['event_probe_native_pc.js','event_probe_runtime.js','event_probe_autochess.js']}
     fixture=(ROOT/'tests/native_pc_frida_probe_fixture.js').read_text(encoding='utf-8')
+    if light:
+        fixture=fixture.replace('arkdpsCollectEnemyHpChanges: true', 'arkdpsCollectEnemyHpChanges: false')
     if full_scope:
         files['event_probe_autochess.js']=(source_root/'native_pc/native_event_runtime/cold_plan.js').read_text(encoding='utf-8')+'\n'+files['event_probe_autochess.js']
     files.update({name:(source_root/name).read_text(encoding='utf-8') for name in ['native_pc/native_event_runtime/cold_plan.js','native_pc/native_event_runtime/bridge.js']})
@@ -70,7 +72,7 @@ print(JSON.stringify({queue:QUEUE_MODE?queueReport:null,kind:OWNED?'actual_share
     setup=r"""
 const P=enemy.constructor,original=Object.fromEntries(['add','readByteArray','readPointer','readU8','readU16','readU32','readS32','readU64','readS64','readFloat','readUtf16String','readCString'].map(k=>[k,P.prototype[k]]));
 const clock=f.vm.runInContext('clock',f.context),prepared=FULL_SCOPE?f.vm.runInContext('nativeCaptureMetadata',f.context):null,stringClass=prepared?f.ptr(prepared.string_class):f.alloc();f.write(enemy.add(0x148).readPointer(),stringClass);
-const meta=prepared??{clock,string_class:stringClass.toString(),classes:{BattleController:f.controllerClass.toString(),LevelData:f.level.readPointer().toString(),Enemy:f.enemyClass.toString(),BObject:f.bObject.toString(),Character:f.character.toString()},skill_offsets:f.vm.runInContext('skillF',f.context),skill_wait:null,attack_type_offset:0x30,factory_addresses:[],immutable_class_parents:true,coalesce_enemy_hp:true,cold_metadata_ready:true,cold_plan:COLD};
+const meta=prepared??{clock,string_class:stringClass.toString(),classes:{BattleController:f.controllerClass.toString(),LevelData:f.level.readPointer().toString(),Enemy:f.enemyClass.toString(),BObject:f.bObject.toString(),Character:f.character.toString()},skill_offsets:f.vm.runInContext('skillF',f.context),skill_wait:null,attack_type_offset:0x30,factory_addresses:[],immutable_class_parents:true,coalesce_enemy_hp:true,collect_enemy_hp_changes:f.vm.runInContext('collectEnemyHpChanges',f.context),cold_metadata_ready:true,cold_plan:COLD};
 f.context.wireMeta=meta;f.vm.runInContext('nativeCaptureMetadata=wireMeta',f.context);
 const rawPlan=f.vm.runInContext("nativeCapturePlan('hp.Entity.SetHpInternal',{toString:()=> '0x9000'},wireMeta)",f.context);
 for(const k of ['__arkdpsReplayPoint','__arkdpsReplayWitness','__arkdpsReplayCheckpoint','__arkdpsReplayOptional','__arkdpsReplayEnd','__arkdpsOwnedRead'])f.context[k]=()=>{};

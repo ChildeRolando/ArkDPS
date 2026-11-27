@@ -3,6 +3,9 @@ const il=Process.getModuleByName(probeAdapter.moduleName);
 const traceHpContext=globalThis.arkdpsTraceHpContext===true;
 const traceNestedParent=globalThis.arkdpsTraceNestedParent===true;
 const coalesceEnemyHp=globalThis.arkdpsCoalesceEnemyHp!==false;
+// Product collection uses membership snapshots for current HP. Full HP
+// telemetry is retained only as an explicit owned-fixture reference mode.
+const collectEnemyHpChanges=globalThis.arkdpsCollectEnemyHpChanges===true;
 const observeSourceCharacterUid=globalThis.arkdpsSourceCharacterUid!==false;
 function api(n,r,a){
  const native=new NativeFunction(il.getExportByName(n),r,a);
@@ -2783,6 +2786,9 @@ function hpObservationIo(edge,enemy){
 }
 function applyHpEntry(receiver,args,io,label,attributeChange,enemyOverride=null){
  if(stopped||fatal||(attributeChange&&args[1].toInt32()!==MAX_HP_ATTRIBUTE))return;
+ // Keep every attempt while a modifier is open (including zero changes and
+ // cross-thread writers). Outside settlement, only MaxHP dirty events matter.
+ if(!collectEnemyHpChanges&&!attributeChange&&!activeApplyScopes.size)return;
  let enemyTarget=true;
  try{
   const enemy=enemyOverride??args[0],key=enemy.toString();
@@ -2817,7 +2823,7 @@ function applyHpEntry(receiver,args,io,label,attributeChange,enemyOverride=null)
   }
   // This setter publishes only the closing scope. The opening clock still
   // detects a new round and brackets the write with the closing clock.
-  const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
+  const deferScope=!collectEnemyHpChanges&&!attributeChange||coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
   const clockValues=io.clock();
   const when=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope,clockValues[3]);
   refreshEnemyEntryFrame(when.frame);
@@ -2856,6 +2862,7 @@ function applyHpLeave(receiver,io,label){
   const hp=Number(closing[1])/4294967296;
   if(!Number.isFinite(hp)||hp<0||hp>=1e9)throw new Error('enemy HP unreadable after callback');
   finishModifierHpWriter(write,end,hp);
+  if(!collectEnemyHpChanges&&maxHpBefore===null)return true;
   if(hp===hpBefore&&maxHpBefore===null)return true;
   const maxHp=write.enemyTarget?enemyMaxHp(enemy,io):null;
   if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
@@ -3730,7 +3737,7 @@ installTerminalHooks();
 const enemyStateError=cfg.enemyStateError||cfg.enemyPhaseError||cfg.enemyEntryError||null;
 function enemyEntryQuality(frame){
  if(enemyEntryReady&&frame!==undefined)refreshEnemyEntryFrame(frame);
- return {enemy_entry_ready:enemyEntryReady,enemy_entry_unknown:enemyEntryUnknown,
+ return {...(!collectEnemyHpChanges?{enemy_hp_mode:'snapshots'}:{}),enemy_entry_ready:enemyEntryReady,enemy_entry_unknown:enemyEntryUnknown,
   enemy_phase_ready:enemyPhaseReady,enemy_phase_unknown:enemyPhaseUnknown,
   enemy_state_ready:enemyStateReady&&enemyPhaseReady,
   enemy_state_unknown:enemyStateUnknown||enemyPhaseUnknown||enemyEntryUnknown,

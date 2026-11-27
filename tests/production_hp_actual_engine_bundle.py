@@ -4,8 +4,8 @@ import argparse,json
 from production_hp_quickjs_bundle import bundle
 ROOT=Path(__file__).resolve().parents[1]
 
-def engine_bundle(count=500,batch=True,branch='heal_coalesced',source_root=ROOT,pub_every=1000,bridge_root=None,paced=None):
-    text=bundle(count,True,source_root=source_root,bridge_root=bridge_root or source_root,full_scope=True,pub_every=pub_every)
+def engine_bundle(count=500,batch=True,branch='heal_coalesced',source_root=ROOT,pub_every=1000,bridge_root=None,paced=None,light=False):
+    text=bundle(count,True,source_root=source_root,bridge_root=bridge_root or source_root,full_scope=True,pub_every=pub_every,light=light)
     marker='const results=[];'
     assert text.count(marker)==1
     text=text.split(marker)[0]

@@ -77,7 +77,8 @@ struct Runtime {
     std::uint64_t replay_health_calls=0,controlled_finish_checks=0;
     std::array<std::uint64_t,8> replay_fallbacks{};
     JSValue materialization_count=JS_UNDEFINED;
-    struct WorkerInvocation { JSValue receiver = JS_UNDEFINED; std::uint64_t id = 0; Hook* hook = nullptr; };
+    std::uint64_t planned_hp_edges=0;
+    struct WorkerInvocation { JSValue receiver = JS_UNDEFINED; std::uint64_t id = 0; Hook* hook = nullptr; bool planned_hp_omission=false; };
     std::array<std::array<WorkerInvocation, 256>, 16> receivers{};
     std::array<unsigned, 16> replay_depth{};
     std::array<std::byte, arkdps::capture::record_capacity> consume_buffer{};
@@ -661,9 +662,8 @@ struct PreparedReplay {
     std::size_t segment_start,field_start;const std::byte* payload;
     std::array<JSValue,9> arguments;bool direct=false;
 };
-PreparedReplay prepare_replay_record(const std::byte* bytes,std::size_t length,JSValueConst batch_header=JS_UNDEFINED) {
-    using namespace arkdps::capture;
-    auto& runtime=state(); auto* c=runtime.context;
+arkdps::capture::RecordHeader decode_replay_record_header(const std::byte* bytes,std::size_t length,std::uint64_t expected_ticket) {
+    using namespace arkdps::capture;auto& runtime=state();
     RecordHeader header;
     if (length<sizeof header) throw std::runtime_error("short native capture header");
     std::memcpy(&header,bytes,sizeof header);
@@ -671,9 +671,15 @@ PreparedReplay prepare_replay_record(const std::byte* bytes,std::size_t length,J
     if (header.parent_checkpoint_count>invocation_depth || header.lane>=lane_count || !header.depth || header.depth>invocation_depth
         || header.hook_id>=runtime.hooks.size() || header.segment_count>max_segments
         || header.field_count>max_fields || header.byte_count>max_bytes || length!=required
-        || header.ticket!=runtime.processed_ticket+1 || (header.phase!=Phase::entry && header.phase!=Phase::leave))
+        || header.ticket!=expected_ticket || (header.phase!=Phase::entry && header.phase!=Phase::leave))
         throw std::runtime_error("invalid native capture record");
     if (structural_error(header.error)) throw std::runtime_error("native capture batch has a structural failure");
+    return header;
+}
+PreparedReplay prepare_replay_record(const std::byte* bytes,std::size_t length,JSValueConst batch_header=JS_UNDEFINED) {
+    using namespace arkdps::capture;
+    auto& runtime=state(); auto* c=runtime.context;
+    const auto header=decode_replay_record_header(bytes,length,runtime.processed_ticket+1);
     auto* hook=runtime.hooks[header.hook_id].get();
     auto& depth=runtime.replay_depth[header.lane];
     auto& call=runtime.receivers[header.lane][header.depth-1];
@@ -684,6 +690,8 @@ PreparedReplay prepare_replay_record(const std::byte* bytes,std::size_t length,J
     } else if (header.depth!=depth || call.id!=header.invocation || call.hook!=hook
                || header.parent!=(depth>1 ? runtime.receivers[header.lane][depth-2].id : 0))
         throw std::runtime_error("native capture leave topology mismatch");
+    if(header.phase==Phase::leave && call.planned_hp_omission && JS_IsUndefined(call.receiver))
+        call.receiver=JS_NewObject(c); // Only an actual publication needs JS.
     // Copy a small worker-owned header once. The JS record decodes only the
     // properties a real callback reads; it never consults a later native lease.
     constexpr unsigned header_words=22;
@@ -987,7 +995,7 @@ struct BoundedReplayBatch {
 BoundedReplayBatch& replay_batch_state(){static auto* value=new BoundedReplayBatch;return *value;}
 arkdps::capture::DirectHpReason direct_record_reason(const arkdps::capture::RecordHeader& header) {
     using namespace arkdps::capture;auto& runtime=state();
-    if(header.hook_id>=runtime.hooks.size())return DirectHpReason::unsupported_plan;
+    if(header.planned_hp_omission||header.hook_id>=runtime.hooks.size())return DirectHpReason::unsupported_plan;
     auto* hook=runtime.hooks[header.hook_id].get();
     return direct_hp_reason(hook->capture_plan,header,
         JS_IsFunction(runtime.context,hook->direct_entry)&&JS_IsFunction(runtime.context,hook->direct_leave));
@@ -1072,6 +1080,30 @@ unsigned replay_bounded_batch(std::size_t first_size,std::chrono::steady_clock::
     if(incomplete||!valid_count)throw std::runtime_error("incomplete bounded replay result");
     return batch.issued;
 }
+bool consume_planned_hp_boundary(const std::byte* bytes,std::size_t size) {
+    using namespace arkdps::capture;auto& r=state();
+    const auto h=decode_replay_record_header(bytes,size,r.processed_ticket+1);
+    if(!h.planned_hp_omission)return false;
+    auto* hook=r.hooks[h.hook_id].get();const auto& plan=hook->capture_plan;
+    if(!plan.snapshot_hp||!plan.hp_profile||plan.hp_dirty||h.depth!=1||h.parent||h.parent_checkpoint_count)
+        throw std::runtime_error("invalid planned HP omission contract");
+    auto& depth=r.replay_depth[h.lane];auto& call=r.receivers[h.lane][h.depth-1];
+    if(h.phase==Phase::entry) {
+        if(h.active!=1||depth||call.id||h.invocation!=h.ticket)
+            throw std::runtime_error("invalid planned HP opening boundary");
+    } else if(depth!=1||call.id!=h.invocation||call.hook!=hook||!call.planned_hp_omission)
+        throw std::runtime_error("invalid planned HP closing boundary");
+    // A host publication still executes the existing source/journal path from
+    // its fresh captured tree. Never manufacture a mark or advance ACK here.
+    if(h.publication_request||h.projection_candidate||h.publication_captured||h.cold_revision)return false;
+    if(h.field_count||h.segment_count||h.byte_count||h.error!=Error::ok||h.scope_revision||h.publication_revision)
+        throw std::runtime_error("planned HP boundary contains unexplained facts");
+    if(h.phase==Phase::entry){call.id=h.invocation;call.hook=hook;call.planned_hp_omission=true;++depth;}
+    else {JS_FreeValue(r.context,call.receiver);call={};--depth;}
+    ++r.planned_hp_edges;r.processed_ticket=h.ticket;
+    if(h.closed_after)r.closed_ticket=h.ticket;
+    return true;
+}
 bool drain_captures_with_batch(bool allow_batch) noexcept {
     using namespace arkdps::capture;
     auto& runtime=state();
@@ -1087,7 +1119,8 @@ bool drain_captures_with_batch(bool allow_batch) noexcept {
             else if(!pop_replay_record(size))break;
             JS_UpdateStackTop(runtime.runtime);
             arkdps::capture::RecordHeader selected;std::memcpy(&selected,runtime.consume_buffer.data(),sizeof selected);
-            if(allow_batch&&direct_record(selected))budget+=replay_bounded_batch(size,poll_deadline,512-budget)-1;
+            if(selected.planned_hp_omission&&consume_planned_hp_boundary(runtime.consume_buffer.data(),size)){}
+            else if(allow_batch&&direct_record(selected))budget+=replay_bounded_batch(size,poll_deadline,512-budget)-1;
             else {++runtime.single_replayed;++runtime.replay_fallbacks[static_cast<unsigned>(direct_record_reason(selected))];replay_record(runtime.consume_buffer.data(),size);}
             if (runtime.lanes->failure.load(std::memory_order_acquire))
                 throw std::runtime_error("native capture failed during replay");
@@ -1383,6 +1416,7 @@ std::string request_on_worker(const std::string& json, std::uint64_t minimum_tic
             {"processed_ticket",runtime.processed_ticket},{"closed_ticket",runtime.closed_ticket},
             {"replay_lease_calls",arkdps::owned_js::binding().lease_calls},{"replay_status_calls",arkdps::owned_js::binding().status_calls},
             {"replay_health_calls",runtime.replay_health_calls},{"controlled_finish_checks",runtime.controlled_finish_checks},
+            {"planned_hp_boundary_edges",runtime.planned_hp_edges},
             {"batch_calls",runtime.batch_calls},{"batch_issued",runtime.batch_issued},{"batch_finalized",runtime.batch_finalized},
             {"batch_barriers",runtime.batch_barriers},{"single_replayed",runtime.single_replayed},{"maximum_batch_edges",runtime.maximum_batch_edges},
             {"published_ticket",runtime.published_ticket},

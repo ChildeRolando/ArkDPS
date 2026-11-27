@@ -201,6 +201,10 @@ def sanitize_native_async_capture(data, *, native=None, identity=None):
         return unavailable('invalid_numbers')
     result = dict(schema=1, version=1, available=True, pid=bound[0], process_created_filetime=bound[1])
     result.update((key, data[key]) for key in numbers + booleans)
+    if 'planned_hp_boundary_edges' in data:
+        if not integer(data['planned_hp_boundary_edges'], data['processed_ticket']):
+            return unavailable('invalid_numbers')
+        result['planned_hp_boundary_edges'] = data['planned_hp_boundary_edges']
     lanes = data.get('lane_metrics')
     if type(lanes) is not list:
         return unavailable('invalid_lanes')

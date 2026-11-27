@@ -20,6 +20,7 @@ def main():
     p.add_argument('--pause-ms', type=int, default=0)
     p.add_argument('--pause-at-ms', type=int, default=1000)
     p.add_argument('--pub-every', type=int, default=1000)
+    p.add_argument('--light', action='store_true')
     a = p.parse_args()
     a.output.mkdir(parents=True, exist_ok=True)
     digest = lambda b: hashlib.sha256(b).hexdigest()
@@ -28,11 +29,11 @@ def main():
     for name, value in build['source_sha256'].items():
         assert digest((ROOT/name).read_bytes()) == value, ('compiled source drift', name)
     script = a.output/'paced.js'
-    source = engine_bundle(a.count, True, pub_every=a.pub_every, paced={
+    source = engine_bundle(a.count, True, pub_every=a.pub_every, light=a.light, paced={
         'rate': a.rate, 'pause_ms': a.pause_ms, 'pause_at_ms': a.pause_at_ms})
     script.write_text(source, encoding='utf-8')
     run = subprocess.run([str(a.binary.resolve()), str(script.resolve())], cwd=ROOT,
-                         capture_output=True, text=True, timeout=70)
+                         capture_output=True, text=True, timeout=100)
     (a.output/'stdout.json').write_text(run.stdout, encoding='utf-8')
     (a.output/'stderr.log').write_text(run.stderr, encoding='utf-8')
     assert run.returncode == 0, (run.returncode, run.stderr)
@@ -56,9 +57,16 @@ def main():
     if complete:
         assert report['raw_reserved'] == report['raw_produced_edges'] == 2*a.count
         assert report['processed_ticket'] == report['closed_ticket'] == report['published_ticket'] == 2*a.count
-        assert report['native_hp_io_issued'] == 2*a.count
+        if a.light:
+            assert report['native_hp_io_issued'] == 0
+            publications = (a.count + a.pub_every - 1)//a.pub_every
+            assert report['planned_hp_edges'] == 2*a.count - publications
+            assert events == []  # Explicit product policy, not queue loss.
+        else:
+            assert report['native_hp_io_issued'] == 2*a.count
         assert result['source_active'] == 0 and result['source_error'] is None and result['unknown'] is False
-        assert events[0]['hp_before'] == 100000 and events[-1]['hp_after'] == 100000+a.count
+        if not a.light:
+            assert events[0]['hp_before'] == 100000 and events[-1]['hp_after'] == 100000+a.count
     supplied_rate = report['produced_setters']*1000/report['produce_ms']
     duration_target = a.count/a.rate*1000
     # OS sleep jitter is visible as max_pacing_lateness_ns. A slow source never
@@ -68,6 +76,7 @@ def main():
         target = target and report['pause_observed'] and 0 <= report['catchup_ms'] <= 2500
     receipt = {'scope': 'paced owned producer / actual engine capture-queue-prepare-finish-drain / shared production JS',
                'excluded': ['game', 'detours', 'assembly ingress', 'IPC', 'FPS', 'per-fact p99 publication acceptance'],
+               'hp_policy': 'snapshots' if a.light else 'events',
                'build_identity': build, 'bundle_sha256': digest(source.encode()),
                'event_sha256': digest(json.dumps(events, separators=(',', ':'), ensure_ascii=False).encode()),
                'event_count': len(events), 'supplied_rate': supplied_rate,

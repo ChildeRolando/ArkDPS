@@ -32,6 +32,7 @@ struct InvocationState {
     void* hook = nullptr;
     bool apply_modifier=false, buff_damage=false, hp_ignored=false;
     bool hp_before_valid=false, hp_exact_enemy=false, hp_nested_dirty=false;
+    bool planned_hp_omission=false;
     std::uint64_t hp_before=0;
     std::uint32_t hp_uid=0;
     std::uint64_t id = 0, parent = 0, mode_epoch = 0;
@@ -46,6 +47,9 @@ struct RecordHeader {
     std::uint64_t publication_request = 0, mode_epoch = 0, scope_mode_epoch = 0;
     std::uint64_t configuration_id=0, scope_revision=0, publication_revision=0, cold_revision=0;
     bool scope_unavailable=true, publication_captured=false, projection_candidate=false, capture_concurrent=false;
+    // Uses existing header padding. Planned telemetry omission is not a gap;
+    // tickets, topology, activity and publication fences remain complete.
+    bool planned_hp_omission=false;
     std::uintptr_t return_address = 0;
     std::array<std::uint64_t, 16> args{};
     std::uint32_t hook_id = 0, thread_id = 0, lane = 0, depth = 0;

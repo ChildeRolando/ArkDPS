@@ -450,14 +450,15 @@ def _observed_pool(row):
     return (floor, True) if floor > (pool or 0) else (pool, False)
 
 
-def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
+def enemy_totals(rows, planned=None, *, entered_coverage_complete=True, recovery_available=True):
     """Total confirmed entrants and current HP, alongside the stage estimate."""
     entered = [row for row in rows if row['lifecycle'] in ENTERED_LIFECYCLES
                and not row.get('entry_inferred')]
     unknown_lifecycle_count = sum(row['alive'] is None for row in entered)
     observed_pool = [_observed_pool(row) for row in entered]
     observed_total = sum(hp for hp, _ in observed_pool if hp is not None)
-    recovered_hp = sum(_finite(row.get('recovered_hp')) for row in entered)
+    recovered_hp = (sum(_finite(row.get('recovered_hp')) for row in entered)
+                    if recovery_available else None)
     remaining = [_finite(row.get('hp'), None) for row in entered if row['alive']]
     remaining_complete = (bool(entered) and not unknown_lifecycle_count
                           and all(hp is not None for hp in remaining))
@@ -525,7 +526,8 @@ def enemy_totals(rows, planned=None, *, entered_coverage_complete=True):
         'entered_total_hp': observed_total,
         'observed_total_hp': observed_total,
         'recovered_hp': recovered_hp,
-        'damage_capacity_with_recovery': observed_total + recovered_hp,
+        'damage_capacity_with_recovery': (observed_total + recovered_hp if recovery_available else None),
+        'recovery_available': recovery_available,
         'stage_total_hp_estimate': max(adjusted_planned_total, observed_total),
         'stage_total_hp_complete': stage_complete,
         'remaining_hp': sum(max(0.0, hp) for hp in remaining if hp is not None),
@@ -547,7 +549,8 @@ class EnemyTimeline:
         self.points = []
 
     def add(self, game_time, rows, our_effective_damage, planned=None, *,
-            replace_current=False, entered_coverage_complete=True, damage_complete=True):
+            replace_current=False, entered_coverage_complete=True, damage_complete=True,
+            recovery_available=True):
         if not isinstance(game_time, (int, float)) or isinstance(game_time, bool):
             return None
         if not math.isfinite(game_time):
@@ -559,13 +562,15 @@ class EnemyTimeline:
         if last_time is not None and (game_time < last_time
                                      or (game_time == last_time and not replace_current)):
             return None
-        totals = enemy_totals(rows, planned, entered_coverage_complete=entered_coverage_complete)
+        totals = enemy_totals(rows, planned, entered_coverage_complete=entered_coverage_complete,
+                              recovery_available=recovery_available)
         point = {
             'game_time': float(game_time),
             'entered_total_hp': totals['entered_total_hp'],
             'observed_total_hp': totals['observed_total_hp'],
             'recovered_hp': totals['recovered_hp'],
             'damage_capacity_with_recovery': totals['damage_capacity_with_recovery'],
+            'recovery_available': recovery_available,
             'planned_count': totals['planned_count'],
             'planned_total_hp': totals['planned_total_hp'],
             'planned_complete': totals['planned_complete'],
@@ -714,6 +719,7 @@ class EnemyTelemetry:
         self._entry_events_start_frame = None
         self._phase_data = None
         self._stream_complete = None
+        self._hp_events = False  # Snapshots alone never certify recovery totals.
         self._stream_start_frame = None
         self._last_sequence = -1
         self._snapshot_frame = None
@@ -1000,6 +1006,8 @@ class EnemyTelemetry:
         return row
 
     def _record_recovery(self, row, event, key, hp, max_hp):
+        if not self._hp_events:
+            return row
         before = _finite(event.get('hp_before'), None)
         spawn_frame = row.get('spawn_frame')
         event_key = (event['frame'], event['sequence'])
@@ -1089,6 +1097,7 @@ class EnemyTelemetry:
             if self._stream_complete is not None:
                 self._stream_complete = False
             return
+        self._hp_events = observation.get('hp_mode', 'events') == 'events'
         start_frame = observation['start_frame']
         if self._stream_start_frame != start_frame:
             self._seeded = False
@@ -1211,7 +1220,8 @@ class EnemyTelemetry:
                             and (stream_ready if self._stream_complete is not None
                                  else self._entry_events_complete is True))
         planned = self._current_plan(current)
-        totals = enemy_totals(current, planned, entered_coverage_complete=entered_coverage)
+        totals = enemy_totals(current, planned, entered_coverage_complete=entered_coverage,
+                              recovery_available=self._hp_events)
         if self._stream_complete and not stream_ready:
             totals.update(remaining_hp_complete=False, hp_complete=False)
         if game_time is not None and (not self._stream_complete or stream_ready):
@@ -1251,7 +1261,7 @@ class EnemyTelemetry:
         )
 
     @staticmethod
-    def _with_snapshot_details(current, observed, *, keep_live, older):
+    def _with_snapshot_details(current, observed, *, keep_live, older, refresh_hp=False):
         merged = dict(current)
         merged.update({name: value for name, value in observed.items()
                        if value is not None and name not in _LIVE_FIELDS
@@ -1265,6 +1275,8 @@ class EnemyTelemetry:
                 merged['hp'] = observed['hp']
         elif (current['hp'] is None and current['lifecycle'] == observed['lifecycle']
               and current['alive'] == observed['alive']):
+            merged['hp'] = observed['hp']
+        if refresh_hp and not older:
             merged['hp'] = observed['hp']
         if observed['hp_known'] and not older:
             merged = _observe_max_hp(merged, observed['hp'], observed['max_hp'], seed=True)
@@ -1287,11 +1299,12 @@ class EnemyTelemetry:
                 current_event = self._event_frames.get(key, -1) >= self._stream_start_frame
                 keep_live = (key in self._finished or calibration or current_frame >= frame
                              or (self._stream_complete and current_event))
+                refresh_hp = not self._hp_events and key not in self._finished and frame > current_frame
                 row = self._with_snapshot_details(current, row, keep_live=keep_live,
-                                                  older=frame < current_frame)
+                                                  older=frame < current_frame, refresh_hp=refresh_hp)
                 if row['hp_known'] and row['alive'] and frame >= current_frame:
                     self._phase_calibration.discard(key)
-                if not keep_live:
+                if not keep_live or refresh_hp:
                     self._row_frames[key] = frame
             elif key is not None:
                 self._row_frames[key] = frame
@@ -1412,7 +1425,8 @@ class EnemyTelemetry:
                         counted.add(uid)
             self.timeline.add(game_time, rows, observed if complete or observed > 0 else None,
                               planned, replace_current=account_scoped or self._stream_complete is True,
-                              entered_coverage_complete=entered_coverage, damage_complete=complete)
+                              entered_coverage_complete=entered_coverage, damage_complete=complete,
+                              recovery_available=self._hp_events)
             return
         our_damage = _finite(our_damage, None)
         if self._damage_baseline is None and our_damage is not None:
@@ -1424,7 +1438,8 @@ class EnemyTelemetry:
                     if self._damage_baseline is not None and our_damage is not None else None)
         self.timeline.add(game_time, rows, adjusted, planned,
                           replace_current=self._stream_complete is True,
-                          entered_coverage_complete=entered_coverage)
+                          entered_coverage_complete=entered_coverage,
+                          recovery_available=self._hp_events)
 
     def sample(self, *, game_time, our_damage, enemy_entry=None, enemy_phases=None,
                enemy_state=None, enemy_damage=None, frame=None):
@@ -1435,7 +1450,7 @@ class EnemyTelemetry:
         if not self.ready and not self._bootstrap():
             return self._state(self._status, error=self.error, frame=frame)
         now = self.clock()
-        calibration = self._stream_complete and self._seeded
+        calibration = self._hp_events and self._stream_complete and self._seeded
         if calibration:
             if (now - self._last_poll >= self.calibration_interval
                     and self._calibration_pending()):

@@ -18,6 +18,11 @@ from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
 
 def apply_event_quality(statistics, payload, enemy_damage_quality, *, baseline_frame, initial_drain):
     """Apply the existing event-family quality rules to one scoped core."""
+    if 'enemy_hp_mode' in payload:
+        mode = payload['enemy_hp_mode']
+        if mode not in ('events', 'snapshots'):
+            raise ValueError('unsupported enemy HP collection mode')
+        statistics.enemy_hp_mode = mode
     for source in payload.get('unknown_sources') or ():
         statistics.mark_overkill_unknown(source)
     for source in payload.get('engagement_unknown_sources') or ():

@@ -118,6 +118,7 @@ class Statistics:
         self.enemy_phases = {}
         self.enemy_state_start_frame = None
         self.enemy_state_incomplete = False
+        self.enemy_hp_mode = 'events'  # Historical envelopes had the full stream.
         self.enemy_state_events = []
         self.enemy_state_identities = {}
         self.enemy_damage = None
@@ -2116,6 +2117,7 @@ class Statistics:
                     snapshot['enemy_entry_attributes'] = dict(snapshot['enemy_entry_attributes'])
                 events.append(snapshot)
             result['enemy_state'] = {
+                **({'hp_mode': self.enemy_hp_mode} if self.enemy_hp_mode != 'events' else {}),
                 'complete': not (self.enemy_state_incomplete or self.event_coverage_broken),
                 'start_frame': self.enemy_state_start_frame,
                 'events': events,

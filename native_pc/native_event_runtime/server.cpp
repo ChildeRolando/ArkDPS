@@ -317,12 +317,19 @@ std::string safe_diagnostic(const char* message, const char* phase) {
     // Only numeric, bounded replay context crosses this privacy boundary.
     static const std::regex replay_gap(R"(^native_replay_gap:v1,h=[0-9]{1,5},e=[01],t=[0-9]{1,20},r=[0-9]{1,5},p=[0-9]{1,5},f=(-1|[0-9]{1,5}),g=[0-9]{1,2},m=[0-9]{1,7},k=[0-9]{1,2}(\.[0-9]{1,2}){0,15},q=(0|[12]:[0-9]{1,6}(\.[12]:[0-9]{1,6}){0,2})$)");
     if(first.size()<=256 && std::regex_match(first,replay_gap))detail=first;
+    for(unsigned code=0;code<=32;++code){
+        const auto prefix=std::string("native capture failed: code=")+std::to_string(code)+"; ";
+        const auto candidate=first.rfind(type+": ",0)==0 ? first.substr(type.size()+2) : first;
+        if(candidate.rfind(prefix,0)!=0)continue;
+        const auto suffix=candidate.substr(prefix.size());
+        if(suffix.size()<=256&&std::regex_match(suffix,replay_gap))detail=prefix+suffix;
+    }
     if (type == "TypeError" && first.find("not a function") != std::string::npos)
         detail = "TypeError: not a function";
     std::string result = std::string("native runtime ") + phase + " failed; error_type=" + type;
     if (!detail.empty()) result += "; " + detail;
 
-    const auto limit=detail.rfind("native_replay_gap:v1,",0)==0?384u:256u;
+    const auto limit=detail.find("native_replay_gap:v1,")!=std::string::npos?384u:256u;
     if (result.size() > limit) result.resize(limit);
     return result;
 }

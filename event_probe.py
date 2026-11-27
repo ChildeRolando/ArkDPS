@@ -596,7 +596,7 @@ _ROUND_START_QUALITY_OPTIONAL = ('boss_damage_ready', 'boss_damage_unknown', 'da
     'mitigation_error',
     'mitigation_diagnostics', 'enemy_entry_ready', 'enemy_entry_unknown', 'enemy_phase_ready',
     'enemy_phase_unknown', 'enemy_state_ready', 'enemy_state_unknown', 'enemy_state_error',
-    'enemy_max_hp_ready', 'enemy_max_hp_error', 'stage_object_finish_error', 'character_lifecycle_ready')
+    'enemy_max_hp_ready', 'enemy_max_hp_error', 'stage_object_finish_error', 'character_lifecycle_ready', 'enemy_hp_mode')
 
 
 def _round_start_integer(value):

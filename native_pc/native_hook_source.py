@@ -932,6 +932,10 @@ class NativeHookEventProbe:
                                 replay_checkpoint=values[4], replay_field_id=values[5],
                                 replay_gap_count=values[6], metadata_read_size=values[7],
                                 replay_reason_codes=replay_gap[9], replay_script_lines=replay_gap[10])
+                            combined = re.search(r'(?:^|; )native capture failed: code=([0-9]); '
+                                                 r'(?=native_replay_gap:v1,)', str(exc))
+                            if combined:
+                                diagnostic['native_failure_code'] = int(combined[1])
                     self._timing_sink('native_hook_request_failed', diagnostic)
                 except Exception:
                     pass  # Failure reporting cannot replace the transport error.

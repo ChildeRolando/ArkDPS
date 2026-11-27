@@ -1,8 +1,8 @@
 "use strict";
 const assert=require('assert'),path=require('path'),vm=require('vm');
 const {fixture}=require('./native_pc_frida_probe_fixture.js'),{ownedFields}=require('./native_pc_owned_field_fixture.js');
-function run(mode,owned=false,raw=false){
- const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),settlement:true,enemyHpState:true});
+function run(mode,owned=false,raw=false,light=false,platform='native_pc'){
+ const f=fixture({platform,sourcePath:path.resolve(platform==='native_pc'?'event_probe_native_pc.js':'event_probe_android2791.js'),settlement:true,enemyHpState:true,globals:{arkdpsCollectEnemyHpChanges:!light}});
  f.write(f.enemyClass.add(0x58),f.entity);f.write(f.entity.add(0x58),f.bObject);f.write(f.bObject.add(0x58),f.ptr(0));
  f.context.rpc.exports.mark();f.clock(30,4294967296n);
  const source=f.unit('char_147_shining',10),target=f.unit('enemy_test',12),mod=f.modifier(source,target,40,-40,1);
@@ -73,5 +73,16 @@ for(const mode of ['positive','overkill'])assert.deepEqual(run(mode,true),run(mo
 for(const mode of ['changed-guard','changed-entry'])assert(!run(mode,true).some(e=>e.settlement_complete));
 const shield=run('shield');assert.equal(shield.length,1);assert.equal(shield[0].settlement_complete,true,JSON.stringify(shield));assert.equal(shield[0].amount,30);assert.equal(shield[0].shield_absorbed,10);
 const existing=run('target-and-writer');assert.equal(existing.length,1);assert.equal(existing[0].settlement_complete,true);assert.equal(existing[0].proof.evidence_method,'Unit.OnTakeDamage+Entity.ApplyModifier');
+// Product policy uses the same settlement owner and every original refusal.
+for(const platform of ['native_pc','mumu']){
+ for(const mode of ['positive','overkill','shield','target-and-writer']){
+  const light=run(mode,false,true,true,platform).batch.events;
+  const retained=run(mode,false,true,false,platform).batch.events.filter(e=>e.kind!=='enemy_hp');
+  // The deliberately uncollected HP event has no business sequence. Verify
+  // the entire retained stream with its newly contiguous sequence, not totals.
+  assert.deepEqual(light,retained.map((e,i)=>({...e,sequence:i+1})),platform+':'+mode);
+ }
+ for(const mode of ['no-writer','multiple-writer','source-uid','foreign-nested','unknown-nested','unmatched-delta','uid-change','cross-frame','same-name-other-uid','cancel','shield-unknown','max-hp-dirty','other-thread','healing-write','nested-normal','nested-direct','nested-transient-uid','cross-thread-foreign','cross-thread-unknown'])assert(!run(mode,false,false,true,platform).some(e=>e.settlement_complete),platform+':'+mode);
+}
 console.log(JSON.stringify({positive:run('positive',true,true),overkill:run('overkill',true,true)}));
 

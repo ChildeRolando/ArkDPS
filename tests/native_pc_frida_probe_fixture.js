@@ -298,6 +298,9 @@ function fixture({platform = 'native_pc', sourcePath = process.argv[2],
   const module = {name: platform === 'native_pc' ? 'GameAssembly.dll' : 'libil2cpp.so',
     base: ptr(0x1000), getExportByName: name => name};
   const context = {
+    // Preserve the historical full-event contract in existing reference tests.
+    // Lightweight production cases explicitly override this with false.
+    arkdpsCollectEnemyHpChanges: true,
     ...(platform==='native_pc'?{}:{arkdpsAndroidBattleLayout:{...LEGACY_ANDROID_FIXTURE_LAYOUT}}),
     arkdpsTraceHpContext: traceHpContext,
     arkdpsTraceNestedParent: traceNestedParent,

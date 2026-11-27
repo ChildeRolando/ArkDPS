@@ -978,3 +978,21 @@ def test_native_failure_code_is_recorded_without_debug(suffix, accepted):
     assert 'private' not in repr(records)
     if accepted:
         assert records[0][1]['native_failure_code'] == 4
+
+
+def test_combined_native_fault_and_replay_gap_keep_both_bounded_causes():
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; '
+        'native capture failed: code=6; native_replay_gap:v1,h=2,e=1,t=17,r=3,p=0,f=-1,g=1,m=8,k=1,q=0')
+    def request(*_args, **_kwargs):
+        raise failure
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure and probe.status == ObserverStatus.FAILED
+    assert records[0][1]['native_failure_code'] == 6
+    assert records[0][1]['code'] == 'native_replay_gap'
+    assert records[0][1]['replay_ticket'] == 17

@@ -63,7 +63,7 @@ struct CompiledPlan {
     std::array<std::uint16_t,14> terminal_retained_fields{};
     bool terminal_destroy=false;
     bool apply_modifier=false, buff_damage=false, parent_checkpoint_fields=false;
-    bool hp_profile=false, hp_dirty=false, hp_normal=false, hp_defer_scope=false;
+    bool hp_profile=false, hp_dirty=false, hp_normal=false, hp_defer_scope=false, snapshot_hp=false;
     std::uintptr_t hp_enemy_class=0;
     std::array<std::uintptr_t,16> hp_non_enemy_classes{};
     std::uint8_t hp_non_enemy_count=0;
@@ -285,6 +285,7 @@ inline CompiledPlan compile_plan(const nlohmann::json& source, std::uintptr_t ho
             result.hp_non_enemy_classes[result.hp_non_enemy_count++]=klass;
         }
         result.hp_normal=filter.at("normal_setter").get<bool>();
+        result.snapshot_hp=filter.value("snapshot_hp",false);
         result.hp_defer_scope=filter.value("defer_entry_scope",nlohmann::json(false)).get<bool>();
         if (result.hp_defer_scope && (!result.hp_normal || result.hp_dirty))
             throw std::runtime_error("deferred HP scope is not a normal coalesced setter");

@@ -21,6 +21,12 @@ inline DirectHpReason direct_hp_reason(const CompiledPlan& plan,const RecordHead
 inline bool publication_claimable(std::uint64_t request,unsigned attempts,unsigned active) noexcept {
     return request && attempts<2 && active==1;
 }
+// A physical root with no other active callback cannot begin inside a damage
+// settlement. Keep its transport boundaries so later nested callbacks and
+// concurrent activity remain visible; do not infer a C++ business scope.
+inline bool omit_hp_telemetry(const CompiledPlan& plan,unsigned active,unsigned depth) noexcept {
+    return plan.snapshot_hp && plan.hp_profile && !plan.hp_dirty && active==1 && depth==1;
+}
 
 // A failed candidate can be replayed after its host mark deadline. Keep the
 // cold retry obligation across later request IDs; a new deadline is not proof
@@ -51,11 +57,17 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
                                 Snapshot& snapshot, RecordHeader& header, Lane* lane=nullptr, bool request_cold=false) noexcept {
     capture_begin(snapshot,phase,context,max_bytes,max_reads);
     InvocationState* invocation=lane && lane->depth ? &lane->calls[lane->depth-1] : nullptr;
+    if(invocation && phase==Phase::entry)
+        invocation->planned_hp_omission=omit_hp_telemetry(base,header.active,header.depth);
+    header.planned_hp_omission=invocation && invocation->planned_hp_omission;
     if(invocation && phase==Phase::entry) {
         // A lane stack slot is reused by unrelated hooks. HP filtering belongs
         // to this invocation, never the next callback that occupies the slot.
         invocation->hp_ignored=false;invocation->hp_before_valid=false;
         invocation->hp_exact_enemy=false;invocation->hp_nested_dirty=false;
+    }
+    if(header.planned_hp_omission && !header.publication_request) {
+        capture_finalize(snapshot);return;
     }
     const auto hp_value=[&](unsigned kind,std::size_t bytes) noexcept -> const std::byte* {
         for (unsigned i=0;i<snapshot.field_count;++i) {
@@ -126,7 +138,7 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
     const auto base_stage=[&](unsigned stage) noexcept {
         if(publication_only&&stage==0)return;
         for (std::uint16_t i=0;i<base.plan->field_count;++i)
-            if (base.field_stage[i]==stage && !(nochange && base.hp_field_kind[i]==5)
+            if (base.field_stage[i]==stage && !((nochange || (base.snapshot_hp&&!base.hp_dirty)) && base.hp_field_kind[i]==5)
                 && !(phase==Phase::leave && base.hp_profile && invocation && base.hp_field_kind[i]==4) && !(phase==Phase::entry && base.hp_profile && invocation
                 && (base.hp_field_kind[i]==1 || base.hp_field_kind[i]==2 || (hp_id_captured&&base.hp_field_kind[i]==6))))
                 capture_append(*base.plan,phase,context,reader,user,snapshot,i,i+1);
@@ -160,7 +172,8 @@ inline void capture_scope_point(const CompiledPlan& base, Phase phase,
     // closing HP. time(false,false) still consumes both independent clocks.
     const bool deferred_open_scope=phase==Phase::entry && base.hp_defer_scope && invocation
         && invocation->hp_exact_enemy && !header.publication_request;
-    const CaptureGraph* scope=!cold && !(nochange && base.hp_defer_scope) && !deferred_open_scope && !terminal_leave && config && config->scope && config->scope->available
+    const bool snapshot_only_scope=base.snapshot_hp&&!base.hp_dirty&&!header.publication_request;
+    const CaptureGraph* scope=!cold && !snapshot_only_scope && !(nochange && base.hp_defer_scope) && !deferred_open_scope && !terminal_leave && config && config->scope && config->scope->available
         ? config->scope.get() : nullptr;
     Context graph_context=context;
     if (scope) {
