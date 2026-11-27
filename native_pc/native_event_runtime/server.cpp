@@ -485,6 +485,10 @@ DWORD WINAPI worker(void* argument) {
                         auto failure=Json::parse(arkdps::queue_failure_diagnostic());
                         if (failure.is_object()) response["queue_failure"]=std::move(failure);
                     } catch (...) {} // Diagnostics cannot change the original failure.
+                    try {
+                        auto failure=Json::parse(arkdps::publication_failure_diagnostic());
+                        if (failure.is_object()) response["publication_failure"]=std::move(failure);
+                    } catch (...) {}
                 }
                 write_line(pipe.value, response);
                 break;

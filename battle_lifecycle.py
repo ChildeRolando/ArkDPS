@@ -632,6 +632,7 @@ class BattleFeed:
         self._next_android_presence = float('-inf')
         self._android_presence_seq = 0
         self._pending_scope = None
+        self._sampling_transaction = None
         self._acquiring_cursor = None
         self._emitted_cursor = None
 
@@ -853,9 +854,33 @@ class BattleFeed:
         except Exception as exc:
             return {'error': str(exc)}
 
+    def _sampling_owner(self, collector, observer):
+        from collector import collector_process
+        from event_observer import ObserverStatus
+        process = collector_process(collector)
+        if (observer is None or getattr(observer, 'status', None) != ObserverStatus.READY
+                or getattr(observer, 'collector', None) is not collector
+                or not getattr(observer, '_sampling_supported', False)
+                or process.pid != process.process_instance[0]
+                or process.process_alive() is not True):
+            return None
+        return (observer, probe_cursor_lifetime(observer), tuple(process.process_instance),
+                getattr(collector.diagnostics, 'version_actual', None),
+                tuple(sorted(observer._mark_options().items())),
+                observer.capture_paused, observer._capture_control_revision, observer._capture_control_generation)
+
+    def _cancel_sampling_transaction(self):
+        transaction, self._sampling_transaction = self._sampling_transaction, None
+        if transaction is not None:
+            transaction['observer'].cancel_sampling_confirmation()
+
     def _read_pair(self, collector, before, observer=None, opening=None, *, capture=None):
+        transaction = self._sampling_transaction
         guarded_pair = getattr(collector, 'read_guarded_pair', None)
-        if guarded_pair is not None:
+        if transaction is not None:
+            sample, roster = deepcopy(transaction['sample']), deepcopy(transaction['roster'])
+            after, events = before, None
+        elif guarded_pair is not None:
             sample, roster = guarded_pair(before)
             after, events = before, None
         else:
@@ -886,7 +911,23 @@ class BattleFeed:
         if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
             raise FrameMismatch('游戏时间无效')
         if opening is not None and observer is not None:
-            events = self._guarded_events(observer, opening, sample, capture)
+            try:
+                events = self._guarded_events(observer, opening, sample, capture)
+            except CaptureRetry:
+                if getattr(observer, '_confirm_sample_request', None) is not None:
+                    owner = self._sampling_owner(collector, observer)
+                    if owner is not None:
+                        self._sampling_transaction = dict(observer=observer, owner=owner,
+                            started=transaction['started'] if transaction is not None else time.monotonic(),
+                            before=deepcopy(before), opening=opening,
+                            sample=deepcopy(sample), roster=deepcopy(roster))
+                else:
+                    self._cancel_sampling_transaction()
+                raise
+            except Exception:
+                self._cancel_sampling_transaction()
+                raise
+            self._sampling_transaction = None
             if 'autochess_snapshot_anchor' in sample:
                 roster = RosterSnapshot(sample['frame'])
         if events and 'before' in events and 'after' in events:
@@ -1019,12 +1060,23 @@ class BattleFeed:
         FINISHED state, finish transition, or a new guarded identity ends a
         battle. No polling timeout, empty unit list or transport error does.
         """
+        transaction = self._sampling_transaction
+        if transaction is not None:
+            try:
+                valid = (time.monotonic() - transaction['started'] <= 20.0
+                         and self._sampling_owner(collector, observer) == transaction['owner'])
+            except Exception:
+                self._cancel_sampling_transaction()
+                raise
+            if not valid:
+                self._cancel_sampling_transaction()
+                transaction = None
         self._acquiring_cursor = observer, probe_cursor_lifetime(observer)
         self.current_lifecycle = None
         self.autochess_scene = None
         self.autochess_exited = False
-        opening = None
-        if getattr(collector, 'read_guarded_pair', None) is not None and observer is not None:
+        opening = transaction['opening'] if transaction is not None else None
+        if transaction is None and getattr(collector, 'read_guarded_pair', None) is not None and observer is not None:
             # The native backend captures the pair in read_lifecycle(). A mark
             # taken while retrieving its cached result would be too late.
             try:
@@ -1036,8 +1088,8 @@ class BattleFeed:
         identity_mark = (native_identity_sampling_mark(observer, opening[0])
                          if opening is not None and callable(read_with_identity) else None)
         try:
-            before = (read_with_identity(identity_mark) if identity_mark is not None
-                      else collector.read_lifecycle())
+            before = (deepcopy(transaction['before']) if transaction is not None else
+                      read_with_identity(identity_mark) if identity_mark is not None else collector.read_lifecycle())
         except NativeClockBusy as exc:
             # Both boundaries failed before any observation was consumed. Keep
             # the earlier opening failure so a typed native busy cannot hide a
@@ -2243,6 +2295,7 @@ class BattleRuntime:
         if (accepted is not None and accepted[1] == self.sessions.generation
                 and accepted[0] is observer and len(accepted) > 2
                 and probe_cursor_lifetime(observer) is not accepted[2]):
+            self.feed._cancel_sampling_transaction()
             check_cursor_lifetime(observer, accepted[2], phase='accepted_before_acquisition')
         if (accepted is not None and accepted[1] == self.sessions.generation
                 and (len(accepted) < 3 or probe_cursor_lifetime(accepted[0]) is accepted[2])):

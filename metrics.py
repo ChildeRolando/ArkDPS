@@ -197,6 +197,29 @@ def sanitize_native_queue_failure(data):
                 private_queue={key: private[key] for key in private_keys}, spill={key: spill[key] for key in spill_keys})
 
 
+def sanitize_native_publication_failure(data):
+    """Finite first-failure branch and existing owner counters, never values/text."""
+    counts = ('acknowledged', 'read_through', 'store_sequence', 'store_event_count',
+        'store_retained_bytes', 'published_through', 'marks_count', 'metadata_bytes',
+        'max_events', 'max_bytes', 'max_marks')
+    if (type(data) is not dict or type(data.get('version')) is not int or data['version'] != 1
+            or type(data.get('failure_code')) is not int or data['failure_code'] != 9
+            or type(data.get('reason_code')) is not int or data['reason_code'] not in (*range(23), 255)
+            or type(data.get('origin')) is not int or data['origin'] not in (1, 2, 3, 4)
+            or type(data.get('sampling_stage')) is not int or not 0 <= data['sampling_stage'] <= 7
+            or type(data.get('store_state_available')) is not bool
+            or any(type(data.get(key)) is not int or not 0 <= data[key] <= 2**53-1 for key in counts)):
+        return None
+    if data['store_state_available']:
+        if (not data['acknowledged'] <= data['read_through'] <= data['store_sequence']
+                or data['store_event_count'] != data['store_sequence'] - data['acknowledged']):
+            return None
+    elif any(data[key] for key in counts[:5]):
+        return None
+    return {key: data[key] for key in ('version', 'failure_code', 'reason_code', 'origin',
+        'sampling_stage', 'store_state_available', *counts)}
+
+
 def sanitize_native_async_capture(data, *, native=None, identity=None):
     """Only fixed-schema bounded diagnostics; invalid evidence stays unavailable.
 

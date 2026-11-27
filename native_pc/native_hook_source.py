@@ -440,17 +440,25 @@ class NativePipe:
                 except ValueError as exc:
                     raise RuntimeError('native observer returned invalid JSON') from exc
                 if (not isinstance(reply, dict) or type(reply.get('id')) is not int
-                        or reply['id'] != self._id or set(reply) - {'id', 'result', 'error', 'queue_failure'}
-                        or ('queue_failure' in reply and (not reply.get('error') or 'result' in reply))):
+                        or reply['id'] != self._id or set(reply) - {'id', 'result', 'error', 'queue_failure', 'publication_failure'}
+                        or (any(key in reply for key in ('queue_failure', 'publication_failure'))
+                            and (not reply.get('error') or 'result' in reply))):
                     raise RuntimeError('native observer response ID or envelope mismatch')
                 if reply.get('error'):
                     failure = None
+                    publication_failure = None
                     if 'queue_failure' in reply:
                         from metrics import sanitize_native_queue_failure
                         failure = sanitize_native_queue_failure(reply['queue_failure'])
-                    if failure is not None:
+                    if 'publication_failure' in reply:
+                        from metrics import sanitize_native_publication_failure
+                        publication_failure = sanitize_native_publication_failure(reply['publication_failure'])
+                    if failure is not None or publication_failure is not None:
                         error = RuntimeError(str(reply['error']))
-                        error.queue_failure = failure
+                        if failure is not None:
+                            error.queue_failure = failure
+                        if publication_failure is not None:
+                            error.publication_failure = publication_failure
                         raise error
                     raise RuntimeError(str(reply['error']))
                 if not isinstance(reply.get('result'), dict):
@@ -808,6 +816,7 @@ class NativeHookEventProbe:
         self._sample_request = None
         self._sample_options = None
         self._sampling_anchor = None
+        self._confirm_sample_request = None
         self._pressure_since = None
         self._pressure_next = 0.0
         self._pressure_reported = False
@@ -1058,6 +1067,11 @@ class NativeHookEventProbe:
                         queue_failure = sanitize_native_queue_failure(exc.queue_failure)
                         if queue_failure is not None:
                             diagnostic['queue_failure'] = queue_failure
+                    if getattr(exc, 'publication_failure', None) is not None:
+                        from metrics import sanitize_native_publication_failure
+                        publication_failure = sanitize_native_publication_failure(exc.publication_failure)
+                        if publication_failure is not None:
+                            diagnostic['publication_failure'] = publication_failure
                     self._timing_sink('native_hook_request_failed', diagnostic)
                 except Exception:
                     pass  # Failure reporting cannot replace the transport error.
@@ -1098,10 +1112,14 @@ class NativeHookEventProbe:
                         or re.fullmatch(r'[1-9][0-9]{0,19}', request) is None
                         or int(request) > 0xffffffffffffffff):
                     raise RuntimeError('PC 采样请求身份无效')
+                resumable = (raw.get('retry')
+                    and raw.get('mark_retry_reason') != 'native_publication_token_expired')
+                if arguments.get('sampling') == 'confirm':
+                    self._confirm_sample_request = request if resumable else None
                 if arguments.get('sampling') == 'fresh':
                     # Binding can yield before returning to mark(). Keep the
                     # still-unfulfilled producer request across that retry.
-                    self._sample_request = request if raw.get('retry') else None
+                    self._sample_request = request if resumable else None
             result = self.binding.bind(operation, raw)
             if operation in ('mark', 'read') and not any(result.get(key) for key in ('retry', 'error', 'stopped')):
                 publication = result.get('native_publication')
@@ -1173,7 +1191,7 @@ class NativeHookEventProbe:
     def mark(self):
         options = self._mark_options()
         wire_options = self._scheduled_options(options)
-        self._sampling_anchor = None
+        self.cancel_sampling_confirmation()
         self._terminal_sample_request = None
         arguments = {}
         if self._sampling_supported:
@@ -1197,11 +1215,30 @@ class NativeHookEventProbe:
             raise RuntimeError('PC 采样确认不是当前事务的原始标记')
         check_cursor_lifetime(self, anchor[1])
         token = self._validated_publication_token(opening)
+        options = self._mark_options()
+        if tuple(sorted(options.items())) != self._sample_options:
+            self.cancel_sampling_confirmation()
+            raise ObserverReadRetry('PC confirmation mode changed')
+        arguments = {}
+        if self._confirm_sample_request is not None:
+            arguments['sample_request'] = self._confirm_sample_request
+        try:
+            result = self._request('mark', sampling='confirm', publication_token=token,
+                native_publication_version=1, **arguments, **self._scheduled_options(options))
+        except ObserverReadRetry:
+            if self._confirm_sample_request is None:
+                self.cancel_sampling_confirmation()
+            raise
+        except Exception:
+            self.cancel_sampling_confirmation()
+            raise
+        self.cancel_sampling_confirmation()
+        return result
+
+    def cancel_sampling_confirmation(self):
+        # Only host transaction ownership; raw records and ACK never change.
         self._sampling_anchor = None
-        # Native confirmation takes new owned evidence at the current prefix;
-        # it never waits for a future business hook or retimestamps this mark.
-        return self._request('mark', sampling='confirm', publication_token=token,
-                             native_publication_version=1, **self._scheduled_options(self._mark_options()))
+        self._confirm_sample_request = None
 
     @staticmethod
     def _validated_publication_token(result):
@@ -1263,7 +1300,8 @@ class NativeHookEventProbe:
         if identity is not None and (not isinstance(identity, str)
                 or re.fullmatch(r'[1-9][0-9]{0,19}', identity) is None or int(identity) > 2**64-1):
             raise RuntimeError('PC 终局采样请求身份无效')
-        self._terminal_sample_request = identity if raw.get('retry') else None
+        self._terminal_sample_request = (identity if raw.get('retry')
+            and raw.get('mark_retry_reason') != 'native_publication_token_expired' else None)
         if not any(raw.get(key) for key in ('retry', 'error', 'stopped')):
             self._publication_token = self._validated_publication_token(raw)
         return raw

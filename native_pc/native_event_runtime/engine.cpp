@@ -74,6 +74,7 @@ struct Runtime {
     std::uint64_t sampling_serial=0, sampling_attempts=0, sample_request=0, completed_sample_request=0, sample_mode_epoch=0;
     std::string sampling_retry_reason;
     std::string completed_sample_token, published_token, sample_kind, sample_opening_token;
+    nlohmann::json publication_failure = nullptr; // Worker-owned immutable first failure numbers.
 
     std::uint64_t published_ticket = 0;
     arkdps::capture::RecordHeader replay_header;
@@ -111,6 +112,35 @@ struct Runtime {
 // Intentionally process-lifetime: disabled hooks can still be returning through
 // their trampolines. A transport disconnect must never free those instructions.
 Runtime& state() { static auto* value = new Runtime; return *value; }
+void remember_publication_failure(Runtime& runtime,const nlohmann::json& reply,unsigned origin,unsigned stage=0) noexcept {
+    if(runtime.publication_failure.is_object())return;
+    try {
+        constexpr std::uint64_t safe=9007199254740991ULL;
+        const char* counts[]={"acknowledged","read_through","store_sequence","store_event_count","store_retained_bytes",
+            "published_through","marks_count","metadata_bytes","max_events","max_bytes","max_marks"};
+        nlohmann::json result{{"version",1},{"failure_code",9},{"reason_code",0},{"origin",origin},
+            {"sampling_stage",stage},{"store_state_available",false}};
+        for(const auto* key:counts)result[key]=0;
+        if(reply.is_object()&&reply.contains("native_publication_diagnostic")) {
+            const auto& value=reply.at("native_publication_diagnostic");
+            const auto number=[&](const char* key,std::uint64_t maximum) {
+                if(!value.contains(key)||!value.at(key).is_number_integer())return false;
+                if(value.at(key).is_number_unsigned())return value.at(key).get<std::uint64_t>()<=maximum;
+                const auto n=value.at(key).get<std::int64_t>();return n>=0&&static_cast<std::uint64_t>(n)<=maximum;
+            };
+            bool valid=value.is_object()&&number("version",1)&&value.at("version")==1
+                &&number("failure_code",9)&&value.at("failure_code")==9&&number("reason_code",255)
+                &&(value.at("reason_code")==255||(value.at("reason_code")>=1&&value.at("reason_code")<=22))
+                &&value.contains("store_state_available")&&value.at("store_state_available").is_boolean();
+            for(const auto* key:counts)valid=valid&&number(key,safe);
+            if(valid) {
+                result["reason_code"]=value.at("reason_code");result["store_state_available"]=value.at("store_state_available");
+                for(const auto* key:counts)result[key]=value.at(key);
+            }
+        }
+        runtime.publication_failure=std::move(result);
+    } catch(...) {} // Diagnostics cannot replace or downgrade the original failure.
+}
 struct EntryFrame {
     std::uint64_t rax, rcx, rdx, r8, r9, r10, hook, stack;
     std::array<std::uint8_t, 96> xmm;
@@ -914,6 +944,7 @@ void finish_replay_record(const PreparedReplay& item,JSValue answer,bool control
             const auto parsed=nlohmann::json::parse(text);
             if (!parsed.is_object() || parsed.value("native_publication_failure",false)
                 || !parsed.value("error",nlohmann::json()).is_null()) {
+                remember_publication_failure(runtime,parsed,1);
                 runtime.lanes->poison(LaneFault::publication_failure);
                 throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
             }
@@ -1657,8 +1688,10 @@ bool sample_checkpoint_impl(Runtime& r,std::uint64_t request,arkdps::capture::Re
     auto encoded=JS_JSONStringify(c,published,JS_UNDEFINED,JS_UNDEFINED);JS_FreeValue(c,published);
     if(JS_IsException(encoded))throw std::runtime_error(exception(c));
     const auto text=string(c,encoded);JS_FreeValue(c,encoded);const auto receipt=nlohmann::json::parse(text);
-    if(receipt.value("native_publication_failure",false)||!receipt.value("error",nlohmann::json()).is_null())
+    if(receipt.value("native_publication_failure",false)||!receipt.value("error",nlohmann::json()).is_null()) {
+        remember_publication_failure(r,receipt,2,stage);
         throw std::runtime_error("sampling publication failed");
+    }
     if(receipt.value("retry",false)){r.sampling_retry_reason="sampling_journal_not_ready";return false;}
     stage=6; // Exact publication certificate.
     const auto& fence=receipt.at("native_publication");
@@ -1686,8 +1719,10 @@ bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMem
     };
     try{return sample_checkpoint_impl(r,request,reader,read_user,stage);}
     catch(const nlohmann::json::exception& error) {
+        remember_publication_failure(r,nullptr,4,stage);
         throw std::runtime_error(diagnostic(error.id>=100&&error.id<=599?error.id:0));
     } catch(const std::exception& error) {
+        remember_publication_failure(r,nullptr,4,stage);
         // A native-generated owned-view ledger is already bounded. No arbitrary
         // JS/C++ error message or values cross the runtime privacy boundary.
         const std::string message=error.what();
@@ -1914,8 +1949,6 @@ std::string request_on_worker(const std::string& json,std::uint64_t legacy_minim
         };
         if(sampling=="confirm") {
             if(!command.contains("publication_token") || !command.at("publication_token").is_string())throw std::runtime_error("confirmation requires publication token");
-            const auto opening=retained(command.at("publication_token").get<std::string>());
-            if(opening.value("retry",false))return opening.dump();
         }
         const auto terminal_point=[&](const std::string& token) {
             if(token.empty()||!terminal_fence_current(runtime))return false;
@@ -1941,6 +1974,14 @@ std::string request_on_worker(const std::string& json,std::uint64_t legacy_minim
             if(runtime.sample_kind!=sampling || runtime.sample_mode_epoch!=runtime.capture_mode_epoch.load(std::memory_order_acquire)
                     || (sampling=="confirm" && runtime.sample_opening_token!=command.at("publication_token").get<std::string>()))
                 throw std::runtime_error("sample request transaction binding changed");
+        }
+        // A continuation is authorized by the exact already-admitted request,
+        // kind, mode and opening-token tuple above. Its old certificate may
+        // have been evicted while replay catches up. A new confirm still needs
+        // a retained opening certificate and cannot borrow an arbitrary token.
+        if(sampling=="confirm"&&!requested) {
+            const auto opening=retained(command.at("publication_token").get<std::string>());
+            if(opening.value("retry",false))return opening.dump();
         }
         // Reuse only an independently verified terminal point. No new request,
         // hook ticket, clock or terminal certificate is manufactured here.
@@ -2016,6 +2057,7 @@ std::string request_on_worker(const std::string& json,std::uint64_t legacy_minim
     auto response=nlohmann::json::parse(encoded);
     if (publication_operation && response.is_object() && (response.value("native_publication_failure",false)
         || !response.value("error",nlohmann::json()).is_null())) {
+        remember_publication_failure(runtime,response,3);
         runtime.lanes->poison(capture::LaneFault::publication_failure);
         drain_captures();
         throw std::runtime_error("native capture failed: code="+std::to_string(runtime.lanes->failure.load()));
@@ -2061,6 +2103,14 @@ std::string queue_failure_diagnostic() {
     return state().worker.submit([] {
         auto& runtime=state();
         return runtime.lanes ? queue_failure_json(*runtime.lanes).dump() : std::string("null");
+    });
+}
+std::string publication_failure_diagnostic() {
+    return state().worker.submit([] {
+        auto& runtime=state();
+        return runtime.lanes&&runtime.lanes->failure.load(std::memory_order_acquire)==
+            static_cast<unsigned>(capture::LaneFault::publication_failure)
+            ?runtime.publication_failure.dump():std::string("null");
     });
 }
 std::string request(const std::string& json) {

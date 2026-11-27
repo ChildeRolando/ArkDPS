@@ -37,6 +37,18 @@ int main(int argc,char** argv){
  r.sampling_dispatch=JS_GetPropertyStr(c,global,"__arkdpsSamplingDispatch");r.prefix_projection=JS_GetPropertyStr(c,global,"checkpointProjection");r.publication_publish=JS_GetPropertyStr(c,global,"__arkdpsPublishClosedRecord");r.publication_request=JS_GetPropertyStr(c,global,"__arkdpsPublicationRequest");r.initialized=true;
  if(argc==2) {
   const std::string arm=argv[1];
+  if(arm=="--publication-budget") {
+   script(c,"__arkdpsPublicationJournal.maxBytes=300;");
+   bool rejected=false;try{arkdps::request_on_worker("{\"operation\":\"mark\",\"sampling\":\"fresh\"}");}
+   catch(const std::exception&){rejected=true;}
+   assert(rejected&&r.lanes->failure.load()==static_cast<unsigned>(LaneFault::publication_failure));
+   const auto first=r.publication_failure;
+   assert(first.at("reason_code")==18&&first.at("origin")==2&&first.at("sampling_stage")==5);
+   assert(first.at("store_state_available")==true&&first.at("acknowledged")==0&&first.at("read_through")==0);
+   assert(!r.publication_ready&&r.completed_sample_request==0&&r.published_sequence==0);
+   remember_publication_failure(r,nullptr,4,7);assert(r.publication_failure==first);
+   std::cout<<"PASS_NATIVE_SAMPLING_CHECKPOINT publication budget fatal9 retains finite first cause "<<first.dump()<<"\n";return 0;
+  }
   if(arm=="--gap") {
    script(c,"function badProjection(){try{__arkdpsReplayGap('unverified cold metadata private-token:8',{role:'clock_open',checkpoint:0,field_id:1});}catch(error){}return null;}");
    JS_FreeValue(c,r.prefix_projection);r.prefix_projection=JS_GetPropertyStr(c,global,"badProjection");
@@ -82,6 +94,46 @@ int main(int argc,char** argv){
  const auto ids=r.lanes->request_serial.load();
  const auto expired=Json::parse(arkdps::request_on_worker(Json{{"operation","mark"},{"sampling","confirm"},{"publication_token","0:99999"}}.dump()));assert(expired.at("retry")==true&&r.lanes->request_serial.load()==ids);
  bool wrong_binding=false;try{arkdps::request_on_worker(Json{{"operation","mark"},{"sampling","fresh"},{"sample_request",closed.at("native_sample_request")}}.dump());}catch(const std::exception& error){wrong_binding=std::string(error.what()).find("transaction binding")!=std::string::npos;}assert(wrong_binding&&r.lanes->failure.load()==0);
+
+ // A confirm continuation retains its already-admitted exact transaction
+ // authority even after its opening certificate ages out of the journal.
+ const auto opening=closed.at("native_publication").at("token").get<std::string>();
+ r.active.store(1);
+ const auto waiting_confirm=Json::parse(arkdps::request_on_worker(Json{{"operation","mark"},{"sampling","confirm"},{"publication_token",opening}}.dump()));
+ const auto continuation=waiting_confirm.at("native_sample_request").get<std::string>();
+ assert(waiting_confirm.at("retry")==true);r.active.store(0);
+ // Drive real native-owned publications without completing the pending ID;
+ // this fixture isolates certificate retention from replay workload timing.
+ for(unsigned i=0;i<260;++i)assert(sample_checkpoint(r,std::stoull(continuation)+1000));
+ assert(r.sample_request==std::stoull(continuation)&&r.completed_sample_request!=r.sample_request);
+ const auto admitted_count=r.lanes->request_serial.load();
+ const auto stale_new=Json::parse(arkdps::request_on_worker(Json{{"operation","mark"},{"sampling","confirm"},{"publication_token",opening}}.dump()));
+ assert(stale_new.at("mark_retry_reason")=="native_publication_token_expired"&&r.lanes->request_serial.load()==admitted_count);
+ const Json base{{"operation","mark"},{"sampling","confirm"},{"publication_token",opening},{"sample_request",continuation}};
+ for(unsigned fault=0;fault<4;++fault){auto bad=base;
+  if(fault==0)bad["sample_request"]=std::to_string(std::stoull(continuation)+1);
+  if(fault==1)bad["sampling"]="fresh";
+  if(fault==2)bad["publication_token"]="0:forged";
+  if(fault==3)r.capture_mode_epoch.store(1);
+  bool rejected=false;try{arkdps::request_on_worker(bad.dump());}catch(const std::exception& error){
+   const std::string message=error.what();rejected=message=="sample request no longer active"||message=="sample request transaction binding changed";}
+  r.capture_mode_epoch.store(0);assert(rejected&&r.lanes->request_serial.load()==admitted_count&&r.lanes->failure.load()==0);
+ }
+ const auto resumed=Json::parse(arkdps::request_on_worker(base.dump()));
+ assert(resumed.at("native_sample_request")==continuation&&resumed.at("frame")==43
+  &&resumed.at("native_publication").at("token")!=opening&&r.lanes->request_serial.load()==admitted_count);
+ // Model later ordinary publications without changing the already-completed
+ // transaction's certificate slot: the expiry reply must not mint a new
+ // certificate under the same completed ID. Host cancellation is separate.
+ const auto completed_id=r.completed_sample_request;const auto completed_token=r.completed_sample_token;
+ for(unsigned i=0;i<260;++i)assert(sample_checkpoint(r,completed_id+1000));
+ r.completed_sample_request=completed_id;r.completed_sample_token=completed_token;
+ const auto completed_attempts=r.sampling_attempts;
+ const auto completed_expired=Json::parse(arkdps::request_on_worker(base.dump()));
+ assert(completed_expired.at("mark_retry_reason")=="native_publication_token_expired"
+  &&completed_expired.at("native_sample_request")==continuation
+  &&r.sampling_attempts==completed_attempts&&r.completed_sample_token==completed_token
+  &&r.lanes->request_serial.load()==admitted_count&&r.lanes->failure.load()==0);
 
  // A different mode cannot resume an old request. Missing an explicit retry
  // identity starts a new transaction, even while an earlier one is pending.

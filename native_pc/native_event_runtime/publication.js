@@ -2,6 +2,19 @@
 // Publishing a closed prefix never acknowledges it or reads live game memory.
 'use strict';
 const __arkdpsConsumeSamplingPublication=typeof __arkdpsConsumeSamplingCheckpoint==='function'?__arkdpsConsumeSamplingCheckpoint:null;
+// These finite branch numbers describe rejection, never error text or payloads.
+const __arkdpsPublicationFailureCodes=Object.freeze({
+ 'sampling publication lacks native authority':1,'publication lacks a captured closed leave':2,
+ 'invalid raw capture ticket':3,'raw capture ticket overflow':4,
+ 'publication raw prefix regressed or remained open':5,'native publication producer failed or stopped':6,
+ 'invalid closed publication projection':7,'publication event prefix is incomplete':8,
+ 'publication event epoch regressed':9,'publication event store unavailable':10,
+ 'publication does not reference canonical events':11,'publication does not reference canonical contexts':12,
+ 'publication event sequence gap':13,'invalid publication context sequence':14,
+ 'invalid terminal publication endpoint':15,'terminal publication changed its final fence':16,
+ 'terminal publication changed its native binding':17,'publication value exceeds byte budget':18,
+ 'native publication retention budget exceeded':19,'native publication retained prefix is incomplete':20,
+ 'non-finite normalized value':21,'invalid normalized value':22});
 class ArkdpsPublicationJournal {
  constructor(options={}){
   this.maxEvents=options.maxEvents??100000;
@@ -11,7 +24,7 @@ class ArkdpsPublicationJournal {
    if(!Number.isSafeInteger(n)||n<=0)throw new Error('invalid publication budget');
   this.store=null;this.marks=[];this.metadataBytes=0;this.publishedThrough=0;
   if(options.store)this.bindStore(options.store);
-  this.rawClosed=0n;this.samplingSerial=0n;this.serial=0;this.failure=null;this.latest=null;
+  this.rawClosed=0n;this.samplingSerial=0n;this.serial=0;this.failure=null;this.failureDiagnostic=null;this.latest=null;
  }
  bindStore(store){
   if(this.store){if(this.store!==store)throw Error('publication event store already bound');return;}
@@ -40,8 +53,26 @@ class ArkdpsPublicationJournal {
  }
  retry(reason){return {retry:true,error:null,stopped:false,events:[],hp_context:[],
   mark_retry_reason:reason,native_publication_version:1};}
- failed(){return {retry:false,error:this.failure,stopped:false,events:[],hp_context:[],native_publication_failure:true};}
- fail(reason){this.failure=String(reason);return this.failed();}
+ failed(){return {retry:false,error:this.failure,stopped:false,events:[],hp_context:[],native_publication_failure:true,
+  native_publication_diagnostic:this.failureDiagnostic};}
+ fail(reason){
+  // Preserve the first failure. Diagnostic reads cannot replace it or ACK data.
+  if(this.failure)return this.failed();
+  this.failure=String(reason);
+  const d={version:1,failure_code:9,reason_code:Object.prototype.hasOwnProperty.call(__arkdpsPublicationFailureCodes,this.failure)
+    ?__arkdpsPublicationFailureCodes[this.failure]:255,
+   store_state_available:false,acknowledged:0,read_through:0,store_sequence:0,store_event_count:0,store_retained_bytes:0,
+   published_through:this.publishedThrough,marks_count:this.marks.length,metadata_bytes:this.metadataBytes,
+   max_events:this.maxEvents,max_bytes:this.maxBytes,max_marks:this.maxMarks};
+  try{
+   const s=this.store?.state();
+   if(s&&['acknowledged','readThrough','sequence','eventCount','retainedBytes'].every(k=>this.integer(s[k]))){
+    Object.assign(d,{store_state_available:true,acknowledged:s.acknowledged,read_through:s.readThrough,
+     store_sequence:s.sequence,store_event_count:s.eventCount,store_retained_bytes:s.retainedBytes});
+   }
+  }catch(_){} // A broken store must not mask the original rejection.
+  this.failureDiagnostic=Object.freeze(d);return this.failed();
+ }
  terminalVerified(mark,terminal,acknowledged){
   if(terminal==null)return false;
   const boundary=terminal.terminal_boundary;

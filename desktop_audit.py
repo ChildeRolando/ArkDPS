@@ -11,7 +11,8 @@ from uuid import uuid4
 
 from log_context import LogContext
 from event_probe import sanitize_stream_gap_failure
-from metrics import sanitize_native_async_capture, sanitize_native_queue_failure, NATIVE_CAPTURE_RETRY_REASONS
+from metrics import (sanitize_native_async_capture, sanitize_native_queue_failure,
+                     sanitize_native_publication_failure, NATIVE_CAPTURE_RETRY_REASONS)
 
 
 ENEMY_STATE_DELTA = 'desktop_enemy_state_delta_v1'
@@ -260,7 +261,8 @@ KEY_EVENTS = {
                                    'replay_ticket', 'replay_role_id', 'replay_checkpoint', 'replay_field_id',
                                    'replay_gap_count', 'metadata_read_size', 'replay_reason_codes', 'replay_script_lines',
                                    'native_failure_code', 'sampling_failure_reason', 'sampling_capture_error_code',
-                                   'sampling_stage', 'sampling_lane_fault', 'sampling_json_exception_id', 'queue_failure'),
+                                   'sampling_stage', 'sampling_lane_fault', 'sampling_json_exception_id', 'queue_failure',
+                                   'publication_failure'),
     'lifecycle_state': ('previous', 'state'),
     'capture_health': None,  # Sanitized before the journal mode is applied.
     'event_gap': ('error_type', 'code'),
@@ -321,6 +323,9 @@ def sanitize_sampling_failure(data):
     queue_failure = sanitize_native_queue_failure(result.pop('queue_failure', None))
     if queue_failure is not None:
         result['queue_failure'] = queue_failure
+    publication_failure = sanitize_native_publication_failure(result.pop('publication_failure', None))
+    if publication_failure is not None:
+        result['publication_failure'] = publication_failure
     reason = result.pop('sampling_failure_reason', None)
     code = result.pop('sampling_capture_error_code', None)
     stage = result.pop('sampling_stage', None)
@@ -431,6 +436,11 @@ def _event_fields(data, fields):
         value = data[name]
         if name == 'queue_failure':
             clean = sanitize_native_queue_failure(value)
+            if clean is not None:
+                result[name] = clean
+            continue
+        if name == 'publication_failure':
+            clean = sanitize_native_publication_failure(value)
             if clean is not None:
                 result[name] = clean
             continue
