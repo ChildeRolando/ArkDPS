@@ -28,7 +28,8 @@ from battle_lifecycle import (BattleRuntime, MappingRetry, NATIVE_PC_AUTOCHESS_S
                               autochess_scene)
 from battle_share import (AUTOCHESS_SNAPSHOT_NOTE, json_bytes, record_display, record_statistics,
                          write_export)
-from collection_session import CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT
+from collection_session import (CollectionSession, DEFAULT_FRIDA_REMOTE, WAITING_GAME_INIT,
+                                HISTORY_NOTICE_FAILED)
 from collector import BattleChanged, NativeClockBusy, ProcessChanged, SampleUnavailable, SnapshotGap, ROOT
 from connection import (PC_EVENT_BACKENDS, ConnectionConfig, ConnectionConfigStore, ConnectionDiagnostics,
                         DetectionStatus, detect_instances, native_event_feed_path, resolve_configured,
@@ -1190,7 +1191,8 @@ class DesktopState:
             if self.observer_status not in (None, 'snapshot_only'):
                 live_event_error = self.observer_error
         live_event = EventAvailability(status=live_event_status,
-                                       error=live_event_error, live=True)
+                                       error=live_event_error, live=True,
+                                       recovery=sample.get('event_recovery') if not self._waiting_for_connection_sample else None)
         event_status, event_error = self.event_status, self.event_error
         if event_status is None or self.observer_status in (
                 WAITING_GAME_INIT, 'disabled', 'failed', 'incompatible', 'stopped', 'snapshot_only'):
@@ -1864,6 +1866,11 @@ class CollectionWorker:
 
                 def audit(kind, value):
                     nonlocal sampling_observation, last_lifecycle, pending_performance_dropped
+                    if kind == 'history_notice_error':
+                        if type(value) is not dict or value.get('code') != 'saved_notice_failed':
+                            return
+                        value = dict(code='saved_notice_failed')
+                        self.events.put(('warning', HISTORY_NOTICE_FAILED))
                     if kind in ('performance_timing', 'native_performance_timing'):
                         if len(pending_performance) < 8:
                             pending_performance.append((kind, value))
@@ -2099,8 +2106,12 @@ class CollectionWorker:
                                 provider_status = getattr(observer, 'status', ObserverStatus.READY)
                                 if provider_status in (
                                         ObserverStatus.FAILED, ObserverStatus.INCOMPATIBLE, ObserverStatus.STOPPED):
+                                    error = (self.session.event_error
+                                             if observer is not None and getattr(
+                                                 self.session, '_snapshot_fallback_observer', None) is observer
+                                             else getattr(observer, 'error', None) or self.session.event_error)
                                     observer_state = (provider_status,
-                                                      getattr(observer, 'error', None) or self.session.event_error)
+                                                      error)
                             if current_enabled and current_config.platform == 'mumu':
                                 observer = self.session.observer
                                 if getattr(self.session, 'event_status', None) == WAITING_GAME_INIT:

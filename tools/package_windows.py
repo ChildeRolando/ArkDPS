@@ -46,7 +46,7 @@ FRIDA_SERVER_LICENSE_SHA256 = '5ea1544b51a28bc823b03159190d4108f9fb4f4ef912389f5
 # WPF client renders every surface itself.
 TK_MARKERS = ('tkinter', '_tkinter', '/tcl', 'tcl/', 'tk8.', 'tcl8.', 'tk86t', 'tcl86t')
 BACKEND = ('desktop_bridge.py', 'battle_history.py', 'battle_lifecycle.py', 'battle_share.py', 'boss_catalog.py',
-           'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collector.py', 'damage_settlement.py',
+           'capture_cli.py', 'capture_battles.py', 'collection_session.py', 'collection_failures.py', 'collector.py', 'damage_settlement.py',
            'deployment_lifecycle.py',
            'connection.py', 'desktop_audit.py', 'log_context.py', 'event_capture.py', 'event_observer.py', 'event_probe.py', 'event_stream.py',
            'frida_provision.py', 'stack_capture.py', 'stack_capture.wprp', 'game_fps.py', 'game_fps_android.py',

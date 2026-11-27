@@ -9,18 +9,21 @@ from battle_history import BattleRecord, HistoryError
 from collector import (Collector, SampleUnavailable, BattleChanged, ProcessChanged,
                        UnsupportedVersion, collector_process)
 from enemy_telemetry import defense_enemy_projection
+from collection_failures import can_contain_feature_failure
 from event_capture import CaptureRetry, LiveEventCapture
 from event_observer import ObserverReadRetry, ObserverStatus
 from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS
 from event_probe import EventProbe
 from connection import DEFAULT_EVENT_QUEUE_MEMORY_MIB, event_queue_memory_mib as validate_event_queue_memory_mib
 from metrics import TimingWindow, timing_batch
+from native_pc_collector import NativePcCollector
 
 
 DEFAULT_FRIDA_REMOTE = '127.0.0.1:27043'
 WAITING_GAME_INIT = 'waiting_game_init'
 _BOOT_POLL_PERIOD = 1.0
 _LIFECYCLE_LOCATE_RETRY = 5.0
+HISTORY_NOTICE_FAILED = '战绩已保存；列表通知失败，可打开战绩页或点击刷新恢复。'
 
 
 def _local_defense_enemy_damage(sample, scope):
@@ -73,6 +76,7 @@ class CollectionSession:
         self._last_boot_probe = None
         self._enemy_session = None
         self._enemy_last_poll = float('-inf')
+        self._enemy_projection_retry_at = 0.
         self._enemy_payload = None
         self._enemy_event_data = {}
         self.runtime = None
@@ -94,6 +98,7 @@ class CollectionSession:
         self._pending_event_control = None
         self._pause_tail = None
         self._event_identity_only = getattr(self.collector, 'event_identity_only', False)
+        self._snapshot_fallback_observer = None
 
     def enable_lifecycle(self, runtime=None):
         """Use ordered battle generations in the GUI and capture entry points."""
@@ -454,21 +459,75 @@ class CollectionSession:
             return False
         return observer.has_live_owned_transport()
 
+    def _enter_native_snapshot_fallback(self):
+        """Retire failed event coverage, preserving the independent read owner.
+
+        A failed ArkPie source cannot restart within this game process. Its
+        queued tail remains unacknowledged and its resources remain ours until
+        close; only separately guarded native counters may continue.
+        """
+        from connection import DetectionStatus, VersionStatus
+        from native_pc.native_hook_source import NativeHookEventProbe
+        observer = self.observer
+        diagnostics = getattr(self.collector, 'diagnostics', None)
+        if (self.closed or not isinstance(self.collector, NativePcCollector)
+                or not isinstance(observer, NativeHookEventProbe)
+                or observer.collector is not self.collector
+                or observer.status != ObserverStatus.FAILED
+                or not observer.has_owned_transport_failure()
+                or diagnostics.status != DetectionStatus.READY_UNIQUE
+                or diagnostics.version_status != VersionStatus.COMPATIBLE
+                or diagnostics.connection_ok is not True
+                or not observer.owns_live_process()):
+            return False
+        if self._snapshot_fallback_observer is observer:
+            return True
+        self.runtime.observer_retired(observer)
+        self.runtime.disconnected('event_source_failed')
+        self.collector.event_identity_only = False
+        self.event_status = 'failed'
+        self.event_error = '原生事件采集已中断；累计快照继续，恢复事件需正常重启游戏。'
+        self.collector.event_capability = dict(status=self.event_status, error=self.event_error)
+        self._pending_event_control = self._pause_tail = None
+        self._snapshot_fallback_observer = observer
+        self.audit('observer_snapshot_fallback', dict(code='native_event_source_failed',
+            event_status='failed', pid=observer._owned_process_instance[0],
+            process_created_filetime=observer._owned_process_instance[1]))
+        return True
+
     def _read_lifecycle(self):
         from snapshot_adapter import FrameMismatch
         from roster import RosterUnavailable
+        from native_pc.native_hook_source import NativeHookEventProbe
+        if isinstance(self.observer, NativeHookEventProbe):
+            self.observer.raise_uncontained_request_failure()
+        snapshot_fallback = self._enter_native_snapshot_fallback()
         try:
-            if self._pause_tail is not None:
+            if self._pause_tail is not None and not snapshot_fallback:
                 observation = self.runtime.poll_control_tail(self.collector, self.observer, *self._pause_tail)
             else:
-                observation = self.runtime.poll(self.collector, None if self.events_paused else self.observer,
-                    prepare_observer=None if self.events_paused else self._prepare_battle_observer)
+                without_events = self.events_paused or snapshot_fallback
+                observation = self.runtime.poll(self.collector, None if without_events else self.observer,
+                    prepare_observer=None if without_events else self._prepare_battle_observer)
         except (CaptureRetry, FrameMismatch, RosterUnavailable, SampleUnavailable) as exc:
+            if not isinstance(exc, BattleChanged):
+                self._enter_native_snapshot_fallback()
             if isinstance(exc, (CaptureRetry, BattleChanged)):
                 raise
             raise CaptureRetry(str(exc)) from exc
+        except Exception as exc:
+            if (isinstance(self.observer, NativeHookEventProbe)
+                    and self.observer.is_owned_transport_failure(exc)
+                    and self._enter_native_snapshot_fallback()):
+                raise CaptureRetry('事件源失效，切换独立累计采样') from exc
+            raise
         finally:
+            if isinstance(self.observer, NativeHookEventProbe):
+                self.observer.raise_uncontained_request_failure()
             self._drain_archives()
+        if not snapshot_fallback and self._enter_native_snapshot_fallback():
+            # Never relabel the last event projection as a fresh counter read.
+            raise CaptureRetry('事件源失效，切换独立累计采样')
         if self.runtime.sessions.capture is not None:
             self.capture = self.runtime.sessions.capture
         if (observation.kind not in ('sample', 'terminal') or observation.sample is None
@@ -477,16 +536,40 @@ class CollectionSession:
         sample = self.runtime.display_sample()
         if sample is None:
             raise CaptureRetry('waiting for a reliable battle baseline')
-        if self.events_paused:
+        if self.events_paused and not snapshot_fallback:
             sample.update(event_status='paused', event_error='事件采集已暂停，累计快照继续')
         status = sample['event_status']
         if status == 'unavailable' or self.event_status == WAITING_GAME_INIT:
             sample.update(event_status=self.event_status, event_error=self.event_error)
         else:
             self.event_status, self.event_error = status, sample['event_error']
-        self._attach_enemy(sample)
+        if snapshot_fallback:
+            sample['event_recovery'] = 'restart_game'
+        self._attach_enemy_guarded(sample)
         self.audit('published', sample)
         return sample
+
+    def _attach_enemy_guarded(self, sample):
+        """An optional view cannot revoke an already admitted core sample."""
+        session = sample.get('session')
+        if session != self._enemy_session:
+            self._enemy_projection_retry_at = 0.
+        now = time.monotonic()
+        if now < self._enemy_projection_retry_at:
+            sample['enemy'] = self._enemy_payload
+            return
+        self._enemy_projection_retry_at = 0.
+        try:
+            self._attach_enemy(sample)
+        except Exception as exc:
+            if not can_contain_feature_failure(exc):
+                raise
+            self._enemy_session = session
+            self._enemy_projection_retry_at = now + 1.
+            self._enemy_payload = {
+                'status': 'unavailable', 'error': '可选敌人投影暂不可用',
+                'ready': False, 'rows': [], 'totals': {}, 'series': []}
+            sample['enemy'] = self._enemy_payload
 
     def _attach_enemy(self, sample):
         """Project enemy lifecycle and HP damage at the same committed watermark."""
@@ -548,6 +631,9 @@ class CollectionSession:
                                             **event_data, **context)
                 self._enemy_event_data = event_data
             except Exception as exc:
+                if not can_contain_feature_failure(exc):
+                    raise
+                self._enemy_projection_retry_at = now + 1.
                 self._enemy_payload = {
                     'status': 'unavailable', 'error': f'敌人遥测失败：{exc}',
                     'ready': False, 'rows': [], 'totals': {}, 'series': []}
@@ -561,6 +647,18 @@ class CollectionSession:
         other_damage = sum(amount for amount in (row.get('damage') for row in other_counters)
                            if type(amount) in (int, float) and math.isfinite(amount) and amount > 0)
         sample['enemy'] = dict(enemy, non_team_native_damage=other_damage) if other_damage else enemy
+
+    def _notify_saved_history(self, callback, *args):
+        # The durable write has finished. A display notice cannot invalidate it
+        # or cause the archive to be saved/reduced a second time.
+        try:
+            callback(*args)
+        except Exception as exc:
+            if not can_contain_feature_failure(exc):
+                raise
+            if self.history_error is None:
+                self.history_error = HISTORY_NOTICE_FAILED
+            self.audit('history_notice_error', dict(code='saved_notice_failed'))
 
     def _drain_archives(self):
         pending = getattr(self.runtime, 'pending_terminal_archive', None)
@@ -583,7 +681,7 @@ class CollectionSession:
             except HistoryError as exc:
                 # Keep failures across reads, closes and transport replacement.
                 self._pending_history.append(archive)
-                if self.history_error is None:
+                if self.history_error is None or self.history_error == HISTORY_NOTICE_FAILED:
                     self.history_error = str(exc)
                 self.audit('history_error', dict(battle_id=archive['battle_id'], error=str(exc)))
             else:
@@ -591,9 +689,9 @@ class CollectionSession:
                 # a record that is already durable on disk.
                 if result.written:
                     if self.on_history_result is not None:
-                        self.on_history_result(result)
+                        self._notify_saved_history(self.on_history_result, result)
                     if self.on_history is not None:
-                        self.on_history()
+                        self._notify_saved_history(self.on_history)
                 self.audit('history_saved', dict(battle_id=archive['battle_id'], written=result.written,
                            diagnostics=[asdict(d) for d in result.diagnostics]))
 

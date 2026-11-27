@@ -10,6 +10,7 @@ import time
 from uuid import uuid4
 
 from log_context import LogContext
+from collection_failures import can_contain_feature_failure
 from event_probe import sanitize_stream_gap_failure
 from metrics import (sanitize_native_async_capture, sanitize_native_queue_failure,
                      sanitize_native_publication_failure, NATIVE_CAPTURE_RETRY_REASONS)
@@ -254,6 +255,7 @@ KEY_EVENTS = {
     'observer_cleanup_error': ('error_type', 'code'),
     'observer_retry': ('generation', 'previous_status', 'status'),
     'observer_recovery_deferred': ('generation', 'observer_status', 'code', 'can_restart_in_process'),
+    'observer_snapshot_fallback': ('code', 'event_status', 'pid', 'process_created_filetime'),
     'event_capture_segment': ('reason', 'revision', 'previous_feed', 'feed'),
     'event_capture_control': ('supported', 'requested_paused', 'paused', 'state', 'revision'),
     'native_hook_request_failed': ('op', 'error_type', 'win32_error', 'code', 'response_bytes',
@@ -269,6 +271,7 @@ KEY_EVENTS = {
     'capture_retry': ('error_type', 'code', 'window_failure'),
     'capture_error': ('error_type', 'code', 'cursor_failure', 'window_failure', 'stream_gap_failure'),
     'history_error': ('code',),
+    'history_notice_error': ('code',),
     'history_saved': ('written',),
     'stopped': (),
 }
@@ -488,22 +491,32 @@ class DesktopCaptureJournal:
     def __enter__(self):
         try:
             self._make_room(0)
-        except OSError as exc:
+        except Exception as exc:
+            if not can_contain_feature_failure(exc):
+                raise
             self._on_error(exc)
         return self
 
     def __exit__(self, *_exc):
         try:
             self._close_segment()
-        except OSError as exc:
-            self.warn(f'采集日志关闭失败：{exc}')
+        except Exception as exc:
+            if not can_contain_feature_failure(exc):
+                raise
+            try:
+                self.warn('采集日志关闭失败，部分诊断日志可能未完整保存。')
+            except Exception as notice_error:
+                if not can_contain_feature_failure(notice_error):
+                    raise
 
     def _close_segment(self):
-        stream, self.stream = self.stream, None
-        self.size = 0
-        self.writer = DesktopAuditWriter(self._emit)
+        stream = self.stream
         if stream is not None:
             stream.close()
+        # A failed close retains the owner so a later retry can release it.
+        self.stream = None
+        self.size = 0
+        self.writer = DesktopAuditWriter(self._emit)
 
     def _make_room(self, required):
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -567,14 +580,25 @@ class DesktopCaptureJournal:
         self.retry_at = time.monotonic() + 10.
         try:
             self._close_segment()
-        except OSError:
-            pass
-        self.warn(f'采集日志暂不可写，稍后重试：{exc}')
+        except Exception as close_error:
+            if not can_contain_feature_failure(close_error):
+                raise
+        diagnostic = (exc if isinstance(exc, OSError) or type(exc) in (TypeError, ValueError)
+                      else RuntimeError('采集日志编码或格式处理失败'))
+        try:
+            self.warn(f'采集日志暂不可写，稍后重试：{diagnostic}')
+        except Exception as notice_error:
+            if not can_contain_feature_failure(notice_error):
+                raise
 
     def write(self, kind, data):
         if self.retry_at and time.monotonic() < self.retry_at:
             return
         try:
+            if self.retry_at:
+                # Close any retained failed writer before starting a fresh delta
+                # baseline. Never append through an uncertain stream owner.
+                self._close_segment()
             native_startup = kind in NATIVE_HOOK_STARTUP_EVENTS or kind == NATIVE_HOOK_STARTUP_OVERFLOW
             if native_startup:
                 data = sanitize_native_hook_startup(data, event=kind)
@@ -588,6 +612,10 @@ class DesktopCaptureJournal:
                 data = _capture_health_fields(data)
                 if data is None:
                     return
+            elif kind == 'history_notice_error':
+                if type(data) is not dict or data.get('code') != 'saved_notice_failed':
+                    return
+                data = dict(code='saved_notice_failed')
             if kind == 'native_hook_request_failed':
                 data = sanitize_sampling_failure(data)
             if kind in ('capture_retry', 'capture_error') and isinstance(data, dict):
@@ -632,7 +660,9 @@ class DesktopCaptureJournal:
             if self.size >= self.segment_bytes:
                 self._close_segment()
             self.writer.write(kind, data)
-        except (OSError, TypeError, ValueError) as exc:
+        except Exception as exc:
+            if not can_contain_feature_failure(exc):
+                raise
             self._last_key_events.pop(kind, None)
             self._on_error(exc)
         else:

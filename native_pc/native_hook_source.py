@@ -13,6 +13,7 @@ from hashlib import sha256
 import json
 import os
 from connection import DEFAULT_EVENT_QUEUE_MEMORY_MIB, event_queue_memory_mib
+from collection_failures import can_contain_feature_failure
 from pathlib import Path, PurePosixPath
 from metrics import timed, sanitize_native_async_capture, NATIVE_CAPTURE_RETRY_REASONS
 import re
@@ -775,12 +776,10 @@ class NativeHookEventProbe:
     request_timeout = 5.0
     terminal_mark_timeout = .5
 
-    def has_live_owned_transport(self):
-        """Read existing process/pipe ownership without a request or restart."""
-        pipe, owned = self._pipe, self._owned_process_instance
-        if (self.status != ObserverStatus.READY or not isinstance(pipe, NativePipe)
-                or pipe._poisoned is not False or pipe.handle is None
-                or type(owned) is not tuple or len(owned) != 2
+    def owns_live_process(self):
+        """Prove the original process birth, independently of failed transport."""
+        owned = self._owned_process_instance
+        if (type(owned) is not tuple or len(owned) != 2
                 or any(type(value) is not int or value <= 0 for value in owned)):
             return False
         process = getattr(self.collector, 'process', None)
@@ -792,6 +791,33 @@ class NativeHookEventProbe:
             return process.process_alive() is True
         except Exception:
             return False
+
+    def has_live_owned_transport(self):
+        """A live process alone cannot make a failed or poisoned pipe usable."""
+        pipe = self._pipe
+        return (self.status == ObserverStatus.READY and isinstance(pipe, NativePipe)
+                and pipe._poisoned is False and pipe.handle is not None
+                and self.owns_live_process())
+
+    def is_owned_transport_failure(self, error):
+        """Recognize only the original error from our open pipe becoming poisoned."""
+        return self.has_owned_transport_failure() and error is self._transport_failure[0]
+
+    def _current_request_failure(self):
+        receipt = self._transport_failure
+        return (receipt is not None and self.status == ObserverStatus.FAILED
+                and self._pipe is receipt[1] and isinstance(self._pipe, NativePipe)
+                and self._cursor_lifetime is receipt[2])
+
+    def has_owned_transport_failure(self):
+        """A failed source alone grants no permission to discard its event domain."""
+        return (self._current_request_failure() and self._transport_failure[3]
+                and self._pipe._poisoned is True)
+
+    def raise_uncontained_request_failure(self):
+        """Preserve fundamental failures even if a feed converted them to a retry."""
+        if self._current_request_failure() and not self._transport_failure[3]:
+            raise self._transport_failure[0]
 
     def __init__(self, collector, remote=None, *, root=None, runtime_dir=None,
                  loader_factory=WindowsDllLoader, pipe_factory=NativePipe, prepared=None):
@@ -812,6 +838,7 @@ class NativeHookEventProbe:
         self._loader = self._pipe = self._config = None
         self._started = self._attempted = False
         self._owned_process_instance = None
+        self._transport_failure = None
         # A chained outer observer may only detach after this native layer
         # has explicitly disabled and drained its hooks (or never submitted).
         self.hook_disable_confirmed = True
@@ -1033,12 +1060,22 @@ class NativeHookEventProbe:
                     arguments['native_timing'] = dict(version=1, enabled=enabled, snapshot=report_timing)
                 # Retain this until a matching disable ACK, including lost replies.
                 self._native_timing_may_be_enabled |= enabled
+        pipe, lifetime = self._pipe, self._cursor_lifetime
+        intact_pipe = (isinstance(pipe, NativePipe) and pipe.handle is not None
+                       and pipe._poisoned is False)
         try:
             result = self._pipe.request(operation,
                 timeout=self.request_timeout if timeout is None else timeout, **arguments)
-        except (OSError, RuntimeError) as exc:
-            self.error = str(exc)
+        except BaseException as exc:
+            resource_or_lifecycle = (not can_contain_feature_failure(exc)
+                                     or isinstance(exc, RecursionError))
             self.status = ObserverStatus.FAILED
+            if intact_pipe and self._pipe is pipe and self._cursor_lifetime is lifetime:
+                self._transport_failure = (exc, pipe, lifetime,
+                    not resource_or_lifecycle and pipe._poisoned is True)
+            if resource_or_lifecycle:
+                raise
+            self.error = str(exc)
             if self._timing_sink is not None:
                 try:
                     diagnostic = dict(
@@ -1384,6 +1421,7 @@ class NativeHookEventProbe:
             return False
 
     def stop(self):
+        self._transport_failure = None
         self.binding.reset()
         self.last_terminal_response = None
         stop_error = None

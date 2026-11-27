@@ -1238,7 +1238,11 @@ class BattleFeed:
         scope_unavailable = _native_pc_autochess_scope_unavailable(
             metadata, stage or (self.stage if same_native else None), sample, observer)
         prior_scope = self.autochess_identity if same_native and not clock_reset else None
-        closed_scope = (prior_scope is not None and capture is not None and capture.closed)
+        # A preparing generation may be ahead of the published capture. Its
+        # local read-pair capture is then None, while the authoritative old
+        # event coverage has already been closed by source retirement.
+        closed_scope = (prior_scope is not None and published_capture is not None
+                        and published_capture.closed)
         character_counters = scope_unavailable and _use_autochess_character_counters(
             sample, observer, None if closed_scope else prior_scope)
         new_counter_scope = character_counters and closed_scope
@@ -2121,6 +2125,10 @@ class BattleSessions:
             self.connection = 'disconnected' if observation.reason == 'process_changed' else 'connected'
         elif observation.kind == 'gap':
             self.freeze(observation.reason)
+            if observation.reason == 'event_source_failed' and self._terminal_seen:
+                # A known endpoint with an irrecoverable event source cannot
+                # supply its final fence. Preserve this gap handoff in replay.
+                self._archive(observation.reason)
         else:
             self.connection = 'disconnected' if observation.reason == 'process_changed' else 'connected'
         self.sequence = observation.sequence

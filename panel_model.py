@@ -76,6 +76,7 @@ class EventAvailability:
     status: str | None = None
     error: str | None = None
     live: bool = True
+    recovery: str | None = None
 
 
 def _error_summary(error: str | None, limit: int = 120) -> str:
@@ -104,10 +105,15 @@ def rate_notice(event: EventAvailability | None) -> tuple[bool, str, str, str, s
             hint = '进入战斗并取得有效事件样本后显示接敌数据。'
             action, label = '', ''
         elif event.status == 'failed':
-            reason = f'接敌数据不可用：事件观察未连接{detail}'
-            hint = ('接敌 DPS/HPS 与活跃时间需要事件观察。可以重连观察者，'
-                    '或打开连接设置检查 Frida 端点。')
-            action, label = 'retry', '重连观察者'
+            if event.recovery == 'restart_game':
+                reason = '接敌数据不可用：原生事件采集已中断'
+                hint = '独立累计快照继续。请正常重启游戏以恢复事件采集；当前缺失事件无法补采。'
+                action, label = '', ''
+            else:
+                reason = f'接敌数据不可用：事件观察未连接{detail}'
+                hint = ('接敌 DPS/HPS 与活跃时间需要事件观察。可以重连观察者，'
+                        '或打开连接设置检查 Frida 端点。')
+                action, label = 'retry', '重连观察者'
         elif event.status == 'gap':
             reason = f'接敌数据已中断：仅保留已覆盖区间{detail}'
             hint = '未覆盖区间保持未知且不补零。重连观察者后会显示新覆盖的数据。'
