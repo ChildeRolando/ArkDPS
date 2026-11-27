@@ -2058,11 +2058,29 @@ class BattleRuntime:
         self._pending_event_ack = None
         self._accepted_event_observer = None
 
+    def _retry_accepted_frida_ack(self, observer):
+        """Retry only an already-ingested, source-issued unknown Frida ACK."""
+        pending = self._pending_event_ack
+        if (pending is None or len(pending) < 6 or pending[5] is None
+                or pending[0] is not observer or pending[3] is not None
+                or probe_cursor_lifetime(observer) is not pending[4]):
+            return None
+        from event_observer import FridaEventObserver
+        if not isinstance(observer, FridaEventObserver):
+            return None
+        confirmed = observer.retry_accepted_ack(pending[1], pending[5])
+        if confirmed is True and self._pending_event_ack is pending:
+            self._pending_event_ack = None
+        return confirmed
+
     def settle_event_ack(self, observer):
         """Confirm only the previously admitted prefix before a control boundary."""
         pending = self._pending_event_ack
         if pending is None:
             return True
+        confirmed = self._retry_accepted_frida_ack(observer)
+        if confirmed is not None:
+            return confirmed
         if (pending[0] is not observer or len(pending) < 5
                 or probe_cursor_lifetime(observer) is not pending[4]):
             raise CaptureRetry('事件确认仍属于旧观察器，不能切换采集片段')
@@ -2311,6 +2329,13 @@ class BattleRuntime:
                     # source capability from its own current capture. This ACK
                     # belongs solely to the replacement, never the rejected tail.
                     del self.sessions.capture.rejected_pending_prefix
+        if (pending_ack is not None and retry_ack and not confirmed
+                and pending_ack[3] is None):
+            from event_observer import FridaEventObserver
+            if isinstance(pending_ack[0], FridaEventObserver):
+                receipt = pending_ack[0].accepted_ack_receipt(pending_ack[1])
+                if receipt is not None:
+                    pending_ack = (*pending_ack[:5], receipt)
         self._pending_event_ack = pending_ack
 
     def poll(self, collector, observer=None, *, prepare_observer=None):
@@ -2318,8 +2343,10 @@ class BattleRuntime:
         from collector import SampleUnavailable, BattleChanged, ProcessChanged, SnapshotGap
         from roster import RosterUnavailable
         from tools.stage_global_state.memory import ReadFailure
-        stage = 'acquire'
+        stage = 'acknowledge'
         try:
+            self._retry_accepted_frida_ack(observer)
+            stage = 'acquire'
             observation = self._acquire(collector, observer)
             if (prepare_observer is not None and observation.kind in ('sample', 'scope_unavailable')
                     and observation.generation != self.sessions.generation):

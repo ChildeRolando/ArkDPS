@@ -1,5 +1,6 @@
 """Frida event transports sharing bounded reads and commit acknowledgements."""
 from enum import Enum
+from dataclasses import dataclass
 import json
 import os
 from hashlib import sha256
@@ -34,6 +35,16 @@ def _while_live(operation, released):
             raise
 
 
+@dataclass(frozen=True)
+class _FridaAcceptedAck:
+    observer: object
+    script: object
+    session: object
+    lifetime: object
+    process_identity: tuple
+    sequence: int
+
+
 class FridaEventObserver:
     contract = MUMU_CONTRACT
     provides_autochess_context = True
@@ -57,6 +68,7 @@ class FridaEventObserver:
         self._request_lock = Lock()
         self._request_id = 0
         self._pending_request = None
+        self._accepted_ack_receipt = None
         reset_probe_cursor(self)
         self._autochess_enabled = None
 
@@ -235,12 +247,66 @@ class FridaEventObserver:
     def _read_event_range(self, after, through):
         return read_probe_range(self, after, through)
 
+    def _accepted_ack_state(self):
+        """Actual attached source identity, with no event or sampling reads."""
+        script, session = self.script, self.session
+        if (self.status != ObserverStatus.READY or script is None or session is None
+                or self._pending_request is not None or self._ack_error is not None):
+            return None
+        try:
+            if script.is_destroyed is not False or session.is_detached is not False:
+                return None
+            process = getattr(self.collector, 'process', None)
+            if process is not None:
+                instance = getattr(process, 'process_instance', None)
+                if (type(instance) not in (tuple, list) or len(instance) != 2
+                        or any(type(value) is not int or value <= 0 for value in instance)
+                        or getattr(process, 'pid', None) != instance[0]
+                        or process.process_alive() is not True):
+                    return None
+                identity = ('native_pc', *instance)
+            else:
+                pid = self.collector.core.mc.pid
+                if type(pid) is not int or pid <= 0:
+                    return None
+                identity = ('mumu', pid)
+        except Exception:
+            return None
+        return script, session, self._cursor_lifetime, identity
+
+    def accepted_ack_receipt(self, sequence):
+        """Issue one capability only for a committed-but-unconfirmed ACK.
+
+        The shared script's EventStore sequence never resets within the same
+        script/session lifetime. This grants no new read, baseline or ingestion.
+        """
+        if (type(sequence) is not int or not self._acknowledged_sequence < sequence <= self._committed_sequence):
+            return None
+        state = self._accepted_ack_state()
+        if state is None:
+            return None
+        receipt = _FridaAcceptedAck(self, *state, sequence)
+        self._accepted_ack_receipt = receipt
+        return receipt
+
+    def retry_accepted_ack(self, sequence, receipt):
+        if (type(sequence) is not int or not isinstance(receipt, _FridaAcceptedAck)
+                or receipt is not self._accepted_ack_receipt or receipt.observer is not self
+                or receipt.sequence != sequence or sequence > self._committed_sequence):
+            return None
+        state = self._accepted_ack_state()
+        if (state is None or state[0] is not receipt.script or state[1] is not receipt.session
+                or state[2] is not receipt.lifetime or state[3] != receipt.process_identity):
+            return None
+        return self.commit_events(sequence)
+
     def commit_events(self, sequence):
         """Advance the host cursor and report whether the producer confirmed it."""
         return commit_probe_prefix(self, sequence,
             mismatch='observer acknowledgement did not match the committed watermark')
 
     def _release(self):
+        self._accepted_ack_receipt = None
         # Both releases must be attempted. Keep failed handles available for a
         # retry; clearing a Python reference is not evidence of remote release.
         errors = {}
