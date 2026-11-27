@@ -148,9 +148,14 @@ function __arkdpsConsumeSamplingCheckpoint(record){return __arkdpsSamplingAuthor
 function __arkdpsSamplingDispatch(record,prefix){
  if(record?.kind!=='sampling_checkpoint'||record.edge!=='checkpoint'||typeof prefix!=='function')throw Error('invalid sampling checkpoint');
  __arkdpsSamplingAuthority.admit(record);__arkdpsReplayBegin(record);let projection,complete;
+ const replay=__arkdpsReplay;
  try{if(!__nativeReplayHealthy())__arkdpsReplayGap('sampling owned view unavailable');projection=prefix(record);}
  finally{complete=__arkdpsReplayEnd(true);}
- return [projection,complete];
+ const result=[projection,complete];
+ // Same bounded owned-view evidence as callback replay; retain it before End
+ // clears the current JS view, including errors caught by the shared source.
+ if(!complete){result.length=5;result[4]=replay.diagnostic||__arkdpsReplayDiagnostic(replay);}
+ return result;
 }
 // The bootstrap captures actual native control function identities before the
 // probe source runs. Only a successful native advance can mint a one-shot

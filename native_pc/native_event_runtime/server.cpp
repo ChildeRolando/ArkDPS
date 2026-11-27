@@ -296,6 +296,30 @@ std::string safe_diagnostic(const char* message, const char* phase) {
             "cold class hierarchy relation budget", "cold class hierarchy address"}) {
         if (first == text || first == type + ": " + text) detail = text;
     }
+    // Sampling failures are exact finite diagnostics, never exception text.
+    for (const char* text : {"sampling plan requires independent clock roots and cold fallback",
+            "sampling clock bracket is not independent and paired",
+            "invalid sampling capture plan",
+            "sampling checkpoint serial exhausted",
+            "sampling owned view rejected structural capture",
+            "sampling checkpoint violated owned boundary",
+            "sampling publication failed",
+            "sampling publication certificate mismatch",
+            "invalid sampling transaction operation",
+            "invalid sample request identity",
+            "sample request no longer active",
+            "sample request transaction binding changed",
+            "sample request identity exhausted",
+            "native sampling capture plan changed during setup",
+            "sampling checkpoint lacks native authority",
+            "invalid sampling checkpoint",
+            "sampling publication lacks native authority"}) {
+        if (first == text || first == type + ": " + text) detail = text;
+    }
+    for (unsigned code = 0; code <= 10; ++code) {
+        const auto fixed = std::string("sampling structural capture error: ") + std::to_string(code);
+        if (first == fixed || first == type + ": " + fixed) detail = fixed;
+    }
     // The finite producer fault code contains no pointer, token or game text.
     // Preserve it instead of reducing queue exhaustion to an opaque exception.
     for (unsigned code = 0; code <= 32; ++code) {
@@ -325,12 +349,29 @@ std::string safe_diagnostic(const char* message, const char* phase) {
         const auto suffix=candidate.substr(prefix.size());
         if(suffix.size()<=256&&std::regex_match(suffix,replay_gap))detail=prefix+suffix;
     }
+    // Checkpoint failures have no hook identity. Keep only their finite stage
+    // and bounded numeric owned-view context, with no original exception text.
+    const auto sampling_candidate=first.rfind(type+": ",0)==0 ? first.substr(type.size()+2) : first;
+    static const std::regex sampling_failure(R"(^native_sampling_failure:v1,s=[1-7],c=(0|[1-9]|[12][0-9]|3[0-2]),j=(0|[1-5][0-9]{2})$)");
+    static const std::regex sampling_gap(R"(^native_sampling_gap:v1,t=(0|[1-9][0-9]{0,19}),r=(0|[1-9][0-9]{0,4}),p=(0|[1-9][0-9]{0,4}),f=(-1|0|[1-9][0-9]{0,4}),g=([1-9]|1[0-6]),m=(0|[1-9][0-9]{0,6}),k=(0|[1-9]|[12][0-9]|3[01])(\.(0|[1-9]|[12][0-9]|3[01])){0,15},q=(0|[12]:[0-9]{1,6}(\.[12]:[0-9]{1,6}){0,2})$)");
+    const auto valid_sampling_gap=[&](const std::string& candidate){
+        std::smatch match;if(!std::regex_match(candidate,match,sampling_gap))return false;
+        try {
+            (void)std::stoull(match[1].str());
+            return std::stoull(match[2].str())<=65535 && std::stoull(match[3].str())<=65535
+                && (match[4]=="-1"||std::stoull(match[4].str())<=65535) && std::stoull(match[6].str())<=1048576;
+        } catch (...) {return false;}
+    };
+    const auto separator=sampling_candidate.find("; ");
+    if(std::regex_match(sampling_candidate,sampling_failure)||valid_sampling_gap(sampling_candidate))detail=sampling_candidate;
+    else if(separator!=std::string::npos && std::regex_match(sampling_candidate.substr(0,separator),sampling_failure)
+            &&valid_sampling_gap(sampling_candidate.substr(separator+2)))detail=sampling_candidate;
     if (type == "TypeError" && first.find("not a function") != std::string::npos)
         detail = "TypeError: not a function";
     std::string result = std::string("native runtime ") + phase + " failed; error_type=" + type;
     if (!detail.empty()) result += "; " + detail;
 
-    const auto limit=detail.find("native_replay_gap:v1,")!=std::string::npos?384u:256u;
+    const auto limit=(detail.find("native_replay_gap:v1,")!=std::string::npos||detail.find("native_sampling_gap:v1,")!=std::string::npos)?384u:256u;
     if (result.size() > limit) result.resize(limit);
     return result;
 }

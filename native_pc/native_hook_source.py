@@ -33,6 +33,66 @@ from native_pc import probe_native_pc as access
 from native_pc.windows_dll_loader import WindowsDllLoader
 
 
+# The wire diagnostic is reconstructed by server.cpp from this finite vocabulary.
+# Never retain an arbitrary exception substring in normal capture logs.
+SAMPLING_FAILURE_REASONS = {'sampling plan requires independent clock roots and cold fallback': 'plan_contract',
+ 'sampling clock bracket is not independent and paired': 'clock_contract',
+ 'invalid sampling capture plan': 'invalid_plan',
+ 'sampling checkpoint serial exhausted': 'serial_exhausted',
+ 'sampling owned view rejected structural capture': 'owned_view_structure',
+ 'sampling checkpoint violated owned boundary': 'owned_boundary',
+ 'sampling publication failed': 'publication_failed',
+ 'sampling publication certificate mismatch': 'publication_certificate_mismatch',
+ 'invalid sampling transaction operation': 'invalid_transaction',
+ 'invalid sample request identity': 'invalid_request_identity',
+ 'sample request no longer active': 'request_inactive',
+ 'sample request transaction binding changed': 'transaction_binding_changed',
+ 'sample request identity exhausted': 'request_identity_exhausted',
+ 'native sampling capture plan changed during setup': 'plan_changed_during_setup',
+ 'sampling checkpoint lacks native authority': 'checkpoint_authority',
+ 'invalid sampling checkpoint': 'invalid_checkpoint',
+ 'sampling publication lacks native authority': 'publication_authority'}
+
+
+def sampling_failure_diagnostic(message):
+    match = re.fullmatch(
+        r'native runtime (?:mark|read|ack|terminal_read|initialize|request) failed; '
+        r'error_type=(?:std::exception|Error|InternalError|TypeError|ReferenceError|RangeError|SyntaxError); ([^\r\n]+)',
+        message)
+    if match is None:
+        return {}
+    detail = match[1]
+    parts = detail.split('; ')
+    values = {}
+    if parts[0].startswith('native_sampling_failure:'):
+        stage = re.fullmatch(r'native_sampling_failure:v1,s=([1-7]),c=(0|[1-9]|[12][0-9]|3[0-2]),j=(0|[1-5][0-9]{2})', parts.pop(0))
+        if stage is None:
+            return {}
+        values.update(sampling_failure_reason='native_stage_failure', sampling_stage=int(stage[1]),
+                      sampling_lane_fault=int(stage[2]), sampling_json_exception_id=int(stage[3]))
+    if parts and parts[0].startswith('native_sampling_gap:'):
+        gap = re.fullmatch(r'native_sampling_gap:v1,t=(0|[1-9][0-9]{0,19}),r=(0|[1-9][0-9]{0,4}),'
+            r'p=(0|[1-9][0-9]{0,4}),f=(-1|0|[1-9][0-9]{0,4}),g=([1-9]|1[0-6]),m=(0|[1-9][0-9]{0,6}),'
+            r'k=((?:0|[1-9]|[12][0-9]|3[01])(?:\.(?:0|[1-9]|[12][0-9]|3[01])){0,15}),'
+            r'q=(0|[12]:[0-9]{1,6}(?:\.[12]:[0-9]{1,6}){0,2})', parts.pop(0))
+        if gap is None or int(gap[1]) > 2**64-1 or any(int(gap[i]) > 65535 for i in (2, 3, 4)) or int(gap[6]) > 1048576:
+            return {}
+        values.update(code='native_sampling_gap', replay_ticket=int(gap[1]), replay_role_id=int(gap[2]),
+            replay_checkpoint=int(gap[3]), replay_field_id=int(gap[4]), replay_gap_count=int(gap[5]),
+            metadata_read_size=int(gap[6]), replay_reason_codes=gap[7], replay_script_lines=gap[8])
+        values.setdefault('sampling_failure_reason', 'owned_boundary')
+    if values:
+        return values if not parts else {}
+    reason = SAMPLING_FAILURE_REASONS.get(detail)
+    if reason is not None:
+        return dict(sampling_failure_reason=reason)
+    structural = re.fullmatch(r'sampling structural capture error: (0|[1-9]|10)', detail)
+    if structural is not None:
+        return dict(sampling_failure_reason='structural_capture_error',
+                    sampling_capture_error_code=int(structural[1]))
+    return {}
+
+
 DLL_NAME = 'ArkDPS.NativeEvents.dll'
 PROVIDER = 'arkdps-native-hooks'
 PROTOCOL = 1
@@ -922,6 +982,7 @@ class NativeHookEventProbe:
                                           response_limit=int(oversized[2]))
                         if oversized[3] is not None:
                             diagnostic['requested_event_count'] = int(oversized[3])
+                    diagnostic.update(sampling_failure_diagnostic(str(exc)))
                     capture_failure = re.search(
                         r'(?:^|; )native capture failed: code=([0-9])$', str(exc))
                     if capture_failure:

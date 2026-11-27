@@ -996,3 +996,79 @@ def test_combined_native_fault_and_replay_gap_keep_both_bounded_causes():
     assert records[0][1]['native_failure_code'] == 6
     assert records[0][1]['code'] == 'native_replay_gap'
     assert records[0][1]['replay_ticket'] == 17
+
+
+@pytest.mark.parametrize('detail, reason, code', [
+    *[(text, reason, None) for text, reason in module.SAMPLING_FAILURE_REASONS.items()],
+    ('sampling structural capture error: 0', 'structural_capture_error', 0),
+    ('sampling structural capture error: 10', 'structural_capture_error', 10),
+    ('sampling structural capture error: 11', None, None),
+    ('sampling structural capture error: 01', None, None),
+    ('sampling publication failed; token=PRIVATE', None, None),
+    ('sampling publication failed\nPRIVATE', None, None),
+    ('sampling publication certificate mismatch 0xPRIVATE', None, None),
+    ('PRIVATE', None, None),
+])
+def test_sampling_failure_audit_is_finite_and_preserves_original_failure(detail, reason, code):
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; ' + detail)
+    def request(*_args, **_kwargs):
+        raise failure
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure and probe.status == ObserverStatus.FAILED
+    data = records[0][1]
+    assert data.get('sampling_failure_reason') == reason
+    assert data.get('sampling_capture_error_code') == code
+    assert 'PRIVATE' not in repr(data)
+
+
+_SAMPLING_STAGE = 'native_sampling_failure:v1,s=7,c=32,j=599'
+_SAMPLING_GAP = 'native_sampling_gap:v1,t=18446744073709551615,r=65535,p=65535,f=-1,g=16,m=1048576,k=0.31,q=1:999999.2:999999.1:999999'
+
+
+@pytest.mark.parametrize('detail, accepted', [
+    (_SAMPLING_STAGE, True),
+    ('native_sampling_failure:v1,s=1,c=0,j=0', True),
+    (_SAMPLING_GAP, True),
+    (_SAMPLING_STAGE + '; ' + _SAMPLING_GAP, True),
+    *[(_SAMPLING_STAGE.replace(old, new), False) for old, new in
+      [('s=7', 's=0'), ('s=7', 's=8'), ('c=32', 'c=33'), ('c=32', 'c=-1'),
+       ('j=599', 'j=600'), ('j=599', 'j=99'), ('j=599', 'j=001')]],
+    *[(_SAMPLING_GAP.replace(old, new), False) for old, new in
+      [('18446744073709551615', '18446744073709551616'), ('r=65535', 'r=65536'),
+       ('p=65535', 'p=65536'), ('f=-1', 'f=-2'), ('g=16', 'g=0'), ('g=16', 'g=17'),
+       ('m=1048576', 'm=1048577'), ('k=0.31', 'k=32'), ('k=0.31', 'k=' + '.'.join(['1'] * 17)),
+       ('q=1:999999.2:999999.1:999999', 'q=3:123'),
+       ('q=1:999999.2:999999.1:999999', 'q=1:1.1:1.1:1.1:1')]],
+    (_SAMPLING_STAGE + '; ' + _SAMPLING_GAP + '; token=PRIVATE', False),
+    (_SAMPLING_STAGE + '\nPRIVATE', False),
+])
+def test_numeric_sampling_failure_context_is_strict_and_keeps_original_exception(detail, accepted):
+    probe = module.NativeHookEventProbe(collector())
+    failure = RuntimeError('native runtime mark failed; error_type=std::exception; ' + detail)
+    def request(*_args, **_kwargs):
+        raise failure
+    probe._pipe = SimpleNamespace(request=request)
+    probe.status = ObserverStatus.READY
+    records = []
+    probe.set_request_timing_audit(lambda kind, data: records.append((kind, data)), enabled=lambda: False)
+    with pytest.raises(RuntimeError) as caught:
+        probe.mark()
+    assert caught.value is failure and probe.status == ObserverStatus.FAILED
+    data = records[0][1]
+    assert ('sampling_failure_reason' in data) is accepted
+    assert 'PRIVATE' not in repr(data)
+    assert 'replay_hook_id' not in data and 'replay_edge' not in data
+    if accepted and 'native_sampling_failure:' in detail:
+        assert data['sampling_stage'] in range(1, 8)
+        assert 0 <= data['sampling_lane_fault'] <= 32
+    if accepted and 'native_sampling_gap:' in detail:
+        assert data['code'] == 'native_sampling_gap'
+        assert data['replay_ticket'] == 2**64 - 1
+        assert data['replay_field_id'] == -1
+        assert data['replay_reason_codes'] == '0.31'

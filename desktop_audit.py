@@ -258,7 +258,8 @@ KEY_EVENTS = {
                                    'response_limit', 'requested_event_count', 'replay_hook_id', 'replay_edge',
                                    'replay_ticket', 'replay_role_id', 'replay_checkpoint', 'replay_field_id',
                                    'replay_gap_count', 'metadata_read_size', 'replay_reason_codes', 'replay_script_lines',
-                                   'native_failure_code'),
+                                   'native_failure_code', 'sampling_failure_reason', 'sampling_capture_error_code',
+                                   'sampling_stage', 'sampling_lane_fault', 'sampling_json_exception_id'),
     'lifecycle_state': ('previous', 'state'),
     'capture_health': None,  # Sanitized before the journal mode is applied.
     'event_gap': ('error_type', 'code'),
@@ -307,6 +308,45 @@ def _capture_health_fields(data):
         if type(value) is int and value >= 0:
             result[name] = min(value, 2**31 - 1)
     result['utc'] = datetime.now(timezone.utc).isoformat()
+    return result
+
+
+SAMPLING_FAILURE_REASONS = frozenset(('plan_contract', 'clock_contract', 'invalid_plan', 'serial_exhausted', 'owned_view_structure', 'owned_boundary', 'publication_failed', 'publication_certificate_mismatch', 'invalid_transaction', 'invalid_request_identity', 'request_inactive', 'transaction_binding_changed', 'request_identity_exhausted', 'structural_capture_error', 'plan_changed_during_setup', 'checkpoint_authority', 'invalid_checkpoint', 'publication_authority', 'native_stage_failure'))
+
+
+def sanitize_sampling_failure(data):
+    """Only finite sampler categories cross the normal or detailed journal."""
+    result = dict(data)
+    reason = result.pop('sampling_failure_reason', None)
+    code = result.pop('sampling_capture_error_code', None)
+    stage = result.pop('sampling_stage', None)
+    lane = result.pop('sampling_lane_fault', None)
+    json_id = result.pop('sampling_json_exception_id', None)
+    if type(reason) is str and reason in SAMPLING_FAILURE_REASONS:
+        if reason == 'native_stage_failure' and not (type(stage) is int and 1 <= stage <= 7
+                and type(lane) is int and 0 <= lane <= 32
+                and type(json_id) is int and (json_id == 0 or 100 <= json_id <= 599)):
+            reason = None
+        if reason is not None:
+            result['sampling_failure_reason'] = reason
+        if reason == 'native_stage_failure':
+            result.update(sampling_stage=stage, sampling_lane_fault=lane, sampling_json_exception_id=json_id)
+        if reason == 'structural_capture_error' and type(code) is int and 0 <= code <= 10:
+            result['sampling_capture_error_code'] = code
+    if result.get('code') == 'native_sampling_gap':
+        result.pop('replay_hook_id', None)
+        result.pop('replay_edge', None)
+        bounds = dict(replay_ticket=(0, 2**64-1), replay_role_id=(0, 65535), replay_checkpoint=(0, 65535),
+                      replay_field_id=(-1, 65535), replay_gap_count=(1, 16), metadata_read_size=(0, 1048576))
+        codes, lines = result.get('replay_reason_codes'), result.get('replay_script_lines')
+        valid = all(type(result.get(key)) is int and low <= result[key] <= high
+                    for key, (low, high) in bounds.items())
+        valid = valid and type(codes) is str and re.fullmatch(r'(?:0|[1-9]|[12][0-9]|3[01])(?:\.(?:0|[1-9]|[12][0-9]|3[01])){0,15}', codes)
+        valid = valid and type(lines) is str and re.fullmatch(r'(?:0|[12]:[0-9]{1,6}(?:\.[12]:[0-9]{1,6}){0,2})', lines)
+        if not valid:
+            result.pop('code')
+            for key in (*bounds, 'replay_reason_codes', 'replay_script_lines'):
+                result.pop(key, None)
     return result
 
 
@@ -464,6 +504,8 @@ class DesktopCaptureJournal:
                 data = _capture_health_fields(data)
                 if data is None:
                     return
+            if kind == 'native_hook_request_failed':
+                data = sanitize_sampling_failure(data)
             detailed = bool(self.debug_enabled())
             if detailed != self._detailed:
                 previous = self._detailed

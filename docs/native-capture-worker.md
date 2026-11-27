@@ -514,3 +514,48 @@ capture_scope_point、CaptureLanes、prepare/finalize/drain 和完整生产 JS�
 本轮全量离线回归 6414 passed / 29 skipped；最后补齐原生请求的模式绑定后，相关 195 项及原生事务/实际 DLL 门禁再通过。最终源码的轻量 30k/s、10 秒完成 300000 次 setter，500ms 暂停后约 78ms 追平、code0，回执 `runtime/fresh-sampling/pressure-final-30k-10s/receipt.json`。模式绑定补齐前的同一轻量路径另完成 60 秒/180 万次，约 71ms 追平，留在 `pressure-30k-60s/`，不混同版本。压力夹具未包含宿主新 sampler 事务流量，不据此声称已验证真实 mark 频率下延迟或实机表现。
 
 变更控制：本次只扩展现有采样请求、CompiledPlan/OwnedReplayView、共享投影和观察器生命周期，不新建业务状态所有者。原生新增事实由其当时实际持有字节及租约负责；可选 `confirm_mark` 没有渗入其他平台的取证解释，未支持者仍走原接口。严格拒收条件由上述负例保护，没有以文案或阈值补偿。最先失败的边界分别是原生 checkpoint/采样事务、宿主原 opening 与 cursor owner；均可在自有内存/日志回放中复现。新增检查点是原发布机制的一种受控输入，不是另一套事件统计或治理层。仍未覆盖的边界是新候选实机成功率、真实混合持续负载和游戏 FPS。
+
+### 928e496 首局失败：实机验收未通过及定位信息修复
+
+用户于 2026-11-27 的首局报告 `native runtime mark failed; error_type=std::exception`。
+此报告否定该候选的实机可用性验收；上一节的离线 PASS 不能替代它。
+实际运行 head 为 `928e4967e2fff9912ae398a2c98b04e93067340c`，DLL SHA256
+`ad59ecf184794b7a992d2a11ebd0d091b9a84cb65ae7678efb80da92fc3ddd34`，
+PID 13948 / birth 134402455742041062。证据冻结在
+`runtime/first-battle-928e496/evidence.json`；820 行捕获前缀 SHA256
+`92dafc60c4b92092b6d9578a1bc09937023b1fa8bbf1716ff345845d434ed399`。
+
+北京时间 17:33:13–17:36:39，大厅期间 raw/processed/closed/published 均为 0，
+采样主要报 missing_root（Error 4），没有成功发布。17:36:40 首局开始，故障前
+最后摘要为 raw=processed=closed164、published0、sampling serial112、request2/
+completed0、lane failure0，最近原因 projection_not_ready；17:36:40.597806 的
+mark 请求转为 RuntimeError。队列当时已消费，不能把本次异常归为队列耗尽。
+后续宿主 fallback/sample 状态不是原生观察器恢复；它已 FAILED 且不能在进程内重建。
+
+旧日志没有保存原始 C++ 抛出点。确定的诊断生产缺陷有两层：
+
+1. 普通回调会带上 owned replay 缺项账，独立采样在 complete=false 时只丢出一句
+   `sampling checkpoint violated owned boundary`，丢失 role、field、checkpoint 及原因码。
+2. runtime 隐私过滤器又不认识新采样异常，最终只留下 `std::exception`。
+
+本次改动修复上述诊断缺陷，**尚未修复或确认首局具体业务根因**。采样 End 前保留
+原有 replay 引用，End 后仅生成既有的有限数值账，不延长内存租约。
+`native_sampling_gap` 不虚构 hook ID/进入退出边界；`native_sampling_failure` 只携带
+阶段、实际 LaneFault 和 JSON 异常编号。阶段 1–7 依次为现场取证、owned 绑定、
+共享投影及 End、journal、回执编解码、证书、提交。server 和 Python/普通日志均
+严格验证数值范围与格式，不回传任意异常文本、指针、token 或游戏字符串。
+捕获失败、poison、read/ACK 及不可重启规则保持不变。
+
+补充自有内存实验见 `runtime/review-cold-mode1/receipt.json`：无初始 scope/pub、
+模式 1、state1→2、256KiB JS 栈、82 次真实 setter（raw164/sequence82）、普通
+回调发布与独立采样交替均未复现 fatal。它们不能证明实机问题消失。
+仍缺少真实 initialize 元数据、实际 worker 请求与首局交错的统一现场证据，不能
+从泛化异常断言 JSON 错误、某个干员或放宽冷校验。
+
+本次诊断门禁：`runtime/first-battle-928e496/checkpoint-diagnostics/receipt.json`
+保留正常采样与 --gap/--receipt/--receipt-type 三个严格拒收正反例，确认拒收不推进
+发布、token 或业务水位；`diagnostics-numeric-gate/receipt.json` 执行真实 server
+过滤函数的 78 项有限格式/恶意字符串门禁；`diagnostic-regression.xml` 的相关
+Python/JS 回归 300 passed。独立 review 的内存 mutation 放宽阶段范围后负例失败。
+新包应明确标为定位包，普通日志即可给出具体阶段/缺项，不以这组 PASS 宣称业务根因
+已解决，也不要求用户为了取证打完整大局或开启逐笔详细日志。

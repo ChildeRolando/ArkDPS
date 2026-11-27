@@ -58,10 +58,13 @@ def main():
         print('BUILT_OWNED_REPLAY', binary)
         return
     if args.fixture=='sampling':
-        run=subprocess.run([str(binary)],cwd=ROOT,capture_output=True,text=True,timeout=15)
-        (output/'sampling.log').write_text(run.stdout+run.stderr)
-        assert run.returncode==0 and 'PASS_NATIVE_SAMPLING_CHECKPOINT' in run.stdout,(run.returncode,run.stdout,run.stderr)
-        (output/'receipt.json').write_text(json.dumps({**identity,'scope':'actual engine checkpoint/owned view/journal over self-owned memory','excluded':['game','FPS','production scope/publication graph'],'binary_sha256':digest(binary),'pass':True},indent=2))
+        cases=[]
+        for case in ['', '--gap', '--receipt', '--receipt-type']:
+            run=subprocess.run([str(binary), *([case] if case else [])],cwd=ROOT,capture_output=True,text=True,timeout=15)
+            (output/('sampling'+case+'.log')).write_text(run.stdout+run.stderr)
+            assert run.returncode==0 and 'PASS_NATIVE_SAMPLING_CHECKPOINT' in run.stdout,(case,run.returncode,run.stdout,run.stderr)
+            cases.append({'case':case or 'normal','pass':True})
+        (output/'receipt.json').write_text(json.dumps({**identity,'scope':'actual engine checkpoint/owned view/journal over self-owned memory','excluded':['game','FPS','production scope/publication graph'],'binary_sha256':digest(binary),'cases':cases,'pass':True},indent=2))
         print('PASS_NATIVE_SAMPLING_CHECKPOINT',output/'receipt.json');return
     if args.fixture=='light-hp':
         run=subprocess.run([str(binary)],cwd=ROOT,capture_output=True,text=True,timeout=15)

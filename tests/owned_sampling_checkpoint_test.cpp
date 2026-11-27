@@ -22,7 +22,7 @@ struct ChangingRead{std::array<std::byte,12>* clock;unsigned reads=0;};
 static bool change_clock(void* user,std::uintptr_t at,void* target,std::size_t bytes)noexcept{
  auto& change=*static_cast<ChangingRead*>(user);if(++change.reads==2)set_frame(*change.clock,41);return capture_read(nullptr,at,target,bytes);
 }
-int main(){
+int main(int argc,char** argv){
  auto& r=state();r.runtime=JS_NewRuntime();r.context=JS_NewContext(r.runtime);auto* c=r.context;
  CaptureLanes::Config limits;limits.lane_queue={16,65536};limits.spill={16,65536};r.lanes=std::make_unique<CaptureLanes>(limits);
  arkdps::owned_js::install(c,[]()noexcept{state().lanes->poison(LaneFault::replay_structure);});
@@ -34,6 +34,29 @@ int main(){
  auto compiled=compile_plan(plan,0);r.configurations.intern(compiled);r.sampling_plan=std::make_unique<CompiledPlan>(std::move(compiled));
  script(c,"const clockAddress=ptr(BigInt('"+address+"'));let seen=[],lastRecord,terminalTest=false;function checkpointProjection(record){lastRecord=record;if(!Object.isFrozen(record)||!Object.isFrozen(record.facts))throw Error('mutable record');if(!__arkdpsVerifiedSamplingCheckpoint(record))throw Error('missing native checkpoint proof');const frame=__arkdpsReplayCheckpoint('clock_open',0,()=>clockAddress.readU32());const end=__arkdpsReplayCheckpoint('clock_close',0,()=>clockAddress.readU32());if(frame!==end)throw Error('clock changed');seen.push(frame);return {mark:{sequence:0,epoch:0,frame,game_time:frame,active:0,active_hooks:[],error:null,stopped:false,native_capture_scope_mode_epoch:0},acknowledged:0,events_after:0,events_through:0,events:[],hp_context:[],read_fields:{frame},terminal_read:terminalTest?{}:null};}");
  r.sampling_dispatch=JS_GetPropertyStr(c,global,"__arkdpsSamplingDispatch");r.prefix_projection=JS_GetPropertyStr(c,global,"checkpointProjection");r.publication_publish=JS_GetPropertyStr(c,global,"__arkdpsPublishClosedRecord");r.publication_request=JS_GetPropertyStr(c,global,"__arkdpsPublicationRequest");r.initialized=true;
+ if(argc==2) {
+  const std::string arm=argv[1];
+  if(arm=="--gap") {
+   script(c,"function badProjection(){try{__arkdpsReplayGap('unverified cold metadata private-token:8',{role:'clock_open',checkpoint:0,field_id:1});}catch(error){}return null;}");
+   JS_FreeValue(c,r.prefix_projection);r.prefix_projection=JS_GetPropertyStr(c,global,"badProjection");
+  } else if(arm=="--receipt"||arm=="--receipt-type") {
+   script(c,arm=="--receipt"?"function badPublication(){return {};}":"function badPublication(){return [];}");
+   JS_FreeValue(c,r.publication_publish);r.publication_publish=JS_GetPropertyStr(c,global,"badPublication");
+  } else return 2;
+  bool rejected=false;
+  try{sample_checkpoint(r,1);}catch(const std::exception& error){
+   const std::string detail=error.what();
+   if(arm=="--gap") {
+    assert(detail.rfind("native_sampling_failure:v1,s=3,c=0,j=0; native_sampling_gap:v1,t=0,r=1,p=0,f=1,g=1,m=8,k=1,q=",0)==0);
+    assert(detail.find("private-token")==std::string::npos);
+   } else assert(detail==(arm=="--receipt"?"native_sampling_failure:v1,s=6,c=0,j=403":"native_sampling_failure:v1,s=5,c=0,j=306"));
+   rejected=true;
+  }
+  assert(rejected&&!r.publication_ready&&r.published_ticket==0&&r.completed_sample_request==0&&r.lanes->reserved.load()==0);
+  arkdps::owned_js::end();for(auto value:{r.sampling_dispatch,r.prefix_projection,r.publication_publish,r.publication_request,global})JS_FreeValue(c,value);JS_FreeContext(c);JS_FreeRuntime(r.runtime);
+  std::cout<<"PASS_NATIVE_SAMPLING_CHECKPOINT "<<arm<<" rejects without advancing publication; bounded diagnostic\n";return 0;
+ }
+ assert(argc==1);
  // No hook traffic: two real samples retain raw=0, sequence=0 and read new bytes.
  r.sample_request=1;assert(sample_checkpoint(r,1));const auto first=r.completed_sample_token;
  assert(r.published_ticket==0&&r.processed_ticket==0&&r.closed_ticket==0&&r.lanes->reserved.load()==0);
@@ -87,7 +110,7 @@ int main(){
  // Ordinary objects cannot mint checkpoint evidence or publish a forged kind.
  script(c,"if(__arkdpsVerifiedSamplingCheckpoint(lastRecord))throw Error('lease escaped');const reused=new ArkdpsPublicationJournal();if(!reused.publish(lastRecord,{}).native_publication_failure)throw Error('brand reused');globalThis.__arkdpsConsumeSamplingCheckpoint=()=>true;if(__arkdpsVerifiedSamplingCheckpoint({kind:'sampling_checkpoint'}))throw Error('forged brand');const bad=new ArkdpsPublicationJournal();const failure=bad.publish({version:1,kind:'sampling_checkpoint',edge:'checkpoint',ticket:'0',sampling_serial:'99',activity_begin:'0',activity_end:'0',closed_after:true,active_after:0},{});if(!failure.native_publication_failure)throw Error('forged publication accepted');");
  // Structural capture faults poison rather than become an endless busy retry.
- r.sampling_plan->plan->max_reads=0;bool structural=false;try{sample_checkpoint(r,46);}catch(const std::exception& error){structural=std::string(error.what()).find("structural capture")!=std::string::npos;}assert(structural&&r.lanes->failure.load()==static_cast<unsigned>(LaneFault::publication_failure));
+ r.sampling_plan->plan->max_reads=0;bool structural=false;try{sample_checkpoint(r,46);}catch(const std::exception& error){structural=std::string(error.what())=="native_sampling_failure:v1,s=1,c="+std::to_string(static_cast<unsigned>(LaneFault::publication_failure))+",j=0";}assert(structural&&r.lanes->failure.load()==static_cast<unsigned>(LaneFault::publication_failure));
  arkdps::owned_js::end();for(auto value:{r.sampling_dispatch,r.prefix_projection,r.publication_publish,r.publication_request,global})JS_FreeValue(c,value);JS_FreeContext(c);JS_FreeRuntime(r.runtime);
  std::cout<<"PASS_NATIVE_SAMPLING_CHECKPOINT no hooks/paused/raw0/seq0/new clock/retry/confirm/active/open prefix/changed clock/forged brand\n";
  return 0;

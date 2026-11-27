@@ -289,3 +289,59 @@ def test_cursor_failure_normal_journal_refuses_unknown_text(tmp_path):
     row = next(row for row in _records(log) if row['kind'] == 'capture_error')
     assert 'cursor_failure' not in row['data']
     assert 'private' not in repr(row)
+
+
+@pytest.mark.parametrize('debug', [False, True])
+@pytest.mark.parametrize('reason,code,expected', [
+    ('publication_certificate_mismatch', None, dict(sampling_failure_reason='publication_certificate_mismatch')),
+    ('structural_capture_error', 10, dict(sampling_failure_reason='structural_capture_error', sampling_capture_error_code=10)),
+    ('structural_capture_error', True, dict(sampling_failure_reason='structural_capture_error')),
+    ('structural_capture_error', 11, dict(sampling_failure_reason='structural_capture_error')),
+    ('publication_failed', 4, dict(sampling_failure_reason='publication_failed')),
+    ('PRIVATE', 0, {}),
+    (['PRIVATE'], 0, {}),
+])
+def test_sampling_failure_journal_requires_finite_schema(tmp_path, debug, reason, code, expected):
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               header=_test_header, debug_mode=debug) as journal:
+        journal.write('native_hook_request_failed', dict(op='mark', error_type='RuntimeError',
+            sampling_failure_reason=reason, sampling_capture_error_code=code))
+    log, = tmp_path.glob('wpf-*.jsonl')
+    row = next(row for row in _records(log) if row['kind'] == 'native_hook_request_failed')
+    assert {key:value for key,value in row['data'].items() if key.startswith('sampling_')} == expected
+    assert 'PRIVATE' not in repr(row)
+
+
+def test_sampling_failure_journal_schema_covers_only_wire_reason_vocabulary():
+    from native_pc.native_hook_source import SAMPLING_FAILURE_REASONS
+    import desktop_audit
+    assert desktop_audit.SAMPLING_FAILURE_REASONS == frozenset(SAMPLING_FAILURE_REASONS.values()) | {'structural_capture_error', 'native_stage_failure'}
+
+
+@pytest.mark.parametrize('debug', [False, True])
+@pytest.mark.parametrize('fault', [None, 'stage', 'lane', 'json', 'ticket', 'role', 'field', 'count', 'bytes', 'reasons', 'lines'])
+def test_numeric_sampling_context_journal_has_bounded_schema(tmp_path, debug, fault):
+    fields = dict(sampling_failure_reason='native_stage_failure', sampling_stage=7,
+        sampling_lane_fault=32, sampling_json_exception_id=599, code='native_sampling_gap',
+        replay_ticket=2**64-1, replay_role_id=65535, replay_checkpoint=65535, replay_field_id=-1,
+        replay_gap_count=16, metadata_read_size=1048576, replay_reason_codes='0.31', replay_script_lines='1:123.2:456')
+    changes = dict(stage=('sampling_stage', True), lane=('sampling_lane_fault', 33),
+        json=('sampling_json_exception_id', 99), ticket=('replay_ticket', 2**64),
+        role=('replay_role_id', 65536), field=('replay_field_id', -2), count=('replay_gap_count', 17),
+        bytes=('metadata_read_size', 1048577), reasons=('replay_reason_codes', 'PRIVATE'),
+        lines=('replay_script_lines', '1:123.PRIVATE'))
+    if fault is not None:
+        key, value = changes[fault]
+        fields[key] = value
+    with DesktopCaptureJournal(tmp_path, encoder=json_value, warn=pytest.fail,
+                               header=_test_header, debug_mode=debug) as journal:
+        journal.write('native_hook_request_failed', fields)
+    log, = tmp_path.glob('wpf-*.jsonl')
+    row = next(row for row in _records(log) if row['kind'] == 'native_hook_request_failed')['data']
+    if fault is None:
+        assert all(row[key] == value for key, value in fields.items())
+    elif fault in ('stage', 'lane', 'json'):
+        assert 'sampling_failure_reason' not in row and 'sampling_stage' not in row
+    else:
+        assert 'code' not in row and 'replay_ticket' not in row and 'replay_reason_codes' not in row
+    assert 'PRIVATE' not in repr(row)

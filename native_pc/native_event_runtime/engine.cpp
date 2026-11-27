@@ -1561,7 +1561,7 @@ void initialize_on_worker(const std::string& source) {
 }
 // This is a new observation, independent of business hook traffic. It never
 // reserves a hook ticket, runs a game method, or changes a callback stack.
-bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMemory reader=arkdps::capture::capture_read,void* read_user=nullptr) {
+bool sample_checkpoint_impl(Runtime& r,std::uint64_t request,arkdps::capture::ReadMemory reader,void* read_user,unsigned& stage) {
     using namespace arkdps::capture;
     ++r.sampling_attempts;
     if(!r.sampling_plan){r.sampling_retry_reason="sampling_plan_unavailable";return false;}
@@ -1604,6 +1604,7 @@ bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMem
             {"publication_revision",header.publication_revision},{"cold_revision",header.cold_revision},
             {"scope_unavailable",header.scope_unavailable},{"capture_concurrent",false},{"parent_checkpoints",nlohmann::json::array()}}}};
     for(const auto* name:{"scope_revision","publication_revision","cold_revision"})if(record["facts"][name]==0)record["facts"].erase(name);
+    stage=2; // Bind the exact owned snapshot, without live fallback.
     auto* c=r.context;arkdps::owned_js::Lease lease;
     if(arkdps::owned_js::begin(snapshot.segments.data(),snapshot.segment_count,snapshot.fields.data(),snapshot.field_count,
             snapshot.bytes.data(),snapshot.byte_count,r.configurations.roles,raw,snapshot.error)!=Error::ok)
@@ -1613,14 +1614,23 @@ bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMem
     const auto wire=record.dump();auto item=JS_ParseJSON(c,wire.data(),wire.size(),"sampling-checkpoint.json");
     r.sampling_record=JS_DupValue(c,item);
     std::array<JSValue,2> args{{item,r.prefix_projection}};
+    stage=3; // Shared projection and owned replay completion.
     auto result=JS_Call(c,r.sampling_dispatch,JS_UNDEFINED,args.size(),args.data());
     r.replay_active=false;
     if(JS_IsException(result)){JS_FreeValue(c,item);JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;throw std::runtime_error(exception(c));}
     auto projection=JS_GetPropertyUint32(c,result,0),complete=JS_GetPropertyUint32(c,result,1);
     const bool healthy=JS_IsBool(complete)&&JS_ToBool(c,complete)==1;
+    std::string gap;
+    if(!healthy) {
+        gap=replay_gap_diagnostic(header,result,false,true);
+        const auto ticket=gap.find(",t=");
+        if(ticket!=std::string::npos)gap.replace(0,ticket+1,"native_sampling_gap:v1,");
+        else gap.clear();
+    }
     JS_FreeValue(c,complete);JS_FreeValue(c,result);
     if(!healthy || r.lanes->failure.load(std::memory_order_acquire)) {
-        JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;JS_FreeValue(c,item);JS_FreeValue(c,projection);throw std::runtime_error("sampling checkpoint violated owned boundary");
+        JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;JS_FreeValue(c,item);JS_FreeValue(c,projection);
+        throw std::runtime_error(gap.empty()?"sampling checkpoint violated owned boundary":gap);
     }
     if(JS_IsUndefined(projection)||JS_IsNull(projection)) {
         JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;
@@ -1635,21 +1645,25 @@ bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMem
         r.sampling_retry_reason="sampling_terminal_not_current";JS_FreeValue(c,item);JS_FreeValue(c,projection);return false;
     }
     std::array<JSValue,3> publish_args{{item,projection,JS_TRUE}};
+    stage=4; // Native-authorized journal publication.
     r.replay_active=true;auto published=JS_Call(c,r.publication_publish,JS_UNDEFINED,publish_args.size(),publish_args.data());r.replay_active=false;
     JS_FreeValue(c,r.sampling_record);r.sampling_record=JS_UNDEFINED;
     JS_FreeValue(c,item);JS_FreeValue(c,projection);
     if(JS_IsException(published))throw std::runtime_error(exception(c));
+    stage=5; // Receipt encoding and parsing, never the original exception text.
     auto encoded=JS_JSONStringify(c,published,JS_UNDEFINED,JS_UNDEFINED);JS_FreeValue(c,published);
     if(JS_IsException(encoded))throw std::runtime_error(exception(c));
     const auto text=string(c,encoded);JS_FreeValue(c,encoded);const auto receipt=nlohmann::json::parse(text);
     if(receipt.value("native_publication_failure",false)||!receipt.value("error",nlohmann::json()).is_null())
         throw std::runtime_error("sampling publication failed");
     if(receipt.value("retry",false)){r.sampling_retry_reason="sampling_journal_not_ready";return false;}
+    stage=6; // Exact publication certificate.
     const auto& fence=receipt.at("native_publication");
     if(fence.at("closed_ticket")!=std::to_string(raw)||fence.at("sampling_serial")!=std::to_string(serial)
             ||fence.at("sample_request")!=std::to_string(request)
             ||plan_uint(receipt.at("native_capture_scope_mode_epoch"),9007199254740991ULL)!=mode)
         throw std::runtime_error("sampling publication certificate mismatch");
+    stage=7; // Commit only the independently verified publication.
     r.publication_ready=true;r.published_ticket=raw;r.published_mode_epoch=mode;
     r.published_sequence=plan_uint(fence.at("sequence"),9007199254740991ULL);
     r.completed_sample_request=request;r.completed_sample_token=fence.at("token").get<std::string>();
@@ -1659,6 +1673,23 @@ bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMem
     r.sampling_retry_reason.clear();
     // A sampling checkpoint cannot manufacture terminal-destruction evidence.
     return true;
+}
+
+bool sample_checkpoint(Runtime& r,std::uint64_t request,arkdps::capture::ReadMemory reader=arkdps::capture::capture_read,void* read_user=nullptr) {
+    unsigned stage=1;
+    const auto diagnostic=[&](unsigned json_id) {
+        return "native_sampling_failure:v1,s="+std::to_string(stage)
+            +",c="+std::to_string(r.lanes->failure.load(std::memory_order_acquire))+",j="+std::to_string(json_id);
+    };
+    try{return sample_checkpoint_impl(r,request,reader,read_user,stage);}
+    catch(const nlohmann::json::exception& error) {
+        throw std::runtime_error(diagnostic(error.id>=100&&error.id<=599?error.id:0));
+    } catch(const std::exception& error) {
+        // A native-generated owned-view ledger is already bounded. No arbitrary
+        // JS/C++ error message or values cross the runtime privacy boundary.
+        const std::string message=error.what();
+        throw std::runtime_error(diagnostic(0)+(message.rfind("native_sampling_gap:v1,",0)==0?"; "+message:""));
+    }
 }
 
 std::string readiness_on_worker() {
