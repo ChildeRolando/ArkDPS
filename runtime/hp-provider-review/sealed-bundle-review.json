@@ -1,0 +1,21 @@
+{
+  "decision": "approve",
+  "reviewed_commit": "6de2b186083943a8a52f9356bf875e71947e7e69",
+  "source_sha256": {
+    "native_pc/native_event_runtime/bridge.js": "a3592fabb83ececf17377e7cbffe205767ad24bc08f85552a56d2f8da6586d9c",
+    "native_pc/native_event_runtime/owned_replay_js.h": "b9140cadbe8e968adf6b500ff3bf09542b028d63994fba6a328b147ae4ec22dc"
+  },
+  "five_axes": {
+    "correctness": "Only immutable native function owner is cached; Begin still validates record shape/checkpoint and exact ticket lease. End still invokes lease and status for each record. Each scalar/byte/point/HP/Graph read uses the current native binding.",
+    "ownership": "Readonly nonconfigurable global data property, nonextensible null-prototype bundle, readonly data members and exact required/optional method whitelist. Accessors are inspected without execution; optional pairs are complete. No raw fact, packet, scope result or lease outcome cache is introduced.",
+    "failure_boundaries": "Changed record UID remains observable; invalid/revoked lease is not rescued by mutable global helper replacements. HP failure status stays deferred until demand, with structural native poison and ordinary planned failure unchanged. Legacy unsealed fixture path retains original ownership validation.",
+    "maintainability": "Single owner acquisition path selects authenticated immutable bundle or legacy owner. C++ sealed default true; false remains internal owned-test counterfactual, without a host feature switch. No second statistics or normalization path.",
+    "validation": "Read final implementation and provider-owned semantic receipt. Existing mutable/accessor/prototype/version/numeric/required/pair tests cover startup authentication. Global writable rejection mutation has green exit0/red exit1. No redundant CPP or throughput benchmark was run in this review."
+  },
+  "nonblocking_scope_note": "ArgumentHandler Object.hasOwn pinned alias reuse is unrelated to native bundle owner optimization; root already requested reverting that one line. Main approval does not depend on it.",
+  "boundaries": [
+    "No game attach/read/pipe/UI operation.",
+    "This review does not establish throughput, sustained queue stability or game FPS.",
+    "Provider-owned mutation and CPP results are attributed to performance_sol61 rather than independently rerun."
+  ]
+}

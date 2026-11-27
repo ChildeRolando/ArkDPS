@@ -1,0 +1,1182 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "replay_summaries": [],
+      "raw_events": [],
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 0,
+        "hp_observation_calls": 0,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 0,
+        "registered_plans": 0,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 8,
+      "dirty": 0,
+      "elapsed_ms": 0.014699995517730713,
+      "setters_per_second": 544217.8530157121,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "replay_summaries": [
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        }
+      ],
+      "raw_events": [],
+      "js_profile": {
+        "scope_ms": 0.5656000077724457,
+        "scope_inside_pub_ms": 0.5656000077724457,
+        "prefix_ms": 6.1137000024318695,
+        "journal_ms": 0.6117999851703644
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 0.3514,
+        "capture_read_bytes": 18870,
+        "capture_read_count": 2354,
+        "edges": 16,
+        "graph_calls": 0,
+        "graph_check_calls": 2,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 0,
+        "hp_observation_calls": 16,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 7,
+        "registered_plans": 0,
+        "scalar_calls": 5,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0.183
+      },
+      "branch": "unchanged",
+      "setters": 8,
+      "dirty": 0,
+      "elapsed_ms": 7.981499999761581,
+      "setters_per_second": 1002.3178600813094,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "replay_summaries": [
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        }
+      ],
+      "raw_events": [
+        {
+          "sequence": 2,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100000,
+          "hp_after": 99999,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 3,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 99999,
+          "hp_after": 99998,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 4,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 99998,
+          "hp_after": 99997,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 5,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 99997,
+          "hp_after": 99996,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 6,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 99996,
+          "hp_after": 99995,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 7,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 99995,
+          "hp_after": 99994,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 8,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 99994,
+          "hp_after": 99993,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 9,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 99993,
+          "hp_after": 99992,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        }
+      ],
+      "js_profile": {
+        "scope_ms": 0.6780000329017639,
+        "scope_inside_pub_ms": 0.07840001583099365,
+        "prefix_ms": 2.870299994945526,
+        "journal_ms": 0.7394999861717224
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 0.1205,
+        "capture_read_bytes": 27270,
+        "capture_read_count": 2914,
+        "edges": 16,
+        "graph_calls": 0,
+        "graph_check_calls": 10,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 8,
+        "hp_observation_calls": 16,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 15,
+        "registered_plans": 0,
+        "scalar_calls": 13,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0.1891
+      },
+      "branch": "changed_damage",
+      "setters": 8,
+      "dirty": 0,
+      "elapsed_ms": 5.488000005483627,
+      "setters_per_second": 1457.7259460653015,
+      "publication_count": 1,
+      "scope_stamps": 8,
+      "sequence_delta": 8,
+      "event_kinds": {
+        "enemy_hp": 8
+      }
+    },
+    {
+      "replay_summaries": [
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        }
+      ],
+      "raw_events": [
+        {
+          "sequence": 10,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100000,
+          "hp_after": 100001,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 11,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100001,
+          "hp_after": 100002,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 12,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100002,
+          "hp_after": 100003,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 13,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100003,
+          "hp_after": 100004,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 14,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100004,
+          "hp_after": 100005,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 15,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100005,
+          "hp_after": 100006,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 16,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100006,
+          "hp_after": 100007,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 17,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100007,
+          "hp_after": 100008,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        }
+      ],
+      "js_profile": {
+        "scope_ms": 0.6762000024318695,
+        "scope_inside_pub_ms": 0.10109999775886536,
+        "prefix_ms": 2.3895999789237976,
+        "journal_ms": 0.7260000109672546
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 0.1102,
+        "capture_read_bytes": 27270,
+        "capture_read_count": 2914,
+        "edges": 16,
+        "graph_calls": 0,
+        "graph_check_calls": 10,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 8,
+        "hp_observation_calls": 16,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 15,
+        "registered_plans": 0,
+        "scalar_calls": 13,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0.1736
+      },
+      "branch": "heal_coalesced",
+      "setters": 8,
+      "dirty": 0,
+      "elapsed_ms": 4.893999993801117,
+      "setters_per_second": 1634.6546812695206,
+      "publication_count": 1,
+      "scope_stamps": 8,
+      "sequence_delta": 8,
+      "event_kinds": {
+        "enemy_hp": 8
+      }
+    },
+    {
+      "replay_summaries": [
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        },
+        {
+          "unreadable": 0,
+          "structural": []
+        },
+        {
+          "unreadable": 1,
+          "structural": []
+        }
+      ],
+      "raw_events": [
+        {
+          "sequence": 18,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100000,
+          "hp_after": 100001,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 19,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100001,
+          "hp_after": 100002,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 20,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100002,
+          "hp_after": 100003,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 21,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100003,
+          "hp_after": 100004,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 22,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100004,
+          "hp_after": 100005,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 23,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100005,
+          "hp_after": 100006,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 24,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100006,
+          "hp_after": 100007,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        },
+        {
+          "sequence": 25,
+          "frame": 30,
+          "game_time": 1,
+          "source": null,
+          "kind": "enemy_hp",
+          "amount": 0,
+          "proof": {
+            "method": "Entity.SetHpInternal"
+          },
+          "target": "enemy_owned_throughput",
+          "target_instance": "12",
+          "hp_before": 100007,
+          "hp_after": 100008,
+          "native_autochess_scope": {
+            "protocol_version": 1,
+            "status": "available",
+            "verified_same_frame": true,
+            "frame": 30,
+            "game_time": 1,
+            "scope_key": "0x178000:0x17a000:0x17c000:0x17e000:0x180000:autochess:0",
+            "phase": 4,
+            "round": 1,
+            "collection_mode": "all"
+          }
+        }
+      ],
+      "js_profile": {
+        "scope_ms": 0.6379999816417694,
+        "scope_inside_pub_ms": 0.07659998536109924,
+        "prefix_ms": 2.2459000051021576,
+        "journal_ms": 1.0472999811172485
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 2,
+        "capture_ms": 0.1136,
+        "capture_read_bytes": 27270,
+        "capture_read_count": 2914,
+        "edges": 16,
+        "graph_calls": 0,
+        "graph_check_calls": 10,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "hp_failure_calls": 8,
+        "hp_observation_calls": 16,
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 15,
+        "registered_plans": 0,
+        "scalar_calls": 13,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0.1743
+      },
+      "branch": "maxhp_dirty",
+      "setters": 8,
+      "dirty": 1,
+      "elapsed_ms": 5.067699998617172,
+      "setters_per_second": 1578.6254123533292,
+      "publication_count": 1,
+      "scope_stamps": 8,
+      "sequence_delta": 8,
+      "event_kinds": {
+        "enemy_hp": 8
+      }
+    }
+  ]
+}

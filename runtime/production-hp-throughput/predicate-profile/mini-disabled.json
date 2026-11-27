@@ -1,0 +1,206 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback"
+  ],
+  "excluded": [
+    "scope guard validation",
+    "production publication",
+    "IPC/queue",
+    "native dirty callback snapshots",
+    "full metadata discovery (fixture graph sealed at setup)"
+  ],
+  "results": [
+    {
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 0,
+        "registered_plans": 0,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 3.2650000005960464,
+      "setters_per_second": 612557.4271469793,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 10000,
+        "capture_ms": 1.2160999999999345,
+        "capture_read_bytes": 618000,
+        "capture_read_count": 42000,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 8000,
+        "registered_plans": 0,
+        "scalar_calls": 12000,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0.8354999999999498
+      },
+      "branch": "unchanged",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 146.2287000119686,
+      "setters_per_second": 13677.20563635116,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 12000,
+        "capture_ms": 1.296199999999926,
+        "capture_read_bytes": 618000,
+        "capture_read_count": 42000,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 8000,
+        "registered_plans": 0,
+        "scalar_calls": 18000,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0.8923999999999457
+      },
+      "branch": "changed_damage",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 203.1131000071764,
+      "setters_per_second": 9846.730712737562,
+      "publication_count": 0,
+      "scope_stamps": 2000,
+      "sequence_delta": 2000,
+      "event_kinds": {
+        "enemy_hp": 2000
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 12000,
+        "capture_ms": 1.2630999999999324,
+        "capture_read_bytes": 618000,
+        "capture_read_count": 42000,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 8000,
+        "registered_plans": 0,
+        "scalar_calls": 18000,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0.8771999999999479
+      },
+      "branch": "heal_coalesced",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 188.07089999318123,
+      "setters_per_second": 10634.287388811947,
+      "publication_count": 0,
+      "scope_stamps": 2000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 12000,
+        "capture_ms": 1.2202999999999373,
+        "capture_read_bytes": 618000,
+        "capture_read_count": 42000,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_output_bytes": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": true,
+        "point_calls": 8000,
+        "registered_plans": 0,
+        "scalar_calls": 18000,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0.8527999999999477
+      },
+      "branch": "maxhp_dirty",
+      "setters": 2000,
+      "dirty": 20,
+      "elapsed_ms": 186.74379999935627,
+      "setters_per_second": 10709.860247070555,
+      "publication_count": 0,
+      "scope_stamps": 2000,
+      "sequence_delta": 41,
+      "event_kinds": {
+        "enemy_hp": 41
+      }
+    }
+  ]
+}

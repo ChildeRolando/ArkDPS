@@ -13,16 +13,20 @@ function setAutoChessMode(enabled){
  return {desired_mode:nativeAutoDesiredMode,effective_mode:nativeAutoEffective?.mode??null};
 }
 function autoCollectionMode(scope_key,phase){
+ return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureCollectionMode==='function'
+  ?probeAdapter.captureCollectionMode(desired=>autoCollectionModePoint(scope_key,phase,desired)):autoCollectionModePoint(scope_key,phase);
+}
+function autoCollectionModePoint(scope_key,phase,desired=nativeAutoDesiredMode){
  // Only a proven combat scope can latch a preference. Terminal observations
  // retain the completed combat's effective mode until another combat starts.
  if([4,5,6].includes(phase)&&nativeAutoEffective?.scope_key!==scope_key){
-  let mode=nativeAutoDesiredMode;
+  let mode=desired;
   // The assisted battlefield may have only other accounts' deployed actors.
   if(phase===5)mode='all';
   else if(phase===4&&probeAdapter.supportsAutoChessAllDefense!==true)mode='local';
   nativeAutoEffective={scope_key,mode};
  }
- return nativeAutoEffective?.mode??nativeAutoDesiredMode;
+ return nativeAutoEffective?.mode??desired;
 }
 function autoEventOwner(event){
  const scope=event.native_autochess_scope,owners=nativeAutoOwners;
@@ -98,7 +102,8 @@ function verifyAutoChessPhaseEnum(field){
  autoPhaseEnums.add(key);
 }
 function autoIdentity(k,name,namespace){
- return !k.isNull()&&className(k)===name&&k.add(0x18).readPointer().readCString()===namespace;
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureClassIdentity==='function')return probeAdapter.captureClassIdentity(k,name,namespace);
+ return !k.isNull()&&className(k)===name&&classNamespace(k)===namespace;
 }
 function autoLayout(k,name,namespace,count,specs,check=null){
  if(!autoIdentity(k,name,namespace))throw new Error('AutoChess class '+name);
@@ -137,7 +142,10 @@ function autoLayout(k,name,namespace,count,specs,check=null){
 function scopeBlock(address,size,fields,mismatch){
  const bytes=address.readByteArray(size);
  if(bytes===null||bytes.byteLength!==size)throw new Error('AutoChess block read unavailable');
- const view=new DataView(bytes);
+ return scopeBlockView(new DataView(bytes),size,fields,mismatch);
+}
+function scopeBlockView(view,size,fields,mismatch){
+ if(view.byteLength!==size)throw new Error('AutoChess block read unavailable');
  for(const [kind,offset,expected,high]of fields){
   if(kind==='p'){
    if(view.getUint32(offset,true)!==expected||view.getUint32(offset+4,true)!==high)
@@ -277,16 +285,31 @@ function autoRead(check=null){
 }
 function autoGeneric(data,name,namespace,read){
  if(data.isNull())throw new Error('AutoChess generic metadata');
- const k=read.p(data.add(24));
+ const k=autoMetadataPointer(data.add(24),read);
  if(!autoIdentity(k,name,namespace))throw new Error('AutoChess generic class '+name);
  return k;
 }
+// These helpers are used only for setup-verified, immutable IL2CPP metadata.
+// Gameplay object fields still require the current owned capture record.
+function autoMetadataView(address,size){
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()){
+  if(typeof probeAdapter.captureImmutableMetadata!=='function')__arkdpsReplayGap('immutable metadata closure unavailable');
+  return new DataView(probeAdapter.captureImmutableMetadata(address,size));
+ }
+ return new DataView(address.readByteArray(size));
+}
+function autoMetadataPointer(address,read=null){return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()?
+ ptr(autoMetadataView(address,8).getBigUint64(0,true)):read?read.p(address):address.readPointer();}
+function autoMetadataU16(address){return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()?
+ autoMetadataView(address,2).getUint16(0,true):address.readU16();}
+function autoMetadataU32(address){return typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()?
+ autoMetadataView(address,4).getUint32(0,true):address.readU32();}
 function autoList(address,maximum,read,listdict=false){
  let k=read.p(address);
  if(listdict){
-  if(!autoIdentity(k,'ListDict`2','Torappu')||!probeAdapter.autoChessReflected&&k.add(0x124).readU16()!==1)
+  if(!autoIdentity(k,'ListDict`2','Torappu')||!probeAdapter.autoChessReflected&&autoMetadataU16(k.add(0x124))!==1)
    throw new Error('AutoChess ListDict class');
-  k=read.p(k.add(0x58));
+  k=autoMetadataPointer(k.add(0x58),read);
  }
  const typed=autoLayout(k,'List`1','System.Collections.Generic',6,
   [[1,'_items',0x10,[29]],[2,'_size',0x18,[8]],[3,'_version',0x1c,[8]]]);
@@ -299,8 +322,8 @@ function autoList(address,maximum,read,listdict=false){
 }
 function autoPairs(address,maximum,read,kinds){
  const list=autoList(address,maximum,read,true),element=list.typed._items.data;
- if(element.isNull()||((element.add(8).readU32()>>>16)&255)!==21)throw new Error('AutoChess pair metadata');
- const pair=autoGeneric(element.readPointer(),'KeyValuePair`2','System.Collections.Generic',read);
+ if(element.isNull()||((autoMetadataU32(element.add(8))>>>16)&255)!==21)throw new Error('AutoChess pair metadata');
+ const pair=autoGeneric(autoMetadataPointer(element),'KeyValuePair`2','System.Collections.Generic',read);
  autoLayout(pair,'KeyValuePair`2','System.Collections.Generic',2,
   [[0,'key',0x10,[8]],[1,'value',0x18,kinds]]);
  if(!list.items.isNull()&&!autoIdentity(read.p(list.items),'KeyValuePair`2[]','System.Collections.Generic'))
@@ -333,8 +356,8 @@ function autoHeader(identity,read){
  const typed=read.object(dict,'Dictionary`2','System.Collections.Generic',14,
   [[1,'_entries',0x18,[29]],[2,'_count',0x20,[8]],[4,'_freeCount',0x28,[8]],[5,'_version',0x2c,[8]]]);
  const element=typed._entries.data;
- if(element.isNull()||((element.add(8).readU32()>>>16)&255)!==21)throw new Error('AutoChess dictionary metadata');
- const entry=autoGeneric(element.readPointer(),'Entry','',read);
+ if(element.isNull()||((autoMetadataU32(element.add(8))>>>16)&255)!==21)throw new Error('AutoChess dictionary metadata');
+ const entry=autoGeneric(autoMetadataPointer(element),'Entry','',read);
  autoLayout(entry,'Entry','',4,[[0,'hashCode',0x10,[8]],[1,'next',0x14,[8]],[2,'key',0x18,[18]],[3,'value',0x20,[28,18]]]);
  const entries=read.p(read.at(dict,'_entries')),count=read.i(read.at(dict,'_count')),free=read.i(read.at(dict,'_freeCount'));
  const dictVersion=read.i(read.at(dict,'_version'));
@@ -387,13 +410,14 @@ function autoData(address,read){
   host_key:token&&!host.isNull()?read.text(host):null,host_uid:token?hostUid:null};
 }
 function captureAutoCharacterFormPoint(scope,when,stamp){
+ if(typeof probeAdapter.captureCharacterFormPoint==='function'&&typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive())return probeAdapter.captureCharacterFormPoint(scope,when,stamp);
  if(scope.source!=='char_002_amiya'||!scope.sourceCharacterUid)return;
  const cache=nativeAutoCache,stage=nativeAutoStage;
  if(!scope.mod||!scope.nativeModifierSource||!sourceCharacterClasses||!enemyEntryConfig||!cache||!stage?.enabled||
     stamp?.status!=='available'||![4,5,6].includes(stamp.phase)||!['all','local'].includes(stamp.collection_mode)||
     stamp.frame!==when.frame||stamp.game_time!==when.game_time)return;
  try{
-  const fixed=clock.add(4).readS64().toString();
+  const fixed=captureClockFixed().toString();
   const sameScopeAndClock=()=>{
    const current=currentNativeIdentity(),observed=nativeAutoScope;
    return cache===nativeAutoCache&&stage===nativeAutoStage&&
@@ -404,7 +428,7 @@ function captureAutoCharacterFormPoint(scope,when,stamp){
     !!current&&Object.keys(current).every(key=>current[key]===cache.identity[key])&&
     stage.stageAddress.readPointer().equals(stage.stagePointer)&&
     cache.addresses.phase.readS32()===stamp.phase&&cache.addresses.round.readS32()===stamp.round&&
-    clock.readU32()===when.frame&&clock.add(4).readS64().toString()===fixed;
+    captureClockFrame()===when.frame&&captureClockFixed().toString()===fixed;
   };
   // These optional reads must not update or invalidate the production scope cache.
   if(Number(BigInt(fixed))/4294967296!==when.game_time||!sameScopeAndClock())return;
@@ -457,6 +481,7 @@ function autoCharacterFormEvidence(scope,when){
  return {version:1,entity_cid,data_cid,data_uid,instance_uid,frame,game_time,scope_key,phase,round,collection_mode};
 }
 function autoTokenHostEvidence(scope,when){
+ if(typeof probeAdapter.captureTokenHostEvidence==='function'&&typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive())return probeAdapter.captureTokenHostEvidence(scope,when);
  // A short-lived token can disappear before the next membership sample.
  const stamp=when.native_autochess_scope,entry=scope.when,cache=nativeAutoCache;
  if(stamp?.status!=='available'||![4,5,6].includes(stamp.phase)||!entry||
@@ -464,8 +489,8 @@ function autoTokenHostEvidence(scope,when){
     !sourceCharacterClasses||!enemyEntryConfig||!cache||
     !sameMitigationTime(entry,when)||!sameNativeEventScope(entry,when))return;
  try{
-  const fixed=clock.add(4).readS64().toString(),{phase,round}=cache.addresses;
-  const samePoint=()=>clock.readU32()===when.frame&&clock.add(4).readS64().toString()===fixed&&
+  const fixed=captureClockFixed().toString(),{phase,round}=cache.addresses;
+  const samePoint=()=>captureClockFrame()===when.frame&&captureClockFixed().toString()===fixed&&
                       phase.readS32()===stamp.phase&&round.readS32()===stamp.round;
   if(Number(BigInt(fixed))/4294967296!==when.game_time||!samePoint())return;
   const read=autoRead(),source=read.p(scope.mod);
@@ -565,13 +590,7 @@ function readAutoChess(identity,frame,fixed){
    for(let i=0;i<count;i++){
     const unit=read.p(items.add(0x20+i*8));
     try{
-     let k=read.p(unit),character=null,bObject=null;const seen=new Set();
-     for(let depth=0;depth<10&&!k.isNull();depth++){
-      if(seen.has(k.toString()))throw new Error('AutoChess token lineage cycle');seen.add(k.toString());
-      if(autoIdentity(k,'Character','Torappu.Battle'))character=k;
-      if(autoIdentity(k,'BObject','Torappu.Battle')){bObject=k;break;}
-      k=read.p(k.add(0x58));
-     }
+     const {character,bObject}=autoBattleClassLineage(read.p(unit));
      if(!character){liveCharacterDataUids=null;lifecycleInstances=null;continue;}
      read.layout(unit,autoLayout(character,'Character','Torappu.Battle',356,[[78,'<data>k__BackingField',0x538,[18]]]));
      const row=autoData(read.p(read.at(unit,'<data>k__BackingField')),read);
@@ -648,6 +667,7 @@ function finishAutoChess(result,identity,frame,fixed){
  result.scopeGuards??=scopeGuardPlan(result);
  nativeAutoCache={addresses:header.addresses,identity:{...identity},fingerprint,headerKey,roots,scopeGuards:result.scopeGuards,scopeWitness:{header:result.header,playerList:result.playerList,playerItems:result.playerItems,ownerRefs:result.ownerRefs}};
  autoCollectionOwners(result,scope_key,collection_mode,frame,Number(BigInt(fixed))/4294967296);
+ probeAdapter.publishCaptureScope?.();
  return {protocol_version:1,status:'available',verified_same_frame:true,frame,
   game_time:Number(BigInt(fixed))/4294967296,scope_key,phase:header.phase,round:header.round,
   self_player_index:header.self,players,memberships,unknown_memberships:unknown,collection_mode,
@@ -659,7 +679,7 @@ function finishAutoChess(result,identity,frame,fixed){
 function refreshAutoChessScope(cached,when){
  const before=currentNativeIdentity(),stage=nativeAutoStage;
  if(!before||Object.keys(before).some(k=>before[k]!==cached.identity[k]))return false;
- const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
+ const frame=captureClockFrame(),fixed=captureClockFixed().toString();
  if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time)return false;
  if(!stage?.enabled||!stage.stageAddress.readPointer().equals(stage.stagePointer))return false;
  validateScopeStage(stage,before.level,stage.stagePointer);
@@ -689,17 +709,22 @@ function refreshAutoChessScope(cached,when){
  validateScopeStage(stage,before.level,stage.stagePointer);
  const after=currentNativeIdentity();
  if(!after||Object.keys(before).some(k=>before[k]!==after[k])||
-    !stage.stageAddress.readPointer().equals(stage.stagePointer)||clock.readU32()!==frame||
-    clock.add(4).readS64().toString()!==fixed)return false;
+    !stage.stageAddress.readPointer().equals(stage.stagePointer)||captureClockFrame()!==frame||
+    captureClockFixed().toString()!==fixed)return false;
  const result={header,model,playerList,playerItems,playerVersion,ownerRefs,
   playerAddresses:{list:read.at(model,'m_allPlayerDatas'),items:read.at(playerList,'_items'),
    count:read.at(playerList,'_size'),version:read.at(playerList,'_version')}};
  nativeAutoCache={...cached,addresses:header.addresses,scopeGuards:scopeGuardPlan(result),scopeWitness:result};
+ probeAdapter.publishCaptureScope?.();
  // The full body was not revalidated here; no old actor map may prune events.
  nativeAutoOwners=null;
  return true;
 }
 function stampAutoChessClock(when,allowRefresh=true){
+ if(typeof probeAdapter.captureScopePoint==='function'&&typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()){
+  const scope=probeAdapter.captureScopePoint(when);if(scope===undefined)return;
+  when.native_autochess_scope=scope??{protocol_version:1,status:'unknown',verified_same_frame:false,frame:when.frame,game_time:when.game_time,reason:'captured native scope unavailable'};return;
+ }
  if(!nativeAutoStage?.enabled)return;
  const unknown=reason=>{when.native_autochess_scope={protocol_version:1,status:'unknown',
   verified_same_frame:false,frame:when.frame,game_time:when.game_time,reason};};
@@ -716,7 +741,7 @@ function stampAutoChessClock(when,allowRefresh=true){
    throw new Error('AutoChess stage cache changed');
   }
   if(!cached||Object.keys(before).some(k=>before[k]!==cached.identity[k]))throw new Error('AutoChess scope cache unavailable');
-  const openingClock=checkedNativeView(clock,12),frame=openingClock.getUint32(0,true),fixed=openingClock.getBigInt64(4,true).toString();
+  const openingClock=captureRead('scope.clock_open',()=>checkedNativeView(clock,12)),frame=openingClock.getUint32(0,true),fixed=openingClock.getBigInt64(4,true).toString();
   if(frame!==when.frame||Number(BigInt(fixed))/4294967296!==when.game_time){
    unknown('AutoChess event clock mismatch');return;
   }
@@ -731,7 +756,7 @@ function stampAutoChessClock(when,allowRefresh=true){
      !nativeAutoStage.stageAddress.readPointer().equals(stagePointer))throw new Error('AutoChess changed during read');
   const after=currentNativeIdentity();
   if(!after||Object.keys(before).some(k=>before[k]!==after[k]))throw new Error('AutoChess event scope changed');
-  const closingClock=checkedNativeView(clock,12);
+  const closingClock=captureRead('scope.clock_close',()=>checkedNativeView(clock,12));
   if(closingClock.getUint32(0,true)!==frame||closingClock.getBigInt64(4,true).toString()!==fixed){
    unknown('AutoChess event scope changed');return;
   }
@@ -742,25 +767,22 @@ function stampAutoChessClock(when,allowRefresh=true){
   if(allowRefresh&&guardFailed&&cached){
    try{if(refreshAutoChessScope(cached,when))return stampAutoChessClock(when,false);}catch(refreshError){/* Preserve the original failure. */}
   }
-  nativeAutoCache=null;nativeAutoOwners=null;unknown(String(e));
+  nativeAutoCache=null;nativeAutoOwners=null;probeAdapter.publishCaptureScope?.();unknown(String(e));
  }
 }
 const AUTO_PRESENCE_SLOT_LIMIT=4096,AUTO_PRESENCE_CHARACTER_LIMIT=128;
-const autoPresenceLineages=new Map();
-function autoPresenceLineage(klass,check){
- const key=klass.toString();
- if(autoPresenceLineages.has(key))return autoPresenceLineages.get(key);
- let character=null,current=klass;
- for(let depth=0;depth<10&&!current.isNull();depth++){
-  check(24);
+function autoBattleClassLineage(klass,check=null){
+ let character=null;
+ for(const current of immutableClassLineage(klass,check)){
+  if(check)check(24);
   if(autoIdentity(current,'Character','Torappu.Battle'))character=current;
-  if(autoIdentity(current,'BObject','Torappu.Battle')){
-   const lineage={character,bObject:current};
-   if(autoPresenceLineages.size<128)autoPresenceLineages.set(key,lineage);
-   return lineage;
-  }
-  current=current.add(0x58).readPointer();
+  if(autoIdentity(current,'BObject','Torappu.Battle'))return {character,bObject:current};
  }
+ return {character,bObject:null};
+}
+function autoPresenceLineage(klass,check){
+ const lineage=autoBattleClassLineage(klass,check);
+ if(lineage.bObject)return lineage;
  throw new Error('AutoChess presence lineage');
 }
 function captureAutoChessPresence(mark){
@@ -786,7 +808,7 @@ function captureAutoChessPresence(mark){
      scope_key!==cache.roots+':autochess:'+nativeAutoEpoch||
      cache.addresses.phase.readS32()!==phase||cache.addresses.round.readS32()!==round||
      ptr(roots.controller).add(probeAdapter.autoChessStateOffset).readS32()!==2||
-     clock.readU32()!==frame||clock.add(4).readS64().toString()!==point.native_fixed_time)
+     captureClockFrame()!==frame||captureClockFixed().toString()!==point.native_fixed_time)
    throw new Error('AutoChess presence binding changed');
   validateScopeStage(stage,roots.level,stage.stagePointer);
   validateScopeGuards(cache.scopeGuards);
@@ -795,7 +817,7 @@ function captureAutoChessPresence(mark){
      cache.addresses.phase.readS32()!==phase||cache.addresses.round.readS32()!==round||
      !stage.stageAddress.readPointer().equals(stage.stagePointer)||
      ptr(roots.controller).add(probeAdapter.autoChessStateOffset).readS32()!==2||
-     clock.readU32()!==frame||clock.add(4).readS64().toString()!==point.native_fixed_time)
+     captureClockFrame()!==frame||captureClockFixed().toString()!==point.native_fixed_time)
    throw new Error('AutoChess presence scope or clock changed');
  }
  try{
@@ -918,7 +940,9 @@ const nativeRootFailures={
  stats_missing:'BattleLogger statistics object missing',
  stats_class_mismatch:'Statistics object class differs from BattleStats'
 };
-function currentNativeIdentity(reject){
+function captureRootRead(side,read){return typeof probeAdapter.captureRootRead==='function'?probeAdapter.captureRootRead(side,read):read();}
+function currentNativeIdentity(reject,side='open'){return captureRootRead(side,()=>currentNativeIdentityPoint(reject));}
+function currentNativeIdentityPoint(reject){
  if(!nativeControllerClass)return reject?.('controller_class_unavailable')??null;
  const parent=nativeControllerClass.add(0x58).readPointer();
  if(parent.isNull())return reject?.('singleton_parent_missing')??null;
@@ -941,6 +965,9 @@ function readAutoChessViewMode(manager){
  }catch(e){return null;}
 }
 function nativeBinding(prepared=null,captureRoundStart=false){
+ return typeof probeAdapter.captureBindingRead==='function'?probeAdapter.captureBindingRead(()=>nativeBindingPoint(prepared,captureRoundStart),{captureRoundStart}):nativeBindingPoint(prepared,captureRoundStart);
+}
+function nativeBindingPoint(prepared=null,captureRoundStart=false){
  // Read the same five ownership roots and exact Q32.32 clock as the guarded
  // Windows sampler. The host binds this evidence to its battle serial.
  let step='root_identity';nativeAutoBindingDiagnostic=null;
@@ -963,7 +990,7 @@ function nativeBinding(prepared=null,captureRoundStart=false){
   // Both reads still bracket the ownership roots and exact game clock.
   step='controller_state';
   const stateOffset=probeAdapter.autoChessStateOffset??0x228;
-  const stateAddress=ptr(before.controller).add(stateOffset),state=stateAddress.readS32();
+  const stateAddress=ptr(before.controller).add(stateOffset),state=captureRootRead('open',()=>stateAddress.readS32());
   if(state!==2&&state!==3){
    nativeAutoCache=null;
    return unavailable('BattleController is not PLAYING or FINISHED');
@@ -971,9 +998,9 @@ function nativeBinding(prepared=null,captureRoundStart=false){
   if(state!==2)prepared=null;
   step='stage_metadata';
   const level=ptr(before.level),levelClass=probeAdapter.autoChessReflected?level.readPointer():null;
-  const stageAddress=level.add(probeAdapter.autoChessStageOffset??0x18),stagePointer=stageAddress.readPointer(),stage=str(stagePointer);
+  const stageAddress=level.add(probeAdapter.autoChessStageOffset??0x18),stagePointer=captureRootRead('open',()=>stageAddress.readPointer()),stage=captureRootRead('open',()=>str(stagePointer));
   if(typeof stage!=='string'||!stage.length)return unavailable('LevelData stage identifier unavailable');
-  const frame=clock.readU32(),fixed=clock.add(4).readS64().toString();
+  const frame=captureClockFrame(),fixed=captureClockFixed().toString();
   const enabled=/AUTOCHESS/i.test(stage);
   let stageClass=null;
   if(enabled&&probeAdapter.autoChessReflected){
@@ -996,13 +1023,13 @@ function nativeBinding(prepared=null,captureRoundStart=false){
    nativeAutoCache=null;
    return unavailable('LevelData or stage identity changed during binding');
   }
-  const after=currentNativeIdentity(rejectRoot);
+  const after=currentNativeIdentity(rejectRoot,'close');
   if(after===null)return null;
-  const endFrame=clock.readU32(),endFixed=clock.add(4).readS64().toString();
-  const endStagePointer=probeAdapter.autoChessReflected?stagePointer:stageAddress.readPointer();
+  const endFrame=captureClockFrame(),endFixed=captureClockFixed().toString();
+  const endStagePointer=probeAdapter.autoChessReflected?stagePointer:captureRootRead('close',()=>stageAddress.readPointer());
   if(Object.keys(before).some(key=>before[key]!==after[key])
-     ||stateAddress.readS32()!==state||!endStagePointer.equals(stagePointer)||
-     !probeAdapter.autoChessReflected&&str(endStagePointer)!==stage){
+     ||captureRootRead('close',()=>stateAddress.readS32())!==state||!endStagePointer.equals(stagePointer)||
+     !probeAdapter.autoChessReflected&&captureRootRead('close',()=>str(endStagePointer))!==stage){
    nativeAutoCache=null;
    return unavailable('battle roots, clock, state or stage changed during binding');
   }
@@ -1066,6 +1093,7 @@ function nativeBinding(prepared=null,captureRoundStart=false){
     {key:bodyKey,generation:nativeGeneration,epoch:nativeAutoEpoch,frame,fixed,body:auto,
      prepareBeforeClock}:null;
   }
+  probeAdapter.publishCapturePublication?.(result);
   return result;
  }catch(e){return unavailable(e);}
 }

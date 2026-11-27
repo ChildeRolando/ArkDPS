@@ -1,0 +1,117 @@
+[
+  {
+    "marker": "// @research-hp:configuration",
+    "product": "// Product HP telemetry is snapshot-based; these are fixed capability facts.\nconst coalesceEnemyHp=false;\nconst collectEnemyHpChanges=false;",
+    "research": "const coalesceEnemyHp=globalThis.arkdpsCoalesceEnemyHp!==false;\n// Product collection uses membership snapshots for current HP. Full HP\n// telemetry is retained only as an explicit owned-fixture reference mode.\nconst collectEnemyHpChanges=globalThis.arkdpsCollectEnemyHpChanges===true;"
+  },
+  {
+    "marker": "// @research-hp:coalescer-state",
+    "product": "",
+    "research_file": "full_hp_coalescer.js"
+  },
+  {
+    "marker": "// @research-hp:record-implementation",
+    "product": "function recordEnemyHp(write,when,method,hp,maxHp){\n const {evidence,hpBefore}=write;\n if(maxHp!==null)evidence.enemy_max_hp=maxHp;\n evidence.hp_before=hpBefore;\n evidence.hp_after=hp;\n return !!record(null,'enemy_hp',0,when,{method},evidence);\n}\n",
+    "research_file": "full_hp_record.js"
+  },
+  {
+    "marker": "// @research-hp:leaf-reducer",
+    "product": "",
+    "research_file": "hp_leaf_facts.js"
+  },
+  {
+    "marker": "// @research-hp:record-birth-index",
+    "product": "",
+    "research": " if(coalesceEnemyHp&&event){\n  if(kind==='enemy_enter'||kind==='enemy_reborn')\n   enemyHpBirths.set(evidence.target_instance,{eid:evidence.target,frame:when.frame});\n  else if(kind==='enemy_fake_death'||kind==='enemy_finish')enemyHpBirths.delete(evidence.target_instance);\n }"
+  },
+  {
+    "marker": "// @research-hp:recycle-fast-return",
+    "product": "     if(!awaitingEnemyTile.size&&!enemyBirthProofs.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size)return;",
+    "research": "     if(!awaitingEnemyTile.size&&!enemyBirthProofs.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size\n        &&!enemyHpBirths.size)return;"
+  },
+  {
+    "marker": "// @research-hp:recycle-index",
+    "product": "",
+    "research": "      if(coalesceEnemyHp){\n       const instance=String(uid);\n       if([...enemyHpRuns.values()].some(run=>run.uid===instance))flushCoalescedEnemyHp();\n       enemyHpBirths.delete(instance);\n      }"
+  },
+  {
+    "marker": "// @research-hp:defer-scope",
+    "product": "  const deferScope=!collectEnemyHpChanges&&!attributeChange;",
+    "research": "  const deferScope=!collectEnemyHpChanges&&!attributeChange||coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';"
+  },
+  {
+    "marker": "// @research-hp:boundary-1",
+    "product": "",
+    "research": " if(coalesceEnemyHp)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-2",
+    "product": "",
+    "research": " if(flush&&coalesceEnemyHp)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-3",
+    "product": "",
+    "research": "  resetEnemyHpCoalescing();"
+  },
+  {
+    "marker": "// @research-hp:boundary-4",
+    "product": "",
+    "research": "    if(coalesceEnemyHp)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-5",
+    "product": "",
+    "research": "    if(coalesceEnemyHp)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-6",
+    "product": "",
+    "research": "  if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-7",
+    "product": "",
+    "research": "  if(coalesceEnemyHp)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-8",
+    "product": "",
+    "research": "  if(coalesceEnemyHp)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-9",
+    "product": "",
+    "research": "     resetEnemyHpCoalescing();"
+  },
+  {
+    "marker": "// @research-hp:boundary-10",
+    "product": "",
+    "research": "    if(coalesceEnemyHp)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-11",
+    "product": "",
+    "research": "     if(coalesceEnemyHp)resetEnemyHpCoalescing();"
+  },
+  {
+    "marker": "// @research-hp:boundary-12",
+    "product": " resetDamageSettlementScope();",
+    "research": " resetEnemyHpCoalescing();resetDamageSettlementScope();"
+  },
+  {
+    "marker": "// @research-hp:boundary-13",
+    "product": "",
+    "research": "  if(coalesceEnemyHp)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-14",
+    "product": "",
+    "research": " if(coalesceEnemyHp&&!active)flushCoalescedEnemyHp();"
+  },
+  {
+    "marker": "// @research-hp:boundary-15",
+    "product": "",
+    "research": " if(coalesceEnemyHp)flushCoalescedEnemyHp();"
+  }
+]

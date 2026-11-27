@@ -1,6 +1,7 @@
 """Versioned local summaries. One acquisition owner writes; readers get copies."""
 from __future__ import annotations
 
+from metrics import timed
 from copy import deepcopy
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -949,6 +950,7 @@ class BattleHistory:
             except (OSError, ValueError, UnicodeError) as exc:
                 return HistoryResult(diagnostics=(HistoryDiagnostic('invalid_record', str(path), str(exc)),))
 
+    @timed('history_save')
     def save(self, record):
         record = BattleRecord.from_dict(record.to_dict())
         path = self.path_for(record.battle_id)

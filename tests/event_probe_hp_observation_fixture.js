@@ -1,0 +1,75 @@
+"use strict";
+// Real installed HP callbacks use the ordinary provider and sole apply owner.
+const fs=require('fs'),vm=require('vm'),assert=require('assert'),path=require('path');
+const {fixture}=require('./native_pc_frida_probe_fixture.js');
+function run(mode,adapter=false,closingWord=false){
+ const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),enemyHpState:true,settlement:true});
+ f.context.rpc.exports.mark();f.clock(30,4294967296n);
+ const actor=f.unit(mode==='trap'?'trap_owned':mode==='nonenemy'?'char_owned':'enemy_test',12),attrs=f.alloc(),cache=f.alloc();
+ f.write(actor,mode==='trap'||mode==='nonenemy'?f.unitClass:f.enemyClass);
+ f.write(actor.add(0x25),mode==='unborn'?0:1);f.write(actor.add(0x26),0);f.write(actor.add(0x40),100n*4294967296n);
+ f.write(actor.add(0xb0),attrs);f.write(attrs.add(0x68),cache);f.write(cache.add(0x18),mode==='empty-maxhp'?0:1);
+ f.write(cache.add(0x20),0n);f.write(cache.add(0x28),1000n*4294967296n);f.write(cache.add(0x30),1);
+ if(mode==='null-attributes')f.write(actor.add(0xb0),f.ptr(0));
+ const trace=[],acquisitions=[];f.context.hpIoTrace=(name)=>trace.push(name);f.context.hpAcquire=(edge)=>acquisitions.push(edge);f.context.adapterMode=adapter;f.context.closingWord=closingWord;
+ vm.runInContext(`const baseApplyEntry=applyHpEntry,baseApplyLeave=applyHpLeave;
+ class ObservedHpIo{#base=pointerHpIo;read(name,args){hpIoTrace(name);const value=this.#base[name](...args);return name==='clock'&&closingWord?[...value,value[1]]:value;}}
+ for(const name of Object.keys(pointerHpIo))ObservedHpIo.prototype[name]=function(...args){return this.read(name,args);};
+ let clockSamples=0;probeAdapter.captureValidatedClockSample=()=>{clockSamples++;};
+ const observedIo=new ObservedHpIo();
+ if(adapterMode)probeAdapter.captureHpObservation=(edge,enemy)=>{hpAcquire(edge);return observedIo;};
+ else{applyHpEntry=(receiver,args,io,label,attribute)=>baseApplyEntry(receiver,args,observedIo,label,attribute);
+ applyHpLeave=(receiver,io,label)=>baseApplyLeave(receiver,observedIo,label);}`,f.context);
+ if(mode==='pending-rebirth')vm.runInContext('pendingEnemyRebirth.set(12,{})',f.context);
+ const hook=f.callback(mode==='dirty-nonhp'?'OnAttributeDirty':'SetHpInternal',f.entity),call={threadId:1};
+ hook.onEnter.call(call,[actor,f.ptr(1)]);
+ if(mode!=='unchanged')f.write(actor.add(0x40),101n*4294967296n);
+ hook.onLeave.call(call);
+ return {clockSamples:vm.runInContext('clockSamples',f.context),trace,acquisitions,queue:JSON.parse(vm.runInContext('JSON.stringify(queue)',f.context)),active:vm.runInContext('active',f.context)};
+}
+{
+ const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),enemyHpState:true});
+ assert.throws(()=>vm.runInContext('validatedClockValues(30,4294967296n,30,false,false,4294967297n)',f.context),/unstable callback clock/);
+ assert.equal(vm.runInContext('validatedClockValues(30,4294967296n,30,true,false,4294967297n)',f.context),null);
+ assert.equal(vm.runInContext('validatedClockValues(30,4294967296n,30,false,false).game_time',f.context),1);
+ assert.equal(vm.runInContext('validatedClockValues(30,4294967296n,30,false,false,4294967296n).game_time',f.context),1);
+}
+assert.equal(run('normal',true,true).clockSamples,1);
+assert.equal(run('unchanged',true,true).clockSamples,0);
+assert.equal(run('trap',true,true).clockSamples,0);
+assert.equal(run('normal',true,false).clockSamples,0);
+assert.deepEqual(run('normal').trace,['identity','born','clock','id','hp','clock','closing','attributes','attributeCount','attributeWords']);
+assert.deepEqual(run('unborn').trace,['identity','born']);
+assert.deepEqual(run('nonenemy').trace,['identity','id']);
+assert.deepEqual(run('trap').trace,['identity','id','trapClass','clock','id','hp','clock','closing']);
+assert.deepEqual(run('dirty-nonhp').trace,[]);
+assert.deepEqual(run('pending-rebirth').trace,['identity','born','clock']);
+assert.deepEqual(run('unchanged').trace,['identity','born','clock','id','hp','clock','closing']);
+assert.deepEqual(run('empty-maxhp').trace,['identity','born','clock','id','hp','clock','closing','attributes','attributeCount']);
+assert.deepEqual(run('null-attributes').trace,['identity','born','clock','id','hp','clock','closing','attributes']);
+for(const mode of ['normal','unborn','nonenemy','trap','dirty-nonhp','pending-rebirth','unchanged','empty-maxhp','null-attributes']){
+ const direct=run(mode),adapted=run(mode,true);assert.deepEqual(adapted.trace,direct.trace,mode);assert.deepEqual(adapted.queue,direct.queue,mode);
+ if(mode==='dirty-nonhp')assert.deepEqual(adapted.acquisitions,[]);
+ else if(['normal','trap','unchanged','empty-maxhp','null-attributes'].includes(mode))assert.deepEqual(adapted.acquisitions,['entry','leave']);
+ else assert.deepEqual(adapted.acquisitions,['entry']);
+}
+for(const mode of ['normal','unborn','nonenemy','trap','dirty-nonhp','pending-rebirth','unchanged','empty-maxhp','null-attributes'])assert.equal(run(mode).active,0,mode);
+{
+ const f=fixture({platform:'native_pc',sourcePath:path.resolve('event_probe_native_pc.js'),enemyHpState:true});
+ f.context.observationMeta={clock:vm.runInContext('clock',f.context),string_class:'0x1000',classes:{Enemy:f.enemyClass.toString()},skill_offsets:{}};
+ const plan=vm.runInContext('nativeCapturePlan("hp.Entity.SetHpInternal",ptr(1),observationMeta)',f.context);
+ for(const field of plan.fields){assert(field.observation,field.name);assert.equal(field.observation.name,field.name);for(const value of field.observation.values){assert(['u8','u32','u64','i64','utf16'].includes(value.kind));assert(Number.isInteger(value.offset));}}
+ f.context.rawObservationPlan=plan;
+ const sealed=vm.runInContext('sealedCaptureContract(rawObservationPlan)',f.context);
+ const original=plan.fields.find(field=>field.name==='hp.identity'),copied=sealed.fields.find(field=>field.name==='hp.identity');
+ assert.deepEqual(JSON.parse(JSON.stringify(copied.observation.values)),[{kind:'u64',offset:0},{kind:'u32',offset:24}]);
+ original.observation.values[0].offset=99;original.pointer_offsets.push(999);
+ assert.equal(copied.observation.values[0].offset,0);assert.equal(copied.pointer_offsets.length,0);
+ assert.strictEqual(vm.runInContext('sealedCaptureContract(sealedCaptureContract(rawObservationPlan))',f.context).fields[0].observation.name,plan.fields[0].name);
+ f.context.authenticatedContract=sealed;assert.strictEqual(vm.runInContext('sealedCaptureContract(authenticatedContract)',f.context),sealed);
+ const prototypeKey=JSON.parse('{"__proto__":{"x":1}}'),holes=new Array(3);holes[0]={k:1};
+ for(const original of [prototypeKey,holes]){f.context.snapshotProbe=original;const copy=vm.runInContext('sealedCaptureContract(snapshotProbe)',f.context);assert.equal(JSON.stringify(copy),JSON.stringify(original));assert.deepEqual(Object.keys(copy),Object.keys(original));if(Array.isArray(original))assert.equal(copy.length,3);else{assert(Object.prototype.hasOwnProperty.call(copy,'__proto__'));assert.equal(copy.x,undefined);}}
+ for(const bad of [new Map(),new Date(),{callback(){}}]){f.context.nonJsonContract=bad;assert.throws(()=>vm.runInContext('sealedCaptureContract(nonJsonContract)',f.context),/non-JSON capture contract/);}
+ assert(Object.isFrozen(copied.observation.values));assert(Object.isFrozen(copied.observation.values[0]));assert(!Object.isFrozen(original.observation.values));
+}
+console.log('PASS_HP_OBSERVATION_OWNER count1 original branch-demand and active closure');

@@ -1,0 +1,10 @@
+{
+  "layout": {
+    "returncode": 1,
+    "stderr": "evalmachine.<anonymous>:166\n if(__arkdpsReplay!==null)throw new Error('replay already active');\n                          ^\n\nError: replay already active\n    at __arkdpsReplayBegin (evalmachine.<anonymous>:166:33)\n    at evalmachine.<anonymous>:8:12\n    at Script.runInContext (node:vm:149:12)\n    at Object.runInContext (node:vm:301:6)\n    at Object.<anonymous> (E:\\\u93c2\u56e8\u3002\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\tests\\native_pc_graph_typed_adoption_fixture.js:20:4)\n    at Module._compile (node:internal/modules/cjs/loader:1830:14)\n    at Object..js (node:internal/modules/cjs/loader:1961:10)\n    at Module.load (node:internal/modules/cjs/loader:1553:32)\n    at Module._load (node:internal/modules/cjs/loader:1355:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n\nNode.js v24.15.0\n"
+  },
+  "recognition": {
+    "returncode": 1,
+    "stderr": "node:internal/assert/utils:77\n    throw err;\n    ^\n\nAssertionError [ERR_ASSERTION]: reject\n    at Object.<anonymous> (E:\\\u93c2\u56e8\u3002\\ChatGPT\\ArkDPS\\arkdps-graph-typed-adoption\\tests\\native_pc_graph_typed_adoption_fixture.js:34:25)\n    at Module._compile (node:internal/modules/cjs/loader:1830:14)\n    at Object..js (node:internal/modules/cjs/loader:1961:10)\n    at Module.load (node:internal/modules/cjs/loader:1553:32)\n    at Module._load (node:internal/modules/cjs/loader:1355:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.require (node:internal/modules/cjs/loader:1576:12)\n    at require (node:internal/modules/helpers:153:16)\n    at [eval]:1:294\n    at runScriptInThisContext (node:internal/vm:219:10) {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n\nNode.js v24.15.0\n"
+  }
+}

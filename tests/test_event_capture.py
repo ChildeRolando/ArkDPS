@@ -537,7 +537,7 @@ def test_probe_recovers_targetless_damage_from_the_same_modifier_invocation():
     js = assemble_probe_source('mumu').source
     assert 'scopes[index].mod.equals(modifier)' in js
     assert 'scope.source===this.source&&sameMitigationTime(scope.when,this.when)' in js
-    assert 'if(scope.targetHit)scope.targetHitAmbiguous=true' in js
+    assert 'if(scope.targetHit||scope.targetCallbackMismatch){\n        scope.targetHitAmbiguous=true' in js
     assert 'overkillEvidence(this.mod,hit.target,hit.hpBefore,end.frame)' in js
     assert 'settlement&&settlement.amount===amount' in js
     leave = js[js.index('let endStamp;'):js.index('\ninstallEnemyEntryHooks();')]

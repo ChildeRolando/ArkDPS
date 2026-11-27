@@ -1,0 +1,155 @@
+{
+  "source_sha256": {
+    "native_pc\\native_event_runtime\\capture_queue.h": "03b7bd11dfadd15976065ee109c70d26d71d9d8ee99811e488cd08c56f601fb2",
+    "native_pc\\native_event_runtime\\capture_spill_pool.h": "be99e87c159fe7dcd382b8f6fa020e614687e3b56901f47a110d8bada3b177e4",
+    "native_pc\\native_event_runtime\\engine.h": "faf029c9e14b76075678dc4ad558e8d2a7489f1e3ca901ee69d717bdb5ba056a",
+    "native_pc\\native_event_runtime\\engine_capture_config.h": "6813bc6d7bac66ac9599399cb87355e525323bb9ca91849695a5a32fa399cd34",
+    "native_pc\\native_event_runtime\\engine_capture_lane.h": "d0f68f0733c3456cf9ca7090c5ffc43c9fa959fdf2283fd4e6e7642f1b0ba9a3",
+    "native_pc\\native_event_runtime\\engine_capture_pipeline.h": "fedc71be3a1ed10fa818d4e9f4d01dcf14c5c8effe773c49a586b9e939e9b891",
+    "native_pc\\native_event_runtime\\engine_capture_plan.h": "11a50d55860cb6b2e166aa22cb8f9c05ec62a28da292c079967bcd3c596f76ef",
+    "native_pc\\native_event_runtime\\engine_capture_timing.h": "7bf5360fa15ea46c148aaf94dcf3058ee7287ca802f99480e872bd4f51fc73a1",
+    "native_pc\\native_event_runtime\\engine_terminal_fence.h": "a20ea172703f0483a73d065d417f40684e6ad809a2e4e4d07565317fbc8296d3",
+    "native_pc\\native_event_runtime\\engine_worker.h": "648cd3b9c3071b7211ad7a30f2f5867eefc2223338603c8fcd01a6f1b468aedd",
+    "native_pc\\native_event_runtime\\native_capture.h": "d787bda15d26afea7ef605def24fbc6bcad0e2c04391fbaccf65570cd0d9db2a",
+    "native_pc\\native_event_runtime\\owned_replay_js.h": "d595b13983bd1c2b0443221dadf21e1513b9679b548687b6ef5af98237e27e4d",
+    "native_pc\\native_event_runtime\\owned_replay_view.h": "13f993309f0d1c3890d69683a18ea6537c5142f256703ce26fa23a73b1b5df59",
+    "native_pc\\native_event_runtime\\owned_role_index.h": "507ed4e8fd1fb8d5eaa4ba8ac9bb7143405df7240f6eda577e6fc8081ea49fd4",
+    "native_pc\\native_event_runtime\\engine.cpp": "c44e22c2d4e56b5ea576bf77212c6045a6fe809faab76ec2e609248a3c411998",
+    "native_pc\\native_event_runtime\\native_capture.cpp": "c714fb232d5a3661ac6a5b587d31c0d2870f7fb39fe540afff92167a3b179b2a",
+    "native_pc\\native_event_runtime\\bridge.js": "a874fbcf9de39c9d8ff04de251f1f08f34973d7ab28804fb76b7088c241a8d04",
+    "tests\\owned_bounded_replay_test.cpp": "8ebc570137d4df592ef6f208329f1dae80da84a9a20f519b088f622b4fdf568d",
+    "tests\\owned_hp_observation_test.cpp": "cbfb051e5b4d349f017c1fabc5bd2450302317167bed0d5484bf52f551be77bd",
+    "tests\\owned_hp_opaque_io_test.cpp": "3c58c63a946905bbc33050aa7cbdeea6a61f41ad74a8dc92919096f4b07da92a",
+    "tests\\owned_read_plan_test.cpp": "21a713a9b21e1067bc905a9045d6d272b87591099709453c340cdedd14d124b5",
+    "tests\\owned_replay_view_test.cpp": "d6eb2743bf1b08d5e8ddda84642d9b1b2d57ace5c7bddf061bd7663fee92b289",
+    "tests\\production_hp_actual_engine.cpp": "a24b9a9b048dea1099718645ded0e928a173e466a5e7cafa63f1e0e56b8ee403"
+  },
+  "command": [
+    "C:/msys64/ucrt64/bin/g++.exe",
+    "-std=c++17",
+    "-static",
+    "-O0",
+    "-pthread",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wno-unused-function",
+    "-I",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime",
+    "-isystem",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\hp-opaque-engine\\bounded-gates\\dependencies",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\tests\\owned_bounded_replay_test.cpp",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime\\native_capture.cpp",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\hp-opaque-engine\\bounded-gates\\dependencies\\quickjs.o",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\hp-opaque-engine\\bounded-gates\\dependencies\\dtoa.o",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\hp-opaque-engine\\bounded-gates\\dependencies\\libregexp.o",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\hp-opaque-engine\\bounded-gates\\dependencies\\libunicode.o",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\hp-opaque-engine\\bounded-gates\\dependencies\\cutils.o",
+    "-lpsapi",
+    "-o",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\hp-opaque-engine\\bounded-gates\\owned-batch-test.exe"
+  ],
+  "scope": "actual engine prepare/finalize/controller + OwnedReplayView + QuickJS, self-owned memory",
+  "excluded": [
+    "detours",
+    "assembly ingress",
+    "IPC",
+    "production HP business source",
+    "throughput",
+    "Game FPS"
+  ],
+  "optimization": "O0",
+  "cases": [
+    {
+      "case": "normal",
+      "pass": true
+    },
+    {
+      "case": "fault",
+      "pass": true
+    },
+    {
+      "case": "early",
+      "pass": true
+    },
+    {
+      "case": "pending",
+      "pass": true
+    },
+    {
+      "case": "string",
+      "pass": true
+    },
+    {
+      "case": "nan",
+      "pass": true
+    },
+    {
+      "case": "lease",
+      "pass": true
+    },
+    {
+      "case": "health",
+      "pass": true
+    },
+    {
+      "case": "nativefault",
+      "pass": true
+    },
+    {
+      "case": "mode",
+      "pass": true
+    },
+    {
+      "case": "phase",
+      "pass": true
+    },
+    {
+      "case": "root",
+      "pass": true
+    },
+    {
+      "case": "cp",
+      "pass": true
+    },
+    {
+      "case": "hook",
+      "pass": true
+    },
+    {
+      "case": "status",
+      "pass": true
+    },
+    {
+      "case": "planned",
+      "pass": true
+    },
+    {
+      "case": "false-health",
+      "pass": true
+    },
+    {
+      "case": "no-cap",
+      "pass": true
+    },
+    {
+      "case": "bool-cap",
+      "pass": true
+    },
+    {
+      "case": "mutable-cap",
+      "pass": true
+    }
+  ],
+  "binary_sha256": "dff0715c3420774b01cd27b2bf0cb361f28606ef3c6d8a4ffd2041e3df2abd7e",
+  "dependency_sha256": {
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-0.o": "9b57de662910a8500a96eb201fa51a9b5a22881b5f44083bfcf6295e36df7a61",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-1.o": "d42a47f5f2a9d8b619496753faec5691c137a77d6726ba7b998072d28ead71a6",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-2.o": "13058fb02edd05f161d2e437a21a4d72dcc6ee194b56488ac59f6371fbc1abdd",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-3.o": "2a234ea2e284edb4f3c36bdd936bcb124df699321199ff329527df8b5b3c31af",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-4.o": "3eb1e8db3d287e212ce53de2aaad29c5200c7b18c5941b2eaacbbec1328bcbd3",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\quickjs-headers\\quickjs.h": "ad3455cafab56a036e5b94c8e6915e653a09f48e32e72cb66f0d0775047a7bb5",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\json.hpp": "9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6",
+    "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-controlled-batch-finish\\runtime\\controlled-finish\\dependencies\\MinHook.h": "62dff05e63155c6bf8135c36a0d79dedbdcaaede9da26fe38daf0bea34323e38"
+  }
+}

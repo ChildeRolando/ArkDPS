@@ -207,7 +207,7 @@ check('wrong_runtime_owner_backreference_class_or_state_never_borrow_metadata_ro
  for(const [guard,mutate]of cases){
   const f=owned('all',{fixtureOptions:{loggerMetadataOffset:0xe0,stateMetadataOffset:0x228,stateMetadataKind:17}});
   const original=plain(packet(f));assert.equal(original.status,'available');
-  const queue=plain(vm.runInContext('({sequence,acknowledgedSequence,queue})',f.context));
+  const queue=plain(vm.runInContext('({sequence,acknowledgedSequence:eventStore.acknowledged,queue})',f.context));
   const restore=mutate(f);const mark=f.mark();
   assert.equal(mark.retry,true);assert.equal(mark.native_identity,undefined);assert.equal(mark.native_autochess_context,undefined);
   assert.equal(mark.error,null);assert.equal(mark.stopped,false);
@@ -215,7 +215,7 @@ check('wrong_runtime_owner_backreference_class_or_state_never_borrow_metadata_ro
   assert.equal(diagnostic.status,'unavailable');assert.equal(diagnostic.step,guard?'root_identity':'controller_state');
   assert.equal(diagnostic.guard,guard??undefined,guard||'state has its own diagnostic step');
   assert(diagnostic.reason.length>0&&diagnostic.reason.length<=300);
-  assert.deepEqual(plain(vm.runInContext('({sequence,acknowledgedSequence,queue})',f.context)),queue);
+  assert.deepEqual(plain(vm.runInContext('({sequence,acknowledgedSequence:eventStore.acknowledged,queue})',f.context)),queue);
   restore();const recovered=f.mark();
   assert.equal(recovered.retry,undefined);assert.equal(recovered.native_autochess_context.status,'available');
   assert.equal(recovered.native_autochess_context.match_key,original.match_key);

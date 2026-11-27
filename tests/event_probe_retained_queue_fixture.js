@@ -8,18 +8,20 @@ function section(start,end){
  return source.slice(from,to);
 }
 const context={};vm.createContext(context);
+vm.runInContext(fs.readFileSync(require('node:path').join(__dirname,'../event_probe_store.js'),'utf8'),context);
 const terminalDiagnosticFrom=source.indexOf('const terminalDiagnostics='),
  terminalDiagnosticTo=source.indexOf('function terminalIdentity(',terminalDiagnosticFrom);
 if(terminalDiagnosticFrom<0||terminalDiagnosticTo<0)throw Error('Production terminal diagnostics missing');
 vm.runInContext(`
  let sequence=2,epoch=2,active=0,fatal=null,stopped=false;
- let acknowledgedSequence=0,readThroughSequence=0,hpContextDropped=0;
- let frame=1,game_time=0;const coalesceEnemyHp=false,traceNestedParent=false,activeHooks=new Map(),hpContext=[];
+ let hpContextDropped=0;const eventStore=new ArkdpsEventStore();
+ let frame=1,game_time=0;const coalesceEnemyHp=false,traceNestedParent=false,activeHooks=new Map(),hpContext=eventStore.contexts;
  const probeAdapter={readEnvelope:()=>({fields:{},ready:true}),markEnvelope:()=>({fields:{},ready:true})};
- const queue=[
+ const initial=[
   {sequence:1,frame:6000,game_time:200,source:'char_a',kind:'damage',amount:999},
   {sequence:2,frame:1,game_time:0,source:'char_a',kind:'damage',amount:7}
  ];
+ for(const event of initial)eventStore.append(event);const queue=eventStore.events;
  function time(){return {frame,game_time};}
  function currentTerminalBoundary(){return null;}
  function eventQuality(){return {quality_contract_version:1,damage_unknown:false,
@@ -32,7 +34,7 @@ vm.runInContext(`
  const first={mark:markEvents(),batch:readEvents(0,2)};
  first.ack=ackEvents(2);
  frame=2;game_time=1;sequence=3;epoch=3;
- queue.push({sequence:3,frame,game_time,source:'char_a',kind:'damage',amount:20});
+ eventStore.append({sequence:3,frame,game_time,source:'char_a',kind:'damage',amount:20});
  const second={mark:markEvents(),batch:readEvents(2,3)};
  globalThis.result={first,second};
 `,context);

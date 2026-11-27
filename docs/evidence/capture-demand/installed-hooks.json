@@ -1,0 +1,2431 @@
+{
+  "schema": 1,
+  "description": "Actual attach trace -> hookAt exact callbacks; owned fixture installation, not game metadata",
+  "injected_fixture_sha256": "e39e5065a63fa2b64d86c3c2b95fdb74ea9e9a3a7cb6576461900df5c5a87a2b",
+  "source_sha256": {
+    "event_probe_runtime.js": "390493dd4cfa7e7e3b0ce66afb3eb4b9376b9706dd716fb2fe7a768a6dfd5f8c",
+    "event_probe_native_pc.js": "d0c972dfc2c5d376fd640b6212baf972600dbc1e01369b0adc5bb4f4491b4ad6",
+    "tests/native_pc_frida_probe_fixture.js": "73802e70aa3f351d07d1e2d5d521bfd1ed989d47daad03e3b20666faff5a0bc4",
+    "tests/damage_demand_installed_inventory.js": "947437009bd240dee7cd212ae689876846b7854e52ca694dbe3c29275eaf4195"
+  },
+  "entries": [
+    {
+      "injectedDebugMetadata": false,
+      "metadata_provenance": "unchanged shared fixture metadata",
+      "mode": "ordinary",
+      "extended": false,
+      "options": {
+        "sourcePath": "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_native_pc.js",
+        "researchHpReference": false,
+        "settlement": true,
+        "traceHpContext": false
+      },
+      "synthetic": {
+        "synthetic": true,
+        "installed_hook_delta": 6
+      },
+      "debugConsumption": null,
+      "installed_count": 20,
+      "mapped_damage_formula_count": 11,
+      "debug_only_count": 0,
+      "other_retained_count": 9,
+      "installed": [
+        {
+          "address": "0x20000",
+          "name": "Entity.ApplyModifier",
+          "metering_group": "Entity.ApplyModifier",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x26000",
+          "name": "Entity.OnAfterOutputDamage",
+          "metering_group": "Entity.OnAfterOutputDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x36000",
+          "name": "Unit.OnTakeDamage",
+          "metering_group": "Unit.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x50000",
+          "name": "Buff.OnTakeDamage",
+          "metering_group": "Buff.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x6a000",
+          "name": "BlockDamage._AssignDynamicVar",
+          "metering_group": "BlockDamage._AssignDynamicVar",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0xbe000",
+          "name": "Character.OnSkillStart",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xc4000",
+          "name": "Character.OnSkillFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xca000",
+          "name": "Character.OnAfterSkill",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xa4000",
+          "name": "BattleController.OnCharacterFinished",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x10c000",
+          "name": "enemy entry _UpdatePlayerSideAndMapLayer",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xf4000",
+          "name": "enemy entry Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xfa000",
+          "name": "BObject.OnRecycle",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xaa000",
+          "name": "BattleController.set_state",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x9e000",
+          "name": "BattleController.Destroy",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x19a000",
+          "name": "BattleFormula.CalculateDamage",
+          "metering_group": "BattleFormula.CalculateDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1a4000",
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "metering_group": "BattleFormula.CalculateDamageNoEvent",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x19c000",
+          "name": "BattleFormula.CalculateDamageInternal",
+          "metering_group": "BattleFormula.CalculateDamageInternal",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x19e000",
+          "name": "AttackInfo.GetFinalAtk",
+          "metering_group": "AttackInfo.GetFinalAtk",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1a0000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1a2000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        }
+      ],
+      "metering_slots": [
+        {
+          "name": "Entity.ApplyModifier",
+          "installed": true,
+          "address": "0x20000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnTakeDamage",
+          "installed": true,
+          "address": "0x36000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnTakeDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Entity.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x26000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Buff.OnTakeDamage",
+          "installed": true,
+          "address": "0x50000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BlockDamage._AssignDynamicVar",
+          "installed": true,
+          "address": "0x6a000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamage",
+          "installed": true,
+          "address": "0x19a000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "installed": true,
+          "address": "0x1a4000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageInternal",
+          "installed": true,
+          "address": "0x19c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "AttackInfo.GetFinalAtk",
+          "installed": true,
+          "address": "0x19e000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 0,
+          "installed": true,
+          "address": "0x1a0000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 1,
+          "installed": true,
+          "address": "0x1a2000",
+          "status": "actual attach"
+        }
+      ],
+      "enumerated_but_not_installed": [],
+      "metadata_absent_selector_examples": [
+        "Entity.OnTakeDamage",
+        "Unit.OnAfterOutputDamage",
+        "Entity.OnAppliedModifier",
+        "Entity.OnTakeHeal",
+        "Buff.OnBlockDamage",
+        "BlockDamage.Execute"
+      ]
+    },
+    {
+      "injectedDebugMetadata": false,
+      "metadata_provenance": "unchanged shared fixture metadata",
+      "mode": "ordinary",
+      "extended": true,
+      "options": {
+        "sourcePath": "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_native_pc.js",
+        "researchHpReference": false,
+        "settlement": true,
+        "traceHpContext": false,
+        "enemyHpState": true,
+        "skillCastState": true,
+        "characterLifecycle": true,
+        "roundResetMethod": true
+      },
+      "synthetic": {
+        "synthetic": true,
+        "installed_hook_delta": 6
+      },
+      "debugConsumption": null,
+      "installed_count": 31,
+      "mapped_damage_formula_count": 11,
+      "debug_only_count": 0,
+      "other_retained_count": 20,
+      "installed": [
+        {
+          "address": "0x24000",
+          "name": "Entity.ApplyModifier",
+          "metering_group": "Entity.ApplyModifier",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a000",
+          "name": "Entity.OnAfterOutputDamage",
+          "metering_group": "Entity.OnAfterOutputDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x4c000",
+          "name": "Unit.OnTakeDamage",
+          "metering_group": "Unit.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x66000",
+          "name": "Buff.OnTakeDamage",
+          "metering_group": "Buff.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x80000",
+          "name": "BlockDamage._AssignDynamicVar",
+          "metering_group": "BlockDamage._AssignDynamicVar",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0xda000",
+          "name": "Character.OnSkillStart",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xe0000",
+          "name": "Character.OnSkillFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xe6000",
+          "name": "Character.OnAfterSkill",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xf2000",
+          "name": "Character.SwitchToSkillState",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xf8000",
+          "name": "Character.OnSkillCastSucceed",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xba000",
+          "name": "BattleController.OnCharacterFinished",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x142000",
+          "name": "enemy entry _UpdatePlayerSideAndMapLayer",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x12a000",
+          "name": "enemy entry Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x130000",
+          "name": "BObject.OnRecycle",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xec000",
+          "name": "Character.Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0x148000",
+          "name": "Enemy.DoFakeDeath",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x14e000",
+          "name": "Enemy.DoReborn",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x30000",
+          "name": "hp.Entity.SetHpInternal",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x36000",
+          "name": "hp.Entity.SetHpInternalDirectly",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x3c000",
+          "name": "hp.Entity.OnAttributeDirty",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x154000",
+          "name": "Enemy.OnFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x114000",
+          "name": "BasicSkill.OnCastFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xc0000",
+          "name": "BattleController.set_state",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xb4000",
+          "name": "BattleController.Destroy",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xc6000",
+          "name": "BattleController.ClearRunTimeData",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x2a0000",
+          "name": "BattleFormula.CalculateDamage",
+          "metering_group": "BattleFormula.CalculateDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2aa000",
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "metering_group": "BattleFormula.CalculateDamageNoEvent",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a2000",
+          "name": "BattleFormula.CalculateDamageInternal",
+          "metering_group": "BattleFormula.CalculateDamageInternal",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a4000",
+          "name": "AttackInfo.GetFinalAtk",
+          "metering_group": "AttackInfo.GetFinalAtk",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a6000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a8000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        }
+      ],
+      "metering_slots": [
+        {
+          "name": "Entity.ApplyModifier",
+          "installed": true,
+          "address": "0x24000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnTakeDamage",
+          "installed": true,
+          "address": "0x4c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnTakeDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Entity.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x2a000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Buff.OnTakeDamage",
+          "installed": true,
+          "address": "0x66000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BlockDamage._AssignDynamicVar",
+          "installed": true,
+          "address": "0x80000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamage",
+          "installed": true,
+          "address": "0x2a0000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "installed": true,
+          "address": "0x2aa000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageInternal",
+          "installed": true,
+          "address": "0x2a2000",
+          "status": "actual attach"
+        },
+        {
+          "name": "AttackInfo.GetFinalAtk",
+          "installed": true,
+          "address": "0x2a4000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 0,
+          "installed": true,
+          "address": "0x2a6000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 1,
+          "installed": true,
+          "address": "0x2a8000",
+          "status": "actual attach"
+        }
+      ],
+      "enumerated_but_not_installed": [],
+      "metadata_absent_selector_examples": [
+        "Entity.OnTakeDamage",
+        "Unit.OnAfterOutputDamage",
+        "Entity.OnAppliedModifier",
+        "Entity.OnTakeHeal",
+        "Buff.OnBlockDamage",
+        "BlockDamage.Execute"
+      ]
+    },
+    {
+      "injectedDebugMetadata": false,
+      "metadata_provenance": "unchanged shared fixture metadata",
+      "mode": "traceHpContext=true",
+      "extended": false,
+      "options": {
+        "sourcePath": "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_native_pc.js",
+        "researchHpReference": false,
+        "settlement": true,
+        "traceHpContext": true
+      },
+      "synthetic": {
+        "synthetic": true,
+        "installed_hook_delta": 6
+      },
+      "debugConsumption": null,
+      "installed_count": 20,
+      "mapped_damage_formula_count": 11,
+      "debug_only_count": 0,
+      "other_retained_count": 9,
+      "installed": [
+        {
+          "address": "0x20000",
+          "name": "Entity.ApplyModifier",
+          "metering_group": "Entity.ApplyModifier",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x26000",
+          "name": "Entity.OnAfterOutputDamage",
+          "metering_group": "Entity.OnAfterOutputDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x36000",
+          "name": "Unit.OnTakeDamage",
+          "metering_group": "Unit.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x50000",
+          "name": "Buff.OnTakeDamage",
+          "metering_group": "Buff.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x6a000",
+          "name": "BlockDamage._AssignDynamicVar",
+          "metering_group": "BlockDamage._AssignDynamicVar",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0xbe000",
+          "name": "Character.OnSkillStart",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xc4000",
+          "name": "Character.OnSkillFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xca000",
+          "name": "Character.OnAfterSkill",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xa4000",
+          "name": "BattleController.OnCharacterFinished",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x10c000",
+          "name": "enemy entry _UpdatePlayerSideAndMapLayer",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xf4000",
+          "name": "enemy entry Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xfa000",
+          "name": "BObject.OnRecycle",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xaa000",
+          "name": "BattleController.set_state",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x9e000",
+          "name": "BattleController.Destroy",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x19a000",
+          "name": "BattleFormula.CalculateDamage",
+          "metering_group": "BattleFormula.CalculateDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1a4000",
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "metering_group": "BattleFormula.CalculateDamageNoEvent",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x19c000",
+          "name": "BattleFormula.CalculateDamageInternal",
+          "metering_group": "BattleFormula.CalculateDamageInternal",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x19e000",
+          "name": "AttackInfo.GetFinalAtk",
+          "metering_group": "AttackInfo.GetFinalAtk",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1a0000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1a2000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        }
+      ],
+      "metering_slots": [
+        {
+          "name": "Entity.ApplyModifier",
+          "installed": true,
+          "address": "0x20000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnTakeDamage",
+          "installed": true,
+          "address": "0x36000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnTakeDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Entity.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x26000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Buff.OnTakeDamage",
+          "installed": true,
+          "address": "0x50000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BlockDamage._AssignDynamicVar",
+          "installed": true,
+          "address": "0x6a000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamage",
+          "installed": true,
+          "address": "0x19a000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "installed": true,
+          "address": "0x1a4000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageInternal",
+          "installed": true,
+          "address": "0x19c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "AttackInfo.GetFinalAtk",
+          "installed": true,
+          "address": "0x19e000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 0,
+          "installed": true,
+          "address": "0x1a0000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 1,
+          "installed": true,
+          "address": "0x1a2000",
+          "status": "actual attach"
+        }
+      ],
+      "enumerated_but_not_installed": [],
+      "metadata_absent_selector_examples": [
+        "Entity.OnTakeDamage",
+        "Unit.OnAfterOutputDamage",
+        "Entity.OnAppliedModifier",
+        "Entity.OnTakeHeal",
+        "Buff.OnBlockDamage",
+        "BlockDamage.Execute"
+      ]
+    },
+    {
+      "injectedDebugMetadata": false,
+      "metadata_provenance": "unchanged shared fixture metadata",
+      "mode": "traceHpContext=true",
+      "extended": true,
+      "options": {
+        "sourcePath": "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_native_pc.js",
+        "researchHpReference": false,
+        "settlement": true,
+        "traceHpContext": true,
+        "enemyHpState": true,
+        "skillCastState": true,
+        "characterLifecycle": true,
+        "roundResetMethod": true
+      },
+      "synthetic": {
+        "synthetic": true,
+        "installed_hook_delta": 6
+      },
+      "debugConsumption": null,
+      "installed_count": 31,
+      "mapped_damage_formula_count": 11,
+      "debug_only_count": 0,
+      "other_retained_count": 20,
+      "installed": [
+        {
+          "address": "0x24000",
+          "name": "Entity.ApplyModifier",
+          "metering_group": "Entity.ApplyModifier",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a000",
+          "name": "Entity.OnAfterOutputDamage",
+          "metering_group": "Entity.OnAfterOutputDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x4c000",
+          "name": "Unit.OnTakeDamage",
+          "metering_group": "Unit.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x66000",
+          "name": "Buff.OnTakeDamage",
+          "metering_group": "Buff.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x80000",
+          "name": "BlockDamage._AssignDynamicVar",
+          "metering_group": "BlockDamage._AssignDynamicVar",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0xda000",
+          "name": "Character.OnSkillStart",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xe0000",
+          "name": "Character.OnSkillFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xe6000",
+          "name": "Character.OnAfterSkill",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xf2000",
+          "name": "Character.SwitchToSkillState",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xf8000",
+          "name": "Character.OnSkillCastSucceed",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xba000",
+          "name": "BattleController.OnCharacterFinished",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x142000",
+          "name": "enemy entry _UpdatePlayerSideAndMapLayer",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x12a000",
+          "name": "enemy entry Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x130000",
+          "name": "BObject.OnRecycle",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xec000",
+          "name": "Character.Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0x148000",
+          "name": "Enemy.DoFakeDeath",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x14e000",
+          "name": "Enemy.DoReborn",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x30000",
+          "name": "hp.Entity.SetHpInternal",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x36000",
+          "name": "hp.Entity.SetHpInternalDirectly",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x3c000",
+          "name": "hp.Entity.OnAttributeDirty",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x154000",
+          "name": "Enemy.OnFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x114000",
+          "name": "BasicSkill.OnCastFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xc0000",
+          "name": "BattleController.set_state",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xb4000",
+          "name": "BattleController.Destroy",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xc6000",
+          "name": "BattleController.ClearRunTimeData",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x2a0000",
+          "name": "BattleFormula.CalculateDamage",
+          "metering_group": "BattleFormula.CalculateDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2aa000",
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "metering_group": "BattleFormula.CalculateDamageNoEvent",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a2000",
+          "name": "BattleFormula.CalculateDamageInternal",
+          "metering_group": "BattleFormula.CalculateDamageInternal",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a4000",
+          "name": "AttackInfo.GetFinalAtk",
+          "metering_group": "AttackInfo.GetFinalAtk",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a6000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a8000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        }
+      ],
+      "metering_slots": [
+        {
+          "name": "Entity.ApplyModifier",
+          "installed": true,
+          "address": "0x24000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnTakeDamage",
+          "installed": true,
+          "address": "0x4c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnTakeDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Entity.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x2a000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Buff.OnTakeDamage",
+          "installed": true,
+          "address": "0x66000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BlockDamage._AssignDynamicVar",
+          "installed": true,
+          "address": "0x80000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamage",
+          "installed": true,
+          "address": "0x2a0000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "installed": true,
+          "address": "0x2aa000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageInternal",
+          "installed": true,
+          "address": "0x2a2000",
+          "status": "actual attach"
+        },
+        {
+          "name": "AttackInfo.GetFinalAtk",
+          "installed": true,
+          "address": "0x2a4000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 0,
+          "installed": true,
+          "address": "0x2a6000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 1,
+          "installed": true,
+          "address": "0x2a8000",
+          "status": "actual attach"
+        }
+      ],
+      "enumerated_but_not_installed": [],
+      "metadata_absent_selector_examples": [
+        "Entity.OnTakeDamage",
+        "Unit.OnAfterOutputDamage",
+        "Entity.OnAppliedModifier",
+        "Entity.OnTakeHeal",
+        "Buff.OnBlockDamage",
+        "BlockDamage.Execute"
+      ]
+    },
+    {
+      "injectedDebugMetadata": true,
+      "metadata_provenance": "controlled fixture-only Entity.OnTakeDamage(argc2) and Unit.OnAfterOutputDamage(argc1); not game/version evidence",
+      "mode": "ordinary",
+      "extended": false,
+      "options": {
+        "sourcePath": "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_native_pc.js",
+        "researchHpReference": false,
+        "settlement": true,
+        "traceHpContext": false
+      },
+      "synthetic": {
+        "synthetic": true,
+        "installed_hook_delta": 6
+      },
+      "debugConsumption": null,
+      "installed_count": 20,
+      "mapped_damage_formula_count": 11,
+      "debug_only_count": 0,
+      "other_retained_count": 9,
+      "installed": [
+        {
+          "address": "0x20000",
+          "name": "Entity.ApplyModifier",
+          "metering_group": "Entity.ApplyModifier",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x26000",
+          "name": "Entity.OnAfterOutputDamage",
+          "metering_group": "Entity.OnAfterOutputDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x3c000",
+          "name": "Unit.OnTakeDamage",
+          "metering_group": "Unit.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x5c000",
+          "name": "Buff.OnTakeDamage",
+          "metering_group": "Buff.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x76000",
+          "name": "BlockDamage._AssignDynamicVar",
+          "metering_group": "BlockDamage._AssignDynamicVar",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0xca000",
+          "name": "Character.OnSkillStart",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xd0000",
+          "name": "Character.OnSkillFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xd6000",
+          "name": "Character.OnAfterSkill",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xb0000",
+          "name": "BattleController.OnCharacterFinished",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x118000",
+          "name": "enemy entry _UpdatePlayerSideAndMapLayer",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x100000",
+          "name": "enemy entry Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x106000",
+          "name": "BObject.OnRecycle",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xb6000",
+          "name": "BattleController.set_state",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xaa000",
+          "name": "BattleController.Destroy",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x1a6000",
+          "name": "BattleFormula.CalculateDamage",
+          "metering_group": "BattleFormula.CalculateDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1b0000",
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "metering_group": "BattleFormula.CalculateDamageNoEvent",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1a8000",
+          "name": "BattleFormula.CalculateDamageInternal",
+          "metering_group": "BattleFormula.CalculateDamageInternal",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1aa000",
+          "name": "AttackInfo.GetFinalAtk",
+          "metering_group": "AttackInfo.GetFinalAtk",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1ac000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1ae000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        }
+      ],
+      "metering_slots": [
+        {
+          "name": "Entity.ApplyModifier",
+          "installed": true,
+          "address": "0x20000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnTakeDamage",
+          "installed": true,
+          "address": "0x3c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnTakeDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Entity.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x26000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Buff.OnTakeDamage",
+          "installed": true,
+          "address": "0x5c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BlockDamage._AssignDynamicVar",
+          "installed": true,
+          "address": "0x76000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamage",
+          "installed": true,
+          "address": "0x1a6000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "installed": true,
+          "address": "0x1b0000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageInternal",
+          "installed": true,
+          "address": "0x1a8000",
+          "status": "actual attach"
+        },
+        {
+          "name": "AttackInfo.GetFinalAtk",
+          "installed": true,
+          "address": "0x1aa000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 0,
+          "installed": true,
+          "address": "0x1ac000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 1,
+          "installed": true,
+          "address": "0x1ae000",
+          "status": "actual attach"
+        }
+      ],
+      "enumerated_but_not_installed": [
+        {
+          "name": "Entity.OnTakeDamage",
+          "address": "0x2c000"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "address": "0x42000"
+        }
+      ],
+      "metadata_absent_selector_examples": [
+        "Entity.OnTakeDamage",
+        "Unit.OnAfterOutputDamage",
+        "Entity.OnAppliedModifier",
+        "Entity.OnTakeHeal",
+        "Buff.OnBlockDamage",
+        "BlockDamage.Execute"
+      ]
+    },
+    {
+      "injectedDebugMetadata": true,
+      "metadata_provenance": "controlled fixture-only Entity.OnTakeDamage(argc2) and Unit.OnAfterOutputDamage(argc1); not game/version evidence",
+      "mode": "ordinary",
+      "extended": true,
+      "options": {
+        "sourcePath": "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_native_pc.js",
+        "researchHpReference": false,
+        "settlement": true,
+        "traceHpContext": false,
+        "enemyHpState": true,
+        "skillCastState": true,
+        "characterLifecycle": true,
+        "roundResetMethod": true
+      },
+      "synthetic": {
+        "synthetic": true,
+        "installed_hook_delta": 6
+      },
+      "debugConsumption": null,
+      "installed_count": 31,
+      "mapped_damage_formula_count": 11,
+      "debug_only_count": 0,
+      "other_retained_count": 20,
+      "installed": [
+        {
+          "address": "0x24000",
+          "name": "Entity.ApplyModifier",
+          "metering_group": "Entity.ApplyModifier",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a000",
+          "name": "Entity.OnAfterOutputDamage",
+          "metering_group": "Entity.OnAfterOutputDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x52000",
+          "name": "Unit.OnTakeDamage",
+          "metering_group": "Unit.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x72000",
+          "name": "Buff.OnTakeDamage",
+          "metering_group": "Buff.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x8c000",
+          "name": "BlockDamage._AssignDynamicVar",
+          "metering_group": "BlockDamage._AssignDynamicVar",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0xe6000",
+          "name": "Character.OnSkillStart",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xec000",
+          "name": "Character.OnSkillFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xf2000",
+          "name": "Character.OnAfterSkill",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xfe000",
+          "name": "Character.SwitchToSkillState",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0x104000",
+          "name": "Character.OnSkillCastSucceed",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xc6000",
+          "name": "BattleController.OnCharacterFinished",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x14e000",
+          "name": "enemy entry _UpdatePlayerSideAndMapLayer",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x136000",
+          "name": "enemy entry Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x13c000",
+          "name": "BObject.OnRecycle",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xf8000",
+          "name": "Character.Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0x154000",
+          "name": "Enemy.DoFakeDeath",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x15a000",
+          "name": "Enemy.DoReborn",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x36000",
+          "name": "hp.Entity.SetHpInternal",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x3c000",
+          "name": "hp.Entity.SetHpInternalDirectly",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x42000",
+          "name": "hp.Entity.OnAttributeDirty",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x160000",
+          "name": "Enemy.OnFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x120000",
+          "name": "BasicSkill.OnCastFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xcc000",
+          "name": "BattleController.set_state",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xc0000",
+          "name": "BattleController.Destroy",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xd2000",
+          "name": "BattleController.ClearRunTimeData",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x2ac000",
+          "name": "BattleFormula.CalculateDamage",
+          "metering_group": "BattleFormula.CalculateDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2b6000",
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "metering_group": "BattleFormula.CalculateDamageNoEvent",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2ae000",
+          "name": "BattleFormula.CalculateDamageInternal",
+          "metering_group": "BattleFormula.CalculateDamageInternal",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2b0000",
+          "name": "AttackInfo.GetFinalAtk",
+          "metering_group": "AttackInfo.GetFinalAtk",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2b2000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2b4000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        }
+      ],
+      "metering_slots": [
+        {
+          "name": "Entity.ApplyModifier",
+          "installed": true,
+          "address": "0x24000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnTakeDamage",
+          "installed": true,
+          "address": "0x52000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnTakeDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Entity.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x2a000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "installed": false,
+          "address": null,
+          "status": "source trace-only selector supported; fixture metadata does not declare method"
+        },
+        {
+          "name": "Buff.OnTakeDamage",
+          "installed": true,
+          "address": "0x72000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BlockDamage._AssignDynamicVar",
+          "installed": true,
+          "address": "0x8c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamage",
+          "installed": true,
+          "address": "0x2ac000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "installed": true,
+          "address": "0x2b6000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageInternal",
+          "installed": true,
+          "address": "0x2ae000",
+          "status": "actual attach"
+        },
+        {
+          "name": "AttackInfo.GetFinalAtk",
+          "installed": true,
+          "address": "0x2b0000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 0,
+          "installed": true,
+          "address": "0x2b2000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 1,
+          "installed": true,
+          "address": "0x2b4000",
+          "status": "actual attach"
+        }
+      ],
+      "enumerated_but_not_installed": [
+        {
+          "name": "Entity.OnTakeDamage",
+          "address": "0x30000"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "address": "0x58000"
+        }
+      ],
+      "metadata_absent_selector_examples": [
+        "Entity.OnTakeDamage",
+        "Unit.OnAfterOutputDamage",
+        "Entity.OnAppliedModifier",
+        "Entity.OnTakeHeal",
+        "Buff.OnBlockDamage",
+        "BlockDamage.Execute"
+      ]
+    },
+    {
+      "injectedDebugMetadata": true,
+      "metadata_provenance": "controlled fixture-only Entity.OnTakeDamage(argc2) and Unit.OnAfterOutputDamage(argc1); not game/version evidence",
+      "mode": "traceHpContext=true",
+      "extended": false,
+      "options": {
+        "sourcePath": "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_native_pc.js",
+        "researchHpReference": false,
+        "settlement": true,
+        "traceHpContext": true
+      },
+      "synthetic": {
+        "synthetic": true,
+        "installed_hook_delta": 6
+      },
+      "debugConsumption": {
+        "actual_callbacks": 4,
+        "diagnostic_hooks": [
+          "Entity.OnTakeDamage",
+          "Unit.OnAfterOutputDamage"
+        ],
+        "retained_context_count": 6,
+        "source_owner_shared": true
+      },
+      "installed_count": 22,
+      "mapped_damage_formula_count": 13,
+      "debug_only_count": 2,
+      "other_retained_count": 9,
+      "installed": [
+        {
+          "address": "0x20000",
+          "name": "Entity.ApplyModifier",
+          "metering_group": "Entity.ApplyModifier",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x26000",
+          "name": "Entity.OnAfterOutputDamage",
+          "metering_group": "Entity.OnAfterOutputDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2c000",
+          "name": "Entity.OnTakeDamage",
+          "metering_group": "Entity.OnTakeDamage",
+          "debug_only": true,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x3c000",
+          "name": "Unit.OnTakeDamage",
+          "metering_group": "Unit.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x42000",
+          "name": "Unit.OnAfterOutputDamage",
+          "metering_group": "Unit.OnAfterOutputDamage",
+          "debug_only": true,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x5c000",
+          "name": "Buff.OnTakeDamage",
+          "metering_group": "Buff.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x76000",
+          "name": "BlockDamage._AssignDynamicVar",
+          "metering_group": "BlockDamage._AssignDynamicVar",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0xca000",
+          "name": "Character.OnSkillStart",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xd0000",
+          "name": "Character.OnSkillFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xd6000",
+          "name": "Character.OnAfterSkill",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xb0000",
+          "name": "BattleController.OnCharacterFinished",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x118000",
+          "name": "enemy entry _UpdatePlayerSideAndMapLayer",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x100000",
+          "name": "enemy entry Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x106000",
+          "name": "BObject.OnRecycle",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xb6000",
+          "name": "BattleController.set_state",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xaa000",
+          "name": "BattleController.Destroy",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x1a6000",
+          "name": "BattleFormula.CalculateDamage",
+          "metering_group": "BattleFormula.CalculateDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1b0000",
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "metering_group": "BattleFormula.CalculateDamageNoEvent",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1a8000",
+          "name": "BattleFormula.CalculateDamageInternal",
+          "metering_group": "BattleFormula.CalculateDamageInternal",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1aa000",
+          "name": "AttackInfo.GetFinalAtk",
+          "metering_group": "AttackInfo.GetFinalAtk",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1ac000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x1ae000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        }
+      ],
+      "metering_slots": [
+        {
+          "name": "Entity.ApplyModifier",
+          "installed": true,
+          "address": "0x20000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnTakeDamage",
+          "installed": true,
+          "address": "0x3c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnTakeDamage",
+          "installed": true,
+          "address": "0x2c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x26000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x42000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Buff.OnTakeDamage",
+          "installed": true,
+          "address": "0x5c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BlockDamage._AssignDynamicVar",
+          "installed": true,
+          "address": "0x76000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamage",
+          "installed": true,
+          "address": "0x1a6000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "installed": true,
+          "address": "0x1b0000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageInternal",
+          "installed": true,
+          "address": "0x1a8000",
+          "status": "actual attach"
+        },
+        {
+          "name": "AttackInfo.GetFinalAtk",
+          "installed": true,
+          "address": "0x1aa000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 0,
+          "installed": true,
+          "address": "0x1ac000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 1,
+          "installed": true,
+          "address": "0x1ae000",
+          "status": "actual attach"
+        }
+      ],
+      "enumerated_but_not_installed": [],
+      "metadata_absent_selector_examples": [
+        "Entity.OnTakeDamage",
+        "Unit.OnAfterOutputDamage",
+        "Entity.OnAppliedModifier",
+        "Entity.OnTakeHeal",
+        "Buff.OnBlockDamage",
+        "BlockDamage.Execute"
+      ]
+    },
+    {
+      "injectedDebugMetadata": true,
+      "metadata_provenance": "controlled fixture-only Entity.OnTakeDamage(argc2) and Unit.OnAfterOutputDamage(argc1); not game/version evidence",
+      "mode": "traceHpContext=true",
+      "extended": true,
+      "options": {
+        "sourcePath": "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\event_probe_native_pc.js",
+        "researchHpReference": false,
+        "settlement": true,
+        "traceHpContext": true,
+        "enemyHpState": true,
+        "skillCastState": true,
+        "characterLifecycle": true,
+        "roundResetMethod": true
+      },
+      "synthetic": {
+        "synthetic": true,
+        "installed_hook_delta": 6
+      },
+      "debugConsumption": {
+        "actual_callbacks": 4,
+        "diagnostic_hooks": [
+          "Entity.OnTakeDamage",
+          "Unit.OnAfterOutputDamage"
+        ],
+        "retained_context_count": 6,
+        "source_owner_shared": true
+      },
+      "installed_count": 33,
+      "mapped_damage_formula_count": 13,
+      "debug_only_count": 2,
+      "other_retained_count": 20,
+      "installed": [
+        {
+          "address": "0x24000",
+          "name": "Entity.ApplyModifier",
+          "metering_group": "Entity.ApplyModifier",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2a000",
+          "name": "Entity.OnAfterOutputDamage",
+          "metering_group": "Entity.OnAfterOutputDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x30000",
+          "name": "Entity.OnTakeDamage",
+          "metering_group": "Entity.OnTakeDamage",
+          "debug_only": true,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x52000",
+          "name": "Unit.OnTakeDamage",
+          "metering_group": "Unit.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x58000",
+          "name": "Unit.OnAfterOutputDamage",
+          "metering_group": "Unit.OnAfterOutputDamage",
+          "debug_only": true,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x72000",
+          "name": "Buff.OnTakeDamage",
+          "metering_group": "Buff.OnTakeDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x8c000",
+          "name": "BlockDamage._AssignDynamicVar",
+          "metering_group": "BlockDamage._AssignDynamicVar",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0xe6000",
+          "name": "Character.OnSkillStart",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xec000",
+          "name": "Character.OnSkillFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xf2000",
+          "name": "Character.OnAfterSkill",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xfe000",
+          "name": "Character.SwitchToSkillState",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0x104000",
+          "name": "Character.OnSkillCastSucceed",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xc6000",
+          "name": "BattleController.OnCharacterFinished",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x14e000",
+          "name": "enemy entry _UpdatePlayerSideAndMapLayer",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x136000",
+          "name": "enemy entry Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x13c000",
+          "name": "BObject.OnRecycle",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0xf8000",
+          "name": "Character.Born",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0x154000",
+          "name": "Enemy.DoFakeDeath",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x15a000",
+          "name": "Enemy.DoReborn",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x36000",
+          "name": "hp.Entity.SetHpInternal",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x3c000",
+          "name": "hp.Entity.SetHpInternalDirectly",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x42000",
+          "name": "hp.Entity.OnAttributeDirty",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "independent HP writer settlement proof; product per-setter telemetry disabled"
+        },
+        {
+          "address": "0x160000",
+          "name": "Enemy.OnFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "enemy lifecycle admission/phase/removal and health identity"
+        },
+        {
+          "address": "0x120000",
+          "name": "BasicSkill.OnCastFinish",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "skill/deployment lifecycle and actual cast boundaries"
+        },
+        {
+          "address": "0xcc000",
+          "name": "BattleController.set_state",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xc0000",
+          "name": "BattleController.Destroy",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0xd2000",
+          "name": "BattleController.ClearRunTimeData",
+          "metering_group": null,
+          "debug_only": false,
+          "retention_reason": "terminal/reset/character lifecycle boundary"
+        },
+        {
+          "address": "0x2ac000",
+          "name": "BattleFormula.CalculateDamage",
+          "metering_group": "BattleFormula.CalculateDamage",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2b6000",
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "metering_group": "BattleFormula.CalculateDamageNoEvent",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2ae000",
+          "name": "BattleFormula.CalculateDamageInternal",
+          "metering_group": "BattleFormula.CalculateDamageInternal",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2b0000",
+          "name": "AttackInfo.GetFinalAtk",
+          "metering_group": "AttackInfo.GetFinalAtk",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2b2000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        },
+        {
+          "address": "0x2b4000",
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "metering_group": "Modifier.NewDamageModifierAfterCalculate",
+          "debug_only": false,
+          "retention_reason": "damage/formula/shield consumer audited in damage field ledger"
+        }
+      ],
+      "metering_slots": [
+        {
+          "name": "Entity.ApplyModifier",
+          "installed": true,
+          "address": "0x24000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnTakeDamage",
+          "installed": true,
+          "address": "0x52000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnTakeDamage",
+          "installed": true,
+          "address": "0x30000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Entity.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x2a000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Unit.OnAfterOutputDamage",
+          "installed": true,
+          "address": "0x58000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Buff.OnTakeDamage",
+          "installed": true,
+          "address": "0x72000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BlockDamage._AssignDynamicVar",
+          "installed": true,
+          "address": "0x8c000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamage",
+          "installed": true,
+          "address": "0x2ac000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageNoEvent",
+          "installed": true,
+          "address": "0x2b6000",
+          "status": "actual attach"
+        },
+        {
+          "name": "BattleFormula.CalculateDamageInternal",
+          "installed": true,
+          "address": "0x2ae000",
+          "status": "actual attach"
+        },
+        {
+          "name": "AttackInfo.GetFinalAtk",
+          "installed": true,
+          "address": "0x2b0000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 0,
+          "installed": true,
+          "address": "0x2b2000",
+          "status": "actual attach"
+        },
+        {
+          "name": "Modifier.NewDamageModifierAfterCalculate",
+          "overload": 1,
+          "installed": true,
+          "address": "0x2b4000",
+          "status": "actual attach"
+        }
+      ],
+      "enumerated_but_not_installed": [],
+      "metadata_absent_selector_examples": [
+        "Entity.OnTakeDamage",
+        "Unit.OnAfterOutputDamage",
+        "Entity.OnAppliedModifier",
+        "Entity.OnTakeHeal",
+        "Buff.OnBlockDamage",
+        "BlockDamage.Execute"
+      ]
+    }
+  ]
+}

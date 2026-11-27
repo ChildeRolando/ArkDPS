@@ -126,17 +126,74 @@ def test_pending_transaction_raw_tamper_fails_before_new_receiver_or_ack(monkeyp
     assert source.commits == [0, 1] and len(source.queue) == 1
 
 
-def test_changed_observer_cannot_replace_pending_anchor_with_fresh_baseline(monkeypatch):
+def test_replacement_observer_retires_old_anchor_without_replaying_its_prefix(monkeypatch):
     from types import SimpleNamespace
-    from event_capture import CaptureRetry
-    case = pending_case(monkeypatch)
-    source = case.fixture
+    from event_probe import reset_probe_cursor
+    case = pending_case(monkeypatch); source = case.fixture
     start_pending(case)
     original = source.observer
     source.observer = SimpleNamespace(**vars(original))
+    reset_probe_cursor(source.observer)
+    def retired_ack(_sequence):
+        raise AssertionError('retired observer must never receive an ACK')
+    original.commit_events = retired_ack
     case.advance(2, amount=75)
-    with pytest.raises(CaptureRetry, match='observer changed'): source.poll()
-    assert source.commits == [0, 1] and source.queue[0]['amount'] == 75
+    observation = source.poll()
+    assert observation.kind == 'sample'
+    assert source.runtime.feed._pending_scope is None
+    assert source.range_reads == []  # No retained old-owner range is read on the new source.
+    assert 'pending_scope_start' not in observation.events
+    assert any(record.kind == 'gap' and record.reason == 'pending_scope_observer_retired'
+               for record in case.records)
+    # New source establishes a real positive-time baseline, never the old anchor.
+    assert source.runtime.sessions.adapter.event_stream.baseline_frame == 60
+    assert source.runtime.sessions.multiplayer.result()['players'][2]['observed_damage'] is None
+    replay = BattleSessions(observation.feed)
+    for record in case.records:
+        assert replay.consume(observation_from_json(asdict(record)))
+    assert replay.multiplayer.result() == source.runtime.sessions.multiplayer.result()
+
+
+def test_temporary_missing_observer_preserves_pending_prefix_until_owner_returns(monkeypatch):
+    case = pending_case(monkeypatch); source = case.fixture
+    start_pending(case)
+    pending = source.runtime.feed._pending_scope
+    case.advance(2, amount=75)
+    observation = source.runtime.poll(source.collector, None)
+    assert observation.kind == 'scope_unavailable'
+    assert source.runtime.feed._pending_scope is pending
+    assert source.commits == [0, 1] and source.range_reads == []
+    source.poll()
+    assert source.range_reads == [(1, 2)]
+    assert source.runtime.sessions.multiplayer.result()['players'][2]['observed_damage'] == 75
+
+
+def test_explicit_retirement_drops_only_its_owned_pending_anchor(monkeypatch):
+    from types import SimpleNamespace
+    case = pending_case(monkeypatch); source = case.fixture
+    start_pending(case)
+    pending = source.runtime.feed._pending_scope
+    source.runtime.observer_retired(SimpleNamespace())
+    assert source.runtime.feed._pending_scope is pending
+    source.runtime.observer_retired(source.observer)
+    assert source.runtime.feed._pending_scope is None
+    assert source.commits == [0, 1] and source.range_reads == []
+    assert source.runtime._accepted_event_observer is None
+
+
+def test_real_cursor_reset_has_bounded_failure_context_and_never_retires_owner(monkeypatch):
+    from event_probe import reset_probe_cursor
+    case = pending_case(monkeypatch); source = case.fixture
+    start_pending(case)
+    pending = source.runtime.feed._pending_scope
+    reset_probe_cursor(source.observer)
+    with pytest.raises(StreamGap) as failure:
+        source.poll()
+    assert failure.value.cursor_failure == dict(version=1, reason='cursor_lifetime_changed',
+        phase='accepted_before_acquisition', owner_matches=True, observer_present=True,
+        expected_present=True, actual_present=True)
+    assert source.runtime.feed._pending_scope is pending
+    assert source.commits == [0, 1]
 
 
 def test_prefix_read_retry_retains_anchor_and_queue_then_releases_first_hit(monkeypatch):

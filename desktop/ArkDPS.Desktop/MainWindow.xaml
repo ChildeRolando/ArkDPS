@@ -644,6 +644,8 @@
         <TextBlock Text="诊断工具" Style="{StaticResource CardTitle}" FontSize="20"/>
         <ToggleButton x:Name="DebugModeSetting" Content="开启调试模式" Click="ChangeDebugMode" AutomationProperties.Name="调试模式" AutomationProperties.HelpText="开启详细采集日志" HorizontalAlignment="Left" Margin="0,14,0,6"/>
         <TextBlock Text="记录详细采集日志，会增加磁盘写入。排查完成后可随时关闭。" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
+        <ToggleButton x:Name="PerformanceTimingSetting" Content="性能计时（低开销）" Click="ChangePerformanceTiming" AutomationProperties.Name="性能计时" HorizontalAlignment="Left" Margin="0,12,0,6"/>
+        <TextBlock Text="按秒记录采集与界面耗时；原生回调抽样计时，无需开启详细调试日志。" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
         <TextBlock Text="线程调用栈采样" Foreground="{DynamicResource Ink}" FontSize="14" FontWeight="SemiBold" Margin="0,20,0,6"/>
         <TextBlock Text="在侧边面板开始采样。记录 45 秒后自动保存，也可提前结束。" Foreground="{DynamicResource Muted}" FontSize="12" TextWrapping="Wrap"/>
         <Button Content="打开采样目录" Click="OpenStackCaptureDirectory" HorizontalAlignment="Left" Margin="0,10,0,4"/>

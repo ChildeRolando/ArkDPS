@@ -1,0 +1,54 @@
+{
+  "reviewed_commits": [
+    "5d1e179",
+    "eb1312f",
+    "33540e4"
+  ],
+  "native_allocation_followup": "d4291f5 guards JS_EXCEPTION before object APIs; not in the checked DLL",
+  "reviewer": "independent gpt-6.1-sol throughput_validation_sol61 plus root diff review",
+  "axes": {
+    "semantics": "same prepare/finalize owns both paths; every raw E/L applied, no premerge",
+    "ownership": "native controller pointer+active flag; new replay frame per item; public record copies private header before escape",
+    "boundary": "32 edges, original 2ms cooperative deadline and 512 poll budget; deferred barrier retains exact bytes without processed advancement",
+    "failure": "issued=finalized=exact returned integer; pending/early/string/NaN refuse; native exception_ptr preserves bounded audit",
+    "compatibility": "complex parent, publication/cold/concurrent paths keep original single core; all platforms share HP business reducer"
+  },
+  "actual_dll_sha256": "af0517c203479c0d2ee86ea4ebff8338d23daf9295f4d051871df5b511e3db83",
+  "actual_cases": [
+    {
+      "case": "normal",
+      "rejected": false,
+      "batch_issued": 3,
+      "single_replayed": 1,
+      "maximum_batch_edges": 3
+    },
+    {
+      "case": "parent",
+      "rejected": false,
+      "batch_issued": 1,
+      "single_replayed": 5,
+      "maximum_batch_edges": 1
+    },
+    {
+      "case": "root",
+      "rejected": true
+    },
+    {
+      "case": "phase",
+      "rejected": true
+    },
+    {
+      "case": "constructor",
+      "rejected": true
+    }
+  ],
+  "failures_preserved": "batch-dll-direct-5d1e179.json retains constructor audit propagation failure; no broad exception accepted",
+  "source_regression": "1010 passed at b0e35cf before C bridge/engine changes",
+  "pending": [
+    "final actual full-scope worker/FIFO workload",
+    "32/2ms/512 under actual load",
+    "cross-batch old Graph proof runtime rejection",
+    "30000 setters/s x10s and consumer pause/catch-up",
+    "game FPS"
+  ]
+}

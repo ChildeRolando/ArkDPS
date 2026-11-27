@@ -285,6 +285,30 @@ def test_native_snapshot_seed_does_not_fill_missing_hp_or_event_attributes():
     assert ready['rows'][0]['alive'] is None
 
 
+def test_snapshot_only_hp_floor_survives_later_damage_and_finish_without_inventing_attributes():
+    telemetry = EnemyTelemetry(None, bootstrap=no_bootstrap)
+
+    def publish(seed, frame, events=()):
+        return telemetry.sample_native_snapshot(seed, frame=frame, game_time=frame / 30.,
+            enemy_state=dict(state(events), hp_mode='snapshots'))
+
+    first = publish(snapshot(3, 100.), 3)
+    assert first['totals']['entered_total_hp'] == 100
+    higher = publish(snapshot(6, 120.), 6)
+    assert higher['totals']['entered_total_hp'] == 120
+    damaged = publish(snapshot(9, 20.), 9)
+    assert damaged['totals']['entered_total_hp'] == 120
+    finished = publish(None, 12, [event(1, 12, 'enemy_finish', hp_after=0., finish_reason=2)])
+    row, = finished['rows']
+    assert row['hp'] == 0 and row['alive'] is False
+    assert row['observed_hp_floor'] == 120
+    assert row['max_hp'] is None and row.get('atk') is None and row['hp_ratio'] is None
+    for totals in [finished['totals'], finished['last_point']]:
+        assert totals['entered_total_hp'] == 120
+        assert totals['total_hp_complete'] is False
+    assert finished['totals']['recovered_hp'] is None
+
+
 def test_native_entry_coverage_cannot_cross_another_stream_start():
     telemetry = EnemyTelemetry(None, bootstrap=no_bootstrap)
     project(telemetry, snapshot(), 3)

@@ -1,0 +1,284 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 0,
+        "registered_plans": 0,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 3.713699996471405,
+      "setters_per_second": 538546.4636078068,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 0.5799999833106995,
+        "scope_inside_pub_ms": 0.5799999833106995,
+        "prefix_ms": 5.884400010108948,
+        "journal_ms": 0.6216000020503998
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 10002,
+        "capture_ms": 2.3525999999998914,
+        "capture_read_bytes": 522886,
+        "capture_read_count": 32238,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2,
+        "graph_check_timing": {
+          "calls": 2,
+          "max_us": 144,
+          "sampled_us": 144,
+          "samples": 1
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 8007,
+        "registered_plans": 0,
+        "scalar_calls": 12005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0.9693999999999561
+      },
+      "branch": "unchanged",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 159.3483000099659,
+      "setters_per_second": 12551.122289192397,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "js_profile": {
+        "scope_ms": 150.58309975266457,
+        "scope_inside_pub_ms": 0.09020000696182251,
+        "prefix_ms": 50.2335000038147,
+        "journal_ms": 38.46670001745224
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 12002,
+        "capture_ms": 7.534700000000228,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_check_timing": {
+          "calls": 2002,
+          "max_us": 6.2,
+          "sampled_us": 51.9,
+          "samples": 16
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 10007,
+        "registered_plans": 0,
+        "scalar_calls": 20005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 6.5282000000002505
+      },
+      "branch": "changed_damage",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 465.8857000172138,
+      "setters_per_second": 4292.898451113873,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 2000,
+      "event_kinds": {
+        "enemy_hp": 2000
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 136.34119993448257,
+        "scope_inside_pub_ms": 0.07389998435974121,
+        "prefix_ms": 3.77989998459816,
+        "journal_ms": 0.6962999999523163
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 12002,
+        "capture_ms": 6.8837000000002515,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_check_timing": {
+          "calls": 2002,
+          "max_us": 7.9,
+          "sampled_us": 44.800000000000004,
+          "samples": 16
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 10007,
+        "registered_plans": 0,
+        "scalar_calls": 20005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 6.1387000000003065
+      },
+      "branch": "heal_coalesced",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 348.2651000022888,
+      "setters_per_second": 5742.751714101861,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "js_profile": {
+        "scope_ms": 136.07739987969398,
+        "scope_inside_pub_ms": 0.07350000739097595,
+        "prefix_ms": 4.514200001955032,
+        "journal_ms": 1.2533000111579895
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 12002,
+        "capture_ms": 6.815800000000251,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_check_timing": {
+          "calls": 2002,
+          "max_us": 5.1,
+          "sampled_us": 40.900000000000006,
+          "samples": 16
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 10007,
+        "registered_plans": 0,
+        "scalar_calls": 20005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 5.95900000000027
+      },
+      "branch": "maxhp_dirty",
+      "setters": 2000,
+      "dirty": 20,
+      "elapsed_ms": 349.2564999759197,
+      "setters_per_second": 5726.450331312071,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 41,
+      "event_kinds": {
+        "enemy_hp": 41
+      }
+    }
+  ],
+  "source_snapshot": {
+    "runtime\\production-hp-throughput\\scope-candidates\\base\\event_probe_native_pc.js": "7288b5712baea428edb8edeefc1e78a1f1a8e22ffedb945edd451cd3dbb23ea5",
+    "runtime\\production-hp-throughput\\scope-candidates\\base\\event_probe_runtime.js": "14e9df70fce1c3ccb8c6d90127caf59d541e0bcb188d43480bc392b8540924c5",
+    "runtime\\production-hp-throughput\\scope-candidates\\base\\event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc",
+    "runtime\\production-hp-throughput\\scope-candidates\\base\\native_pc\\native_event_runtime\\cold_plan.js": "4b9e7615b5dfc5e9dbc6030323cb56ba6b789aa682116114bc77ffd3634dce33",
+    "runtime\\production-hp-throughput\\scope-candidates\\base\\native_pc\\native_event_runtime\\publication.js": "5a83506f7f1ba64afbcd8592522d8f9b84f71a60ab7596ce1f718932ba545577",
+    "runtime\\production-hp-throughput\\scope-candidates\\base\\native_pc\\native_event_runtime\\bridge.js": "dfc856b78ecb07fabe8cf5ae6cea0090cccba873833cac56259e4b6b81198216"
+  },
+  "bridge_sha256": "e05e33f2760f8dfd5707450b27573ed9bd039c667408a6d78f974dcd4d048e03"
+}

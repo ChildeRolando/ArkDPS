@@ -1,0 +1,12 @@
+{
+  "archive_sha256": "6f1f322aea3bb3a90858db85c9fe717013fde4df7dfcafe2f57e78f5bb4b4a0c",
+  "source_differences": [],
+  "checked_files": 61,
+  "objects": {
+    "object-0.o": "9b57de662910a8500a96eb201fa51a9b5a22881b5f44083bfcf6295e36df7a61",
+    "object-1.o": "d42a47f5f2a9d8b619496753faec5691c137a77d6726ba7b998072d28ead71a6",
+    "object-2.o": "13058fb02edd05f161d2e437a21a4d72dcc6ee194b56488ac59f6371fbc1abdd",
+    "object-3.o": "2a234ea2e284edb4f3c36bdd936bcb124df699321199ff329527df8b5b3c31af",
+    "object-4.o": "3eb1e8db3d287e212ce53de2aaad29c5200c7b18c5941b2eaacbbec1328bcbd3"
+  }
+}

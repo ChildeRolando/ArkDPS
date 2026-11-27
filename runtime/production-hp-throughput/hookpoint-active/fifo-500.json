@@ -1,0 +1,58 @@
+{
+  "queue": {
+    "actual_producer_setters_per_second": 29844.23331531978,
+    "capacity_pass": false,
+    "consumed_bytes": 7004792,
+    "consumed_prefix_contiguous": true,
+    "consumed_records": 1967,
+    "consumer_busy_ms": 172.34980000000013,
+    "consumer_service_records_per_second": 11412.835988205374,
+    "elapsed_ms": 673.4844,
+    "entry_compact_max": 917,
+    "entry_compact_min": 917,
+    "failure_code": 4,
+    "leave_compact_max": 128078,
+    "leave_compact_min": 6208,
+    "max_queue_age_ms": 640.3694,
+    "pause_ms": 500,
+    "peak_resident_bytes": 136310782,
+    "producer_ms": 672.8268,
+    "raw_prefix_contiguous": false,
+    "requested_producer_ms": 10000,
+    "requested_setters": 300000,
+    "reserved_records": 40162,
+    "submitted_setters": 20080,
+    "target_setters_per_second": 30000,
+    "trend": [
+      {
+        "backlog": 29190,
+        "consumed": 0,
+        "ms": 500.8596,
+        "reserved": 29190
+      },
+      {
+        "backlog": 34632,
+        "consumed": 1196,
+        "ms": 600.8873,
+        "reserved": 35828
+      }
+    ]
+  },
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "actual CaptureLanes private queue and four 32MiB spill banks",
+    "independent paced producer and actual serialized consumer",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC and native hook trampoline",
+    "native dirty callback snapshots"
+  ],
+  "results": []
+}

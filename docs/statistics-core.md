@@ -163,6 +163,8 @@ row = meter.result()['rows']['host']
 
 ## 真实本体分母与永久退场
 
+普通 PC 可从生产者真实 `initial_boundary` 接回零帧事件前缀。边界必须是已安装 Hook 的 `BattleController.set_state` 返回、零帧/零 fixed 时钟/零序号，且与当前独立读数的进程出生、五根、原生代次、关卡和结算 scope 一致。首次读取只在未 ACK 游标为 0 时通过已有范围接口分页取得事件；序号完整连续、时钟单调且不超过首个已配对水位后，才从真实零帧消费敌人出生、干员生命周期、技能与金额。同一次来源归属使用该已核实前缀。源事件观察起点可早于首个物理快照，但原生累计、编队快照及累计 history 的实际读取时刻和值保持原样，不创建零累计或空编队；首读累计不再作为观察前输出扣除。边界缺失、中途接入、已 ACK 或前缀失证不能借此回填。
+
 `Statistics.deployment_lifecycle` 只拥有已验证本体区间，不另记金额或公式。隐式状态为：
 
 | 原状态 | 已验证输入 | 结果 |
@@ -170,11 +172,12 @@ row = meter.result()['rows']['host']
 | 无边界 | 同 scope 的真实 Born 返回 | 开放部署区间 |
 | 开放 | 同 actor、同部署的永久 Finish | 关闭并累计真实区间 |
 | 开放 | 当前可靠事件水位 | 仅实时发布到该水位 |
+| 开放 | 与已消费前缀精确匹配的真实终局源水位 | 在终局水位截断该本体的本局在场区间 |
 | 开放 | quiet successor / 归档 | 没有本体终点，完整分母未知 |
 | 任意 | 缺前缀、身份冲突或采集 gap | 保留证据，完整分母未知 |
 | 新部署 | 已记录旧部署的晚回调 | 隔离旧实例，不修改新技能窗 |
 
-行输出 `lifecycle_presence_seconds`、`lifecycle_presence_complete`、`lifecycle_presence_window:[event_start,event_watermark]`、`lifecycle_terminal_complete`。从零完整前缀、真实 Born 与连续事件水位支持实时开放区间；归档必须每个已观察本体有永久终点。零帧已经在场的 actor 只允许由独立完整活体集合证书截入本小局时刻0；旧UID集合或未观察真实出生且无活体证书时继续未知。晚绑定名单只重放已保留且重新核实的生命周期证书，不重放旧金额或技能转换。此分母与1Hz `observed_presence_seconds` 独立，不能互相补证；金额、有效伤害、治疗和 scope/window 匹配仍由原有账本及展示层分别认证。宿主离场后的已归属召唤/DoT输出不延长本体分母。
+行输出 `lifecycle_presence_seconds`、`lifecycle_presence_complete`、`lifecycle_presence_window:[event_start,event_watermark]`、`lifecycle_terminal_complete`。从零完整前缀、真实 Born 与连续事件水位支持实时开放区间；归档要求每个已观察本体有永久终点，或生命周期所有者独立核实与最终已消费序号、epoch、时钟和原生身份精确匹配的真实终局源边界。后者只截断本局时间，不伪造永久退场回调。普通 `finish()`、断连、quiet successor 或单独状态 3 不提供这项证书。零帧已经在场的 actor 只允许由独立完整活体集合证书截入本小局时刻0；旧UID集合或未观察真实出生且无活体证书时继续未知。晚绑定名单只重放已保留且重新核实的生命周期证书，不重放旧金额或技能转换。此分母与1Hz `observed_presence_seconds` 独立，不能互相补证；金额、有效伤害、治疗和 scope/window 匹配仍由原有账本及展示层分别认证。宿主离场后的已归属召唤/DoT输出不延长本体分母。
 
 同部署 `OnAfterSkill(Ability.OWNER_DEAD)` 可先记录待确认的结束而保留技能窗，之后同原始时刻的 typed 永久 Finish 关闭两套既有技能窗口。反顺序同样支持。缺实体证书、跨实例或跨时刻不能把待确认窗口追认为完整；11/12 不能作为永久终点。已有实录没有新证书时沿原保守语义，受控回归不代表新候选实机验收。
 

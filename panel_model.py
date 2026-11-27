@@ -12,6 +12,7 @@ numbers from the previous battle.
 """
 from __future__ import annotations
 
+from metrics import timed
 import math
 from dataclasses import InitVar, dataclass, field
 from enum import Enum
@@ -663,6 +664,7 @@ def _lifecycle_presence(row: Mapping, result: Mapping):
     return seconds, tuple(window)
 
 
+@timed('panel_rows')
 def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
     """Convert an adapter/Statistics result into panel rows without inventing data."""
     rows: list[PanelSourceRow] = []
@@ -687,7 +689,8 @@ def rows_from_statistics(result: Mapping) -> list[PanelSourceRow]:
         healing_window_complete = (row.get('observed_recent_healing_complete') is True
                                    and _valid_window(healing_window)
                                    and 0 <= healing_window[0] < healing_window[1] == result.get('game_time'))
-        life = _lifecycle_presence(row, result) if event_only else None
+        life = (_lifecycle_presence(row, result)
+                if event_only or row.get('presence_complete') is not True else None)
         healing_total_window = row.get('observed_healing_window')
         rows.append(PanelSourceRow(
             owner_id=owner,
@@ -1532,6 +1535,7 @@ def inspector_readings(row: Mapping, detail: Mapping, *, boss_scope=False, rate_
     return dict(overkill=overkill, skill_split=splits, mitigation=mitigation, legacy_overkill_note=legacy_reason)
 
 
+@timed('panel_render')
 def render_panel(config: PanelConfig,
                  rows: Iterable[PanelSourceRow], *,
                  team_complete: bool = True,

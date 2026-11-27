@@ -1,0 +1,50 @@
+{
+  "decision": "approve_with_constructor_brand_fix_included",
+  "native_commits": [
+    "bf57a3577b70e686b1f5cbd4e3865253c56b398f",
+    "23bc6dc5b6f0b6f2adfb3056317fced35ea0ceae",
+    "2243fd2a5e9b51d0e26ef833eab13eb75d0c92a3"
+  ],
+  "root_integration_review_base": "d7684ea + 23bc + 2243",
+  "source_commits": [
+    "39a13a84e6ea64778eaffac842fd137c3ec0beb8",
+    "bcd6d391e24b941af28bc5ec4755e3287b227673",
+    "d1732538c799a00a97c67dbe0fea623f87710a3b"
+  ],
+  "source_sha256": {
+    "native_pc/native_event_runtime/bridge.js": "3acff25a77f3840d1fbc52dd71c7d5d68d4db989a8edba2e02e1b665f8656bbe",
+    "native_pc/native_event_runtime/owned_replay_js.h": "412fe7f3114139d5866787b69cba0804ffa1212486839e6dd3b2a04d2e62bc95",
+    "native_pc/native_event_runtime/engine_capture_pipeline.h": "fedc71be3a1ed10fa818d4e9f4d01dcf14c5c8effe773c49a586b9e939e9b891",
+    "native_pc/native_event_runtime/engine.cpp": "3d331ff64a7941f8f698576c87bf43383d51b2ce3c28dc064ab314b633bd2369",
+    "event_probe_runtime.js": "035f8f2a39bcba53236d296f5c5687aa17cc1b45af45b4cf4108e31f2e4238f4",
+    "event_probe_native_pc.js": "663fa7dd6a13475ca0d2592916268c914e2c1d5876f17d176a21f03b364b4bb0"
+  },
+  "five_axes": {
+    "correctness": "Direct and generic callbacks delegate to the same applyHpEntry/Leave. No HP values, writer attempts, epoch/active transitions or unchanged-before-finish ordering are removed. Argument mask remains literal Number 1; shared native eligibility also requires plan count/mask/header mask 1.",
+    "ownership": "Prepared native packet is actual JSValue identity bound to current JSContext/owned lease/plan/root/checkpoint/mode. Constructor cannot mint prepared brand after 2243; only factory after native adoption records it. Source compares its actual sealed contract and exact edge, without verified flags.",
+    "robustness": "Predecoded errors remain deferred until getters. Same receiver persists across mixed direct/generic E/L. Parent/nested/concurrent/cold/publication records use the complete path. Plain/fabricated packet, stale IO, wrong root and wrong edge remain rejected.",
+    "publication": "Unified dispatcher preserves health/structural/leave/closed prefix condition; engine preserves raw ticket progression, projection validation, terminal/journal handling, delivered read and ACK boundaries. Ordinary frame-zero HP still uses identical canonical clock/state logic; true cold certificates are excluded from direct selection. No claim that every frame-zero record falls back.",
+    "validation": "Light Node native observation facade and source-owned recipe golden PASS. No CPP rebuild or benchmark during review. Two in-memory mutations were killed: removing exact-mask guard and restoring constructor prepared-brand mint. Original failure proved brandtrue and forged UID123456 without native adoption; fixed constructor is unbranded."
+  },
+  "mutations": {
+    "mask_guard": {
+      "control_exit": 0,
+      "mutant_exit": 1,
+      "killed_by": "badDirectMasks every(Boolean)"
+    },
+    "constructor_brand": {
+      "control_exit": 0,
+      "mutant_exit": 1,
+      "killed_by": "forgedDirect && constructorForged assertion"
+    }
+  },
+  "test_only_followups": [
+    "2851d1ac3bba2e8160f98f87e3df93a8f83ef10a explicitly simulates old helper absence",
+    "65219d76802f2af72b964a27aad6761df465e1a0 comment states same compiled geometry, no registry"
+  ],
+  "limits": [
+    "No game attach/read/pipe/UI operations.",
+    "No throughput or FPS acceptance claim.",
+    "Actual native CPP lifetime tests remain provider-owner evidence, not redundantly rerun here."
+  ]
+}

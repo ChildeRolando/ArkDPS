@@ -2,10 +2,61 @@
 const il=Process.getModuleByName(probeAdapter.moduleName);
 const traceHpContext=globalThis.arkdpsTraceHpContext===true;
 const traceNestedParent=globalThis.arkdpsTraceNestedParent===true;
-const coalesceEnemyHp=globalThis.arkdpsCoalesceEnemyHp!==false;
+// @research-hp:configuration
+// Product HP telemetry is snapshot-based; these are fixed capability facts.
+const coalesceEnemyHp=false;
+const collectEnemyHpChanges=false;
 const observeSourceCharacterUid=globalThis.arkdpsSourceCharacterUid!==false;
-function api(n,r,a){return new NativeFunction(il.getExportByName(n),r,a);}
-function className(k){return k.add(0x10).readPointer().readCString();}
+function api(n,r,a){
+ const native=new NativeFunction(il.getExportByName(n),r,a);
+ if(n==='il2cpp_class_is_assignable_from'&&typeof __arkdpsCapturedAssignable==='function')
+  return function(base,klass){return __arkdpsReplayActive()?__arkdpsCapturedAssignable(base,klass):native(base,klass);};
+ return native;
+}
+function captureRead(role,read){return typeof probeAdapter.captureRead==='function'?probeAdapter.captureRead(role,read):read();}
+function immutableClassParent(klass){
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureImmutableMetadata==='function'){
+  const bytes=probeAdapter.captureImmutableMetadata(klass.add(0x58),8);
+  if(bytes===null||bytes.byteLength!==8)throw new Error('immutable class parent unavailable');
+  return ptr(new DataView(bytes).getBigUint64(0,true));
+ }
+ return klass.add(0x58).readPointer();
+}
+const immutableClassLineages=new Map();
+function immutableClassLineage(klass,check=null){
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureClassLineage==='function')
+  return probeAdapter.captureClassLineage(klass);
+ const key=klass.toString();
+ if(immutableClassLineages.has(key))return immutableClassLineages.get(key);
+ const lineage=[],seen=new Set();
+ for(let current=klass;!current.isNull();current=immutableClassParent(current)){
+  if(check)check(8);
+  const address=current.toString();
+  if(seen.has(address))throw new Error('class lineage cycle');
+  // This is a work budget, never evidence that a class is unrelated.
+  if(lineage.length>=4096)throw new Error('class lineage metadata budget');
+  seen.add(address);lineage.push(current);
+ }
+ const complete=Object.freeze(lineage);
+ if(immutableClassLineages.size<4096)immutableClassLineages.set(key,complete);
+ return complete;
+}
+function captureInvocationRead(scope,read){return typeof probeAdapter.captureInvocationRead==='function'?probeAdapter.captureInvocationRead(scope,read):read();}
+function captureClockFrame(){return captureRead('clock_close',()=>clock.readU32());}
+function captureClockFixed(){return captureRead('clock_close',()=>clock.add(4).readS64());}
+function registerProbeHook(address,callbacks){
+ if(typeof probeAdapter.prepareCaptureHook==='function')probeAdapter.prepareCaptureHook(address,callbacks);
+ return attachEventHook(address,callbacks);
+}
+const immutableClassNames=new Map(),immutableClassNamespaces=new Map();
+function className(k){
+ const key=k.toString();if(immutableClassNames.has(key))return immutableClassNames.get(key);
+ const name=k.add(0x10).readPointer().readCString();immutableClassNames.set(key,name);return name;
+}
+function classNamespace(k){
+ const key=k.toString();if(immutableClassNamespaces.has(key))return immutableClassNamespaces.get(key);
+ const value=k.add(0x18).readPointer().readCString();immutableClassNamespaces.set(key,value);return value;
+}
 function fieldOffsets(k,names){
  const seen=classFieldOffsets(k);
  const out={};for(const name of names){if(!(name in seen))throw new Error('missing field '+className(k)+'.'+name);out[name]=seen[name];}
@@ -235,7 +286,7 @@ try{
   // null is neither a readiness signal nor permission to ignore bad metadata.
   const k=classAt(im,i);if(probeAdapter.allowNullClassRows&&k.isNull())continue;
   const name=className(k);if(!wanted.has(name)&&!optionalClasses.has(name))continue;
-  const ns=k.add(0x18).readPointer().readCString();
+  const ns=classNamespace(k);
   const expectedNs=(['BuffContainer','BlockDamage'].includes(name)?'':
     (name==='SkillData'||name==='LevelData'?'Torappu':'Torappu.Battle'));
   if(ns!==expectedNs)continue;
@@ -333,6 +384,7 @@ try{
   const finished=uniqueMethod(found.BattleController,'OnCharacterFinished',2);
   cfg.methods.push({owner:'BattleController',name:'OnCharacterFinished',address:finished.toString()});
  }catch(e){cfg.skillFinishError=String(e);}
+ if(typeof probeAdapter.prepareCaptureMetadata==='function')probeAdapter.prepareCaptureMetadata({found,clock,skillF,mitigationMethods,skillCastStateMethods,characterLifecycleMethods,enemyEntryConfig,enemyStateMethods,terminalMethods});
 } finally {api('il2cpp_thread_detach','void',['pointer'])(thread);}
 // A callback increments epoch on entry and remains active until its native
 // invocation returns. RPC marks are serialized with these JS callbacks.
@@ -363,10 +415,11 @@ let skillUnknown=false;
 // Recoverable unattributable callbacks are counted, not escalated globally.
 let skippedUnattributed=0;
 const EVENT_BUFFER_LIMIT=100000,HP_CONTEXT_BUFFER_LIMIT=10000;
-const queue=[],hpContext=[];
+const eventStore=new ArkdpsEventStore({maxEvents:EVENT_BUFFER_LIMIT});
+const queue=eventStore.events,hpContext=eventStore.contexts;
 // Internal provenance only; never a new or rewritten field on the wire event.
 const queueSettlementScopes=new WeakMap();
-let acknowledgedSequence=0,readThroughSequence=0,hpContextDropped=0;
+let hpContextDropped=0;
 let autoChessRoundStart=null,autoChessUnclaimedZero=null;
 const AUTOCHESS_ROUND_START_EVENT_LIMIT=2048;
 const stacks=new Map(), hooks=[];
@@ -374,24 +427,35 @@ const stacks=new Map(), hooks=[];
 const captureHooks=[];
 let capturePaused=false,captureBlocked=false,captureInterrupted=false;
 let captureRevision=0,captureGeneration=0,captureCallbacks=0;
+function attachCaptureListener(entry){
+ entry.listener=Interceptor.attach(entry.address,entry.callbacks);
+}
 function attachEventHook(address,callbacks){
  const entry={address,callbacks:null,listener:null,detached:false};
- entry.callbacks={
-  onEnter(args){
-   this.arkdpsCaptureAdmitted=!captureBlocked&&!stopped;
-   if(!this.arkdpsCaptureAdmitted)return;
-   captureCallbacks++;
-   try{callbacks.onEnter?.call(this,args);}
-   catch(e){this.arkdpsCaptureAdmitted=false;captureCallbacks--;throw e;}
-  },
-  onLeave(result){
-   if(!this.arkdpsCaptureAdmitted)return;
-   try{callbacks.onLeave?.call(this,result);}
-   finally{this.arkdpsCaptureAdmitted=false;captureCallbacks--;}
-  }
+ function enter(receiver,callback,first,second){
+  receiver.arkdpsCaptureAdmitted=!captureBlocked&&!stopped;
+  if(!receiver.arkdpsCaptureAdmitted)return;
+  captureCallbacks++;
+  try{return callback?.call(receiver,first,second);}
+  catch(e){receiver.arkdpsCaptureAdmitted=false;captureCallbacks--;throw e;}
+ }
+ function leave(receiver,callback,value){
+  if(!receiver.arkdpsCaptureAdmitted)return;
+  try{return callback?.call(receiver,value);}
+  finally{receiver.arkdpsCaptureAdmitted=false;captureCallbacks--;}
+ }
+ // Keep the prepared contract, labels and private direct-HP entry points.
+ // Both transports participate in the same pause admission/lifetime gate.
+ entry.callbacks={...callbacks,
+  onEnter(args){return enter(this,callbacks.onEnter,args);},
+  onLeave(result){return leave(this,callbacks.onLeave,result);}
  };
+ if(typeof callbacks.arkdpsDirectHpEntry==='function'){
+  entry.callbacks.arkdpsDirectHpEntry=function(enemy,io){return enter(this,callbacks.arkdpsDirectHpEntry,enemy,io);};
+  entry.callbacks.arkdpsDirectHpLeave=function(io){return leave(this,callbacks.arkdpsDirectHpLeave,io);};
+ }
  if(!captureBlocked||globalThis.__arkdpsNativeCaptureControl===true)
-  entry.listener=Interceptor.attach(address,entry.callbacks);
+  attachCaptureListener(entry);
  captureHooks.push(entry);
  return {detach(){entry.detached=true;if(entry.listener){entry.listener.detach();entry.listener=null;}}};
 }
@@ -401,19 +465,19 @@ function entityId(p){if(p.isNull())throw new Error('missing source entity');cons
 const sourceCharacterLineage=new Map();
 function isCharacterSourceClass(klass){
  const base=sourceCharacterClasses.character;
+ const captured=typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&typeof probeAdapter.captureClassLineage==='function'
+  ?immutableClassLineage(klass):null;
  if(klass.equals(base))return true;
  const key=klass.toString();
  if(sourceCharacterLineage.has(key))return sourceCharacterLineage.get(key);
- let current=klass;
- for(let depth=0;depth<10&&!current.isNull();depth++){
+ for(const current of captured??immutableClassLineage(klass)){
   if(current.equals(base)){
    sourceCharacterLineage.set(key,true);
    return true;
   }
-  current=current.add(0x58).readPointer();
  }
- // Class metadata is stable, but a failed or truncated walk proves nothing.
- if(current.isNull())sourceCharacterLineage.set(key,false);
+ // Only a complete, closed lineage can certify a negative result.
+ sourceCharacterLineage.set(key,false);
  return false;
 }
 function sourceCharacterUid(source,sourceId){
@@ -577,7 +641,7 @@ function verifiedSettlementIssueSource(scope,when){
   const closing=stampEventScope({...when});
   if(!sameNativeEventScope(a.entry,closing))return null;
   const stamp=closing.native_autochess_scope;
-  if(clock.readU32()!==when.frame||fp(clock.add(4))!==when.game_time)return null;
+  if(captureClockFrame()!==when.frame||captureClockFixed().toNumber()/4294967296!==when.game_time)return null;
   return {source:a.cid,source_character_uid:a.uid,frame:when.frame,game_time:when.game_time,
    native_autochess_scope:{...stamp}};
  }catch(e){return null;}
@@ -621,7 +685,7 @@ function captureSettlementAnchor(scope,type){
 }
 function stableSettlementAnchor(scope,when,requireActor=true){
  const a=scope.settlementAnchor;
- try{
+ try{return captureInvocationRead(scope,()=>{
   return !!a&&scope.tracksModifier&&!scope.mitigationModifierReused&&
    sameMitigationTime(scope.when,when)&&sameMitigationTime(a.when,when)&&
    damageModifier(scope.tid,scope.mod)===scope&&scope.mod.equals(a.modifier)&&
@@ -636,7 +700,7 @@ function stableSettlementAnchor(scope,when,requireActor=true){
    scope.mod.add(0x60).readS32()===0&&scope.mod.add(0x68).readS32()===a.type&&!!a.identity&&
    a.identity.target===a.targetId&&a.identity.target_uid===String(a.targetUid)&&
    a.identity.target_instance===a.target.toString();
- }catch(e){return false;}
+ });}catch(e){return false;}
 }
 function noteSettlementProofGap(scope,when,reason){
  if(!enemyDamageReady)return;
@@ -717,21 +781,29 @@ function checkedNativeView(address,size){
  if(bytes===null||bytes.byteLength!==size)throw new Error('native block read unavailable');
  return new DataView(bytes);
 }
-function time(allowRetry = false, withEventScope = true) {
- // One owned copy for the opening clock, followed by the same independent
- // frame guard as before. Native PC pays one bridge call instead of two;
- // no frame/time value survives this callback invocation.
- const bytes=clock.readByteArray(12);
- if(bytes===null||bytes.byteLength!==12)throw new Error('callback clock unavailable');
- const view=new DataView(bytes),frame=view.getUint32(0,true);
- const game_time=Number(view.getBigInt64(4,true))/4294967296;
- if (clock.readU32() !== frame) {
-  if (allowRetry) return null;
-  throw new Error('unstable callback clock');
- }
- if (!Number.isFinite(game_time) || game_time < 0) throw new Error('invalid clock');
-  return damageSettlementStamp(frame,game_time,withEventScope);
+function validatedClockValues(frame,fixed,closingFrame,allowRetry,withEventScope,closedFixed){
+ const game_time=Number(fixed)/4294967296;
+ if(closingFrame!==frame||(closedFixed!==undefined&&(typeof closedFixed!=='bigint'||closedFixed!==fixed))){if(allowRetry)return null;throw new Error('unstable callback clock');}
+ if(!Number.isFinite(game_time)||game_time<0)throw new Error('invalid clock');
+ return damageSettlementStamp(frame,game_time,withEventScope);
 }
+function validatedClockStamp(view,closingFrame,allowRetry,withEventScope){
+ return validatedClockValues(view.getUint32(0,true),view.getBigInt64(4,true),closingFrame,allowRetry,withEventScope);
+}
+function time(allowRetry = false, withEventScope = true) {
+ // The closing frame remains a separate, independently captured witness.
+ const bytes=captureRead('clock_open',()=>clock.readByteArray(12));
+ if(bytes===null||bytes.byteLength!==12)throw new Error('callback clock unavailable');
+ return validatedClockStamp(new DataView(bytes),captureClockFrame(),allowRetry,withEventScope);
+}
+function capturedUtf16(view){
+ if(view.byteLength<12)throw new Error('bad string');
+ const n=view.getInt32(8,true);
+ if(n<0||n>200||view.byteLength!==12+2*n)throw new Error('bad string');
+ let text='';for(let i=0;i<n;i++)text+=String.fromCharCode(view.getUint16(12+2*i,true));
+ return text;
+}
+
 function buff(p){return {key:str(p.add(0x208).readPointer()),source:p.add(0x18).readPointer(),hasShield:p.add(0x27c).readU8()};}
 // Modifier callbacks receive a pointer to m_source; the remaining fields follow
 // the verified class metadata shifted by that header (value, realDelta, ...).
@@ -813,10 +885,10 @@ function traceNestedParents(child,phase){
    diagnostic.parent_hp_before=parent.hpBefore??null;
    diagnostic.parent_target_hit_hp_before=parent.targetHit?.hpBefore??null;
    diagnostic.parent_target_hit_uid=parent.targetHit?.uid??null;
-   diagnostic.parent_real_delta=fp(parent.mod.add(0x48));diagnostic.parent_amount=fp(parent.mod.add(0x30));
-   diagnostic.parent_source_instance=parent.mod.readPointer().toString();
-   diagnostic.parent_source_matches=!!parent.nativeModifierSource?.equals(parent.mod.readPointer());
-   diagnostic.parent_target_matches=parent.mod.add(0x10).readPointer().equals(child.target);
+   diagnostic.parent_real_delta=captureInvocationRead(parent,()=>fp(parent.mod.add(0x48)));diagnostic.parent_amount=captureInvocationRead(parent,()=>fp(parent.mod.add(0x30)));
+   diagnostic.parent_source_instance=captureInvocationRead(parent,()=>parent.mod.readPointer()).toString();
+   diagnostic.parent_source_matches=!!parent.nativeModifierSource?.equals(captureInvocationRead(parent,()=>parent.mod.readPointer()));
+   diagnostic.parent_target_matches=captureInvocationRead(parent,()=>parent.mod.add(0x10).readPointer()).equals(child.target);
    diagnostic.parent_target_hit_ambiguous=!!parent.targetHitAmbiguous;
    diagnostic.parent_modifier_reused=!!parent.mitigationModifierReused;
    diagnostic.parent_numeric_shield=parent.numericShield??null;
@@ -842,9 +914,9 @@ function traceNestedParentFinal(parent){
   diagnostic.target_uid=damageTargetUid(parent.target);diagnostic.target_hp=targetHp(parent.target);
   diagnostic.parent_hp_before=parent.hpBefore??null;
   diagnostic.parent_target_hit_hp_before=parent.targetHit?.hpBefore??null;
-  diagnostic.parent_real_delta=fp(parent.mod.add(0x48));diagnostic.parent_amount=fp(parent.mod.add(0x30));
-  diagnostic.parent_source_matches=!!parent.nativeModifierSource?.equals(parent.mod.readPointer());
-  diagnostic.parent_target_matches=parent.mod.add(0x10).readPointer().equals(parent.target);
+  diagnostic.parent_real_delta=captureInvocationRead(parent,()=>fp(parent.mod.add(0x48)));diagnostic.parent_amount=captureInvocationRead(parent,()=>fp(parent.mod.add(0x30)));
+  diagnostic.parent_source_matches=!!parent.nativeModifierSource?.equals(captureInvocationRead(parent,()=>parent.mod.readPointer()));
+  diagnostic.parent_target_matches=captureInvocationRead(parent,()=>parent.mod.add(0x10).readPointer()).equals(parent.target);
   diagnostic.parent_target_hit_ambiguous=!!parent.targetHitAmbiguous;
   diagnostic.parent_modifier_reused=!!parent.mitigationModifierReused;
  }catch(error){diagnostic.read_error=String(error);}
@@ -922,6 +994,7 @@ function beginTargetSettlement(invocation,scope){
  }catch(e){/* Missing target proof keeps strict settlement partial. */}
 }
 function targetSettlementIdentity(scope,hit,when,allowShieldCancel=false){
+ return captureInvocationRead(scope,()=>{
  const commit=hit?.commit;
  return !!commit&&!commit.invalid&&scope.targetHit===hit&&!scope.targetHitAmbiguous&&
   !scope.nestedModifierConflict&&!scope.targetObservationCrossThreadActivity&&
@@ -934,15 +1007,16 @@ function targetSettlementIdentity(scope,hit,when,allowShieldCancel=false){
   targetKey(hit.target)===commit.targetKey&&scope.target?.equals(hit.target)&&
   scope.mod.add(0x10).readPointer().equals(hit.target)&&damageTargetUid(hit.target)===hit.uid&&
   hit.uid===scope.settlementTargetUid&&scope.mod.add(0x60).readS32()===0&&
-  scope.mod.add(0x68).readS32()===commit.type&&(allowShieldCancel||scope.mod.add(0x70).readS32()===0);
+  scope.mod.add(0x68).readS32()===commit.type&&(allowShieldCancel||scope.mod.add(0x70).readS32()===0); });
 }
 function numericFullBlockSettlement(scope,hit,when,amount){
+ return captureInvocationRead(scope,()=>{
  const absorbed=scope.numericShield,incoming=scope.firstShieldIncoming;
  return !scope.targetSettlementNested&&amount===0&&!scope.numericShieldUnknown&&!scope.unmatchedShield&&
   Number.isFinite(absorbed)&&absorbed>0&&Number.isFinite(incoming)&&
   Math.abs(absorbed-incoming)<=Math.max(0.01,incoming*1e-6)&&
   targetSettlementIdentity(scope,hit,when,true)&&fp(scope.mod.add(0x30))===0&&
-  fp(scope.mod.add(0x48))===0&&targetHp(hit.target)===hit.hpBefore;
+  fp(scope.mod.add(0x48))===0&&targetHp(hit.target)===hit.hpBefore; });
 }
 function observeNestedTargetSettlement(invocation){
  traceNestedParents(invocation,'child_entry');
@@ -1047,6 +1121,32 @@ function verifiedZeroCancellation(scope,hit,when,amount){
    evidence.hp_before>0&&evidence.hp_before===evidence.hp_after&&evidence.shield_absorbed===0;
  }catch(e){return false;}
 }
+// One independent native HP writer may close the same modifier when the
+// target/output notifications are absent. This supplies witnesses to the
+// canonical verifier; it never computes damage from the nominal amount.
+function noteModifierHpWriterAttempt(target){
+ if(!activeApplyScopes.size)return;
+ for(const calls of activeApplyScopes.values())for(const scope of calls)
+  if(scope.target?.equals(target))scope.hpWriterCount=(scope.hpWriterCount||0)+1;
+}
+function beginModifierHpWriter(write,klass,label){
+ const calls=activeApplyScopes.get(write.thread);
+ if(activeApplyScopes.size!==1||calls?.length!==1)return;
+ const scope=calls[0],a=scope.settlementAnchor;
+ if(!a||!scope.target?.equals(write.enemy)||a.targetUid!==write.uid||
+    !a.targetClass.equals(klass)||!sameMitigationTime(scope.when,write.when))return;
+ if(scope.hpWriterCount!==1)return;
+ write.modifierScope=scope;write.modifierMethod=label;
+}
+function finishModifierHpWriter(write,end,hp){
+ const scope=write.modifierScope;
+ if(!scope||scope.hpWriterCount!==1||write.maxHpBefore!==null||
+    scope.hpWriterEvidence||!sameMitigationTime(write.when,end)||
+    activeApplyScopes.size!==1||activeApplyScopes.get(write.thread)?.length!==1||
+    activeApplyScopes.get(write.thread)[0]!==scope)return;
+ scope.hpWriterEvidence={target:write.enemy,uid:write.uid,hpBefore:write.hpBefore,hpAfter:hp,
+  when:end,method:write.modifierMethod};
+}
 function verifiedTargetSettlement(scope,target,when,amount,type){
  if(!enemyDamageReady)return null;
  const qualification=settlementScopeQualification(scope,when,target);
@@ -1061,7 +1161,24 @@ function verifiedTargetSettlement(scope,target,when,amount,type){
   if(qualification==='unknown')return reject('unverified enemy settlement domain');
   if(scope.settlementAnchor&&!stableSettlementAnchor(scope,when,false))
    return reject('modifier scope identity or clock changed');
-  if(!commit)return null;
+  if(!commit){
+   const writer=scope.hpWriterEvidence;
+   if(!writer||scope.hpWriterCount!==1||scope.targetHit||scope.outputSeen||scope.outputSettlement||
+      scope.hpWriterUncertain||scope.targetSettlementNested||scope.nestedBeforeTarget||scope.nestedCrossThreadActivity||
+      scope.targetObservationCrossThreadActivity||scope.nestedModifierConflict||
+      scope.targetHitAmbiguous||scope.outputAmbiguous||scope.settlementAmbiguous||
+      activeTargetSettlementOverlap(scope,target)||!stableSettlementAnchor(scope,when)||
+      !writer.target.equals(target)||writer.uid!==scope.settlementTargetUid||
+      !sameMitigationTime(writer.when,when)||writer.hpBefore!==scope.hpBefore||
+      targetHp(target)!==writer.hpAfter)return null;
+   const evidence=overkillEvidence(scope.mod,target,writer.hpBefore,when.frame,scope);
+   if(!evidence||evidence.hp_after!==writer.hpAfter||evidence.cancel_reason!==0||
+      !Number.isFinite(amount)||amount<0||amount+0.01<-evidence.real_delta+(scope.numericShield||0)||
+      fp(scope.mod.add(0x30))!==amount)return null;
+   scope.hpWriterSettlementMethod=writer.method;
+   scope.targetSettlementEvidence=evidence;
+   return evidence;
+  }
   if(scope.targetSettlementNested){
    const nested=verifiedParentBeforeNestedSettlement(scope,target,when,amount,type);
    if(nested){scope.targetSettlementEvidence=nested;return nested;}
@@ -1142,12 +1259,12 @@ function recordTriggeringElementalBar(burst,when){
   sameMitigationTime(scope.when,when));
  if(candidates.length!==1)return;
  const bar=candidates[0];
- if(bar.mitigationModifierReused||bar.mod.add(0x60).readS32()!==5||
-    bar.mod.add(0x68).readS32()!==0||
-    !bar.mod.add(0x10).readPointer().equals(target)||entityId(bar.mod.readPointer())!==bar.source)return;
+ if(bar.mitigationModifierReused||captureInvocationRead(bar,()=>bar.mod.add(0x60).readS32())!==5||
+    captureInvocationRead(bar,()=>bar.mod.add(0x68).readS32())!==0||
+    !captureInvocationRead(bar,()=>bar.mod.add(0x10).readPointer()).equals(target)||captureInvocationRead(bar,()=>entityId(bar.mod.readPointer()))!==bar.source)return;
  // A full bar can invoke the HP settlement before its own ApplyModifier
  // returns. Publish the verified triggering bar first, once per invocation.
- recordElementalBar(bar,when,fp(bar.mod.add(0x30)));
+ recordElementalBar(bar,when,captureInvocationRead(bar,()=>fp(bar.mod.add(0x30))));
 }
 // Absorption observed in a frame but not verifiable for a target cannot prove
 // that a lethal hit's excess was not absorbed, so its overkill stays unknown.
@@ -1223,7 +1340,7 @@ function captureParentBeforeNestedSettlement(parent,child){
      damageTargetUid(child.target)!==hit.uid||!child.mod.add(0x10).readPointer().equals(hit.target)||
      parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
      shieldContextUnknown(child.when.frame,hit.target)||shieldTotal(child.when.frame,hit.target)!==0)return null;
-  const real=fp(parent.mod.add(0x48)),hp=targetHp(hit.target),amount=fp(parent.mod.add(0x30));
+  const {real,hp,amount}=captureInvocationRead(parent,()=>({real:fp(parent.mod.add(0x48)),hp:targetHp(hit.target),amount:fp(parent.mod.add(0x30))}));
   // A same-target child can settle inside the parent's active Unit callback.
   // Anchor the untouched parent HP before the child and verify its own signed
   // delta when it closes. Ordinary children use the existing single-child proof.
@@ -1283,7 +1400,7 @@ function captureNestedElementalStep(parent,child,checkpoint,hpBefore){
      parent.nestedModifierConflict||child.nestedModifierConflict||
      !(hpBefore>0)||child.hpBefore!==hpBefore||targetHp(child.target)!==hpBefore||
      !sameMitigationTime(checkpoint.when,child.when)||
-     !targetSettlementIdentity(parent,parent.targetHit,child.when)||fp(parent.mod.add(0x48))!==checkpoint.real||
+     !targetSettlementIdentity(parent,parent.targetHit,child.when)||captureInvocationRead(parent,()=>fp(parent.mod.add(0x48)))!==checkpoint.real||
      child.mod.add(0x60).readS32()!==0||child.mod.add(0x70).readS32()!==0||
      damageTargetUid(child.target)!==checkpoint.uid||!child.mod.add(0x10).readPointer().equals(child.target)||
      parent.numericShieldUnknown||parent.unmatchedShield||parent.numericShield>0||
@@ -1472,18 +1589,24 @@ function damageSettledAfterNestedKill(scope,when,amount){
  return {real_delta:0,hp_before:0,hp_after:0,killed:true,cancel_reason:0,shield_absorbed:0,
          settled_after_nested_kill:true};
 }
-function dynamic(p){const n=p.add(0x18).readS32();if(n<0||n>128)throw new Error('bad blackboard');const a=p.add(0x10).readPointer().add(0x20);for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();throw new Error('missing shield value');}
+function dynamic(p){
+ const n=captureRead('blackboard.count',()=>p.add(0x18).readS32());
+ if(n<0||n>128)throw new Error('bad blackboard');
+ return captureRead('blackboard.entries',()=>{
+  const a=p.add(0x10).readPointer().add(0x20);
+  for(let i=0;i<n;i++)if(str(a.add(i*24).readPointer())==='dynamic')return a.add(i*24+8).readFloat();
+  throw new Error('missing shield value');
+ });
+}
 function fixedArg(p){return Number(BigInt.asIntN(64,BigInt(p.toString())))/4294967296;}
 function own(id){return id!==null&&(id.startsWith('char_')||id.startsWith('token_'));}
 function record(source,kind,amount,when,proof,evidence,sourceUid){
- if(coalesceEnemyHp)flushCoalescedEnemyHp();
+// @research-hp:boundary-1
+
  if(source!==null&&sourceUid!==undefined)evidence={...evidence,source_character_uid:sourceUid};
  const event=enqueueEvent(source,kind,amount,when,proof,evidence);
- if(coalesceEnemyHp&&event){
-  if(kind==='enemy_enter'||kind==='enemy_reborn')
-   enemyHpBirths.set(evidence.target_instance,{eid:evidence.target,frame:when.frame});
-  else if(kind==='enemy_fake_death'||kind==='enemy_finish')enemyHpBirths.delete(evidence.target_instance);
- }
+// @research-hp:record-birth-index
+
  return event;
 }
 function enqueueEvent(source,kind,amount,when,proof,evidence){
@@ -1511,10 +1634,12 @@ function enqueueEvent(source,kind,amount,when,proof,evidence){
   fatal='event sequence exhausted';
   return;
  }
- event.sequence=++sequence;
- queueSettlementScopes.set(event,when.settlementScope);
- queue.push(event);
- return event;
+ event.sequence=sequence+1;
+ let retained;
+ try{retained=eventStore.append(event);}catch(error){fatal=String(error.message||error);return;}
+ sequence=retained.sequence;
+ queueSettlementScopes.set(retained,when.settlementScope);
+ return retained;
 }
 function omitUnrelatedAutoChessEvent(event){
  if(event.native_autochess_scope?.collection_mode!=='local')return false;
@@ -1529,26 +1654,7 @@ function omitUnrelatedAutoChessEvent(event){
  try{return probeAdapter.eventCollectionOwner(event)==='foreign';}
  catch(e){return false;}
 }
-// Keep the first heal intact. It may establish the HP and MaxHP needed to
-// prove subsequent healing. An exactly contiguous, increasing tail with the
-// same verified MaxHP then contributes its last HP minus its first HP.
-const enemyHpBirths=new Map();
-const ENEMY_HP_RUN_LIMIT=128;
-const enemyHpRuns=new Map();
-let enemyHpWindow=null;
-function flushCoalescedEnemyHp(){
- // Only unpublished tails are mutable. Every transport/authoritative boundary
- // drains this bounded window before exposing a sequence. Targets are independent;
- // within each target the first witness and all damage boundaries stay ordered.
- const runs=[...enemyHpRuns.values()];
- enemyHpRuns.clear();enemyHpWindow=null;
- for(const {tail} of runs)if(tail)enqueueEvent(null,'enemy_hp',0,tail.when,{method:tail.method},tail.evidence);
-}
-function resetEnemyHpCoalescing(){
- if(!coalesceEnemyHp)return;
- flushCoalescedEnemyHp();
- enemyHpBirths.clear();
-}
+// @research-hp:coalescer-state
 // Baseline evidence describes only already observed, unacknowledged queue
 // records. Platform adapters opt in through their envelope metadata; this
 // helper performs no native reads, event replay, clock or cursor updates.
@@ -1654,53 +1760,13 @@ function sameNativeEventScope(left,right){
   &&typeof a.scope_key==='string'&&a.scope_key.length>0&&a.scope_key===b.scope_key
   &&a.phase===b.phase&&a.round===b.round&&a.collection_mode===b.collection_mode;
 }
+// @research-hp:record-implementation
 function recordEnemyHp(write,when,method,hp,maxHp){
- const {key,evidence,hpBefore,maxHpBefore}=write;
+ const {evidence,hpBefore}=write;
  if(maxHp!==null)evidence.enemy_max_hp=maxHp;
  evidence.hp_before=hpBefore;
  evidence.hp_after=hp;
- if(coalesceEnemyHp){
-  const {target:eid,target_instance:uid}=evidence;
-  const birth=enemyHpBirths.get(uid);
-  if(write.enemyTarget&&enemyMaxHpReady&&method==='Entity.SetHpInternal'&&maxHpBefore===null
-     &&birth?.eid===eid&&when.frame>birth.frame+1&&Number.isFinite(maxHp)
-     &&0<hpBefore&&hpBefore<hp&&hp<=maxHp){
-   // Preserve the first +1 as an explicit continuity witness in the compact record.
-   const unitTick=(eid==='enemy_1061_zomshd'||eid==='enemy_1061_zomshd_2')&&hp-hpBefore===1;
-   const window=enemyHpWindow;
-   if(window&&(window.thread!==write.thread||window.when.frame!==when.frame||
-      window.when.game_time!==when.game_time||window.when.settlementScope!==when.settlementScope||
-      !sameNativeEventScope(window.when,when)))flushCoalescedEnemyHp();
-   const run=enemyHpRuns.get(key);
-   if(run&&run.unitTick===unitTick&&run.key===key&&run.uid===uid&&run.eid===eid&&run.maxHp===maxHp
-      &&run.when.frame===when.frame&&run.when.game_time===when.game_time
-      &&run.when.settlementScope===when.settlementScope
-      &&sameNativeEventScope(run.when,when)&&run.after===hpBefore){
-    if(unitTick){
-     run.tail.evidence.enemy_regen_ticks=(run.tail.evidence.enemy_regen_ticks??1)+1;
-    }
-    if(run.tail)run.tail.evidence.hp_after=hp;
-    else run.tail={when,method,evidence};
-    run.after=hp;
-    return;
-   }
-   // A discontinuity for one target is a boundary for the entire window.
-   if(run||enemyHpRuns.size>=ENEMY_HP_RUN_LIMIT)flushCoalescedEnemyHp();
-   const witnessed=birth.healWitness;
-   const first=!witnessed||witnessed.maxHp!==maxHp||
-    witnessed.when.settlementScope!==when.settlementScope||!sameNativeEventScope(witnessed.when,when);
-   enemyHpWindow={thread:write.thread,when};
-   if(unitTick||!first){
-    // Stage even the first tick so an already published sequence is immutable.
-    enemyHpRuns.set(key,{key,uid,eid,when,maxHp,after:hp,unitTick,tail:{when,method,evidence}});
-   }else if(enqueueEvent(null,'enemy_hp',0,when,{method},evidence)){
-    enemyHpRuns.set(key,{key,uid,eid,when,maxHp,after:hp,unitTick,tail:null});
-    birth.healWitness={when,maxHp};
-   }
-   return;
-  }
- }
- record(null,'enemy_hp',0,when,{method},evidence);
+ return !!record(null,'enemy_hp',0,when,{method},evidence);
 }
 function recordHpContext(context,flush=true){
  if(stopped||fatal)return;
@@ -1708,14 +1774,17 @@ function recordHpContext(context,flush=true){
   hpContextDropped++;
   return;
  }
- if(flush&&coalesceEnemyHp)flushCoalescedEnemyHp();
+// @research-hp:boundary-2
+
  // Diagnostics do not advance the authoritative sequence. Attach late
  // diagnostics to the next event so repeating a read returns the same slice.
- hpContext.push({eventSequence:Math.max(sequence,readThroughSequence+1),context});
+ const published=typeof __arkdpsPublicationJournal==='object'&&Number.isSafeInteger(__arkdpsPublicationJournal.publishedThrough)?__arkdpsPublicationJournal.publishedThrough:0;
+ try{eventStore.appendContext(Math.max(sequence,eventStore.readThrough+1,published+1),context);}
+ catch(error){hpContextDropped++;}
 }
 function readEvents(after,through){
  const valid=Number.isSafeInteger(after)&&Number.isSafeInteger(through)&&
-  acknowledgedSequence<=after&&after<=through&&through<=sequence;
+  eventStore.acknowledged<=after&&after<=through&&through<=sequence;
  const error=fatal||(valid?null:'event read range is unavailable');
  const prepared=error||stopped?null:probeAdapter.prepareEventEnvelope?.();
  const envelope=probeAdapter.readEnvelope(prepared);
@@ -1728,11 +1797,11 @@ function readEvents(after,through){
  }
  if(!envelope.ready)return result;
  if(error||stopped)return result;
- result.events=queue.slice(after-acknowledgedSequence,through-acknowledgedSequence);
+ result.events=queue.slice(after-eventStore.acknowledged,through-eventStore.acknowledged);
  if(after===through&&typeof probeAdapter.baselineEnvelope==='function'){
   try{
-   Object.assign(result,probeAdapter.baselineEnvelope(envelope.fields,queue,acknowledgedSequence,through),
-                 autoChessRoundStartEnvelope(envelope.fields,queue,acknowledgedSequence,through));
+   Object.assign(result,probeAdapter.baselineEnvelope(envelope.fields,queue,eventStore.acknowledged,through),
+                 autoChessRoundStartEnvelope(envelope.fields,queue,eventStore.acknowledged,through));
   }catch(e){
    result.baseline_discarded_skill_events=[];
    result.baseline_discarded_skill_events_complete=false;
@@ -1741,22 +1810,14 @@ function readEvents(after,through){
  }
  result.hp_context=hpContext.filter(item=>after<item.eventSequence&&item.eventSequence<=through)
   .map(item=>item.context);
- readThroughSequence=Math.max(readThroughSequence,through);
+ eventStore.served(through);
  return result;
 }
 function ackEvents(through){
- if(!Number.isSafeInteger(through)||through<0||through>readThroughSequence)
-  return {acknowledged:acknowledgedSequence,error:fatal||'event acknowledgement exceeds the read watermark'};
- if(through>acknowledgedSequence){
-  queue.splice(0,through-acknowledgedSequence);
-  acknowledgedSequence=through;
-  let count=0;
-  while(count<hpContext.length&&hpContext[count].eventSequence<=through)count++;
-  hpContext.splice(0,count);
- }
- return {acknowledged:acknowledgedSequence,error:fatal};
+ if(fatal)return {acknowledged:eventStore.acknowledged,error:fatal};
+ return eventStore.ack(through);
 }
-function readTerminalEvents(after,through){
+function readTerminalEvents(after,through,advanceReadWatermark=true){
  // The ordinary read requires a live native binding. Only this explicit API
  // may drain the retained queue after a real OnDestroy has removed it.
  const fence={sequence,epoch,active,active_hooks:[...activeHooks.keys()]};
@@ -1769,7 +1830,7 @@ function readTerminalEvents(after,through){
  const boundary=currentTerminalBoundary();
  if(!boundary)return reject('terminal_boundary_unavailable');
  if(!probeHooksReady||fatal||stopped||active||activeHooks.size)return reject('producer_not_quiet');
- if(!Number.isSafeInteger(after)||!Number.isSafeInteger(through)||acknowledgedSequence>after
+ if(!Number.isSafeInteger(after)||!Number.isSafeInteger(through)||eventStore.acknowledged>after
     ||after<0||after>through||through!==boundary.sequence||through!==sequence)
   return reject('terminal_read_range_unavailable');
  const invalidate=reason=>{if(terminalBoundary===boundary)terminalBoundary=null;
@@ -1777,7 +1838,7 @@ function readTerminalEvents(after,through){
  try{if(!probeAdapter.validateTerminalBinding(boundary))return invalidate('terminal_binding_changed');}
  catch(e){return invalidate('terminal_binding_unreadable');}
  // No synthesized prefix or old acknowledged record can fill a lost tail.
- const records=queue.slice(after-acknowledgedSequence,through-acknowledgedSequence);
+ const records=queue.slice(after-eventStore.acknowledged,through-eventStore.acknowledged);
  if(records.length!==through-after||records.some((record,index)=>record.sequence!==after+index+1
     ||queueSettlementScopes.get(record)!==boundary.damage_settlement_scope
     ||!Number.isSafeInteger(record.frame)||record.frame>boundary.frame
@@ -1789,12 +1850,13 @@ function readTerminalEvents(after,through){
   .map(item=>item.context),retry:false,frame:boundary.frame,game_time:boundary.game_time,
   terminal_boundary:boundary});
  for(const key of Object.keys(boundary))if(key.startsWith('native_'))result[key]=boundary[key];
- readThroughSequence=Math.max(readThroughSequence,through);
+ if(advanceReadWatermark)eventStore.served(through);
  return result;
 }
 function refreshEnemyEntryFrame(frame) {
  if(enemyEntryFrame!==null&&frame<enemyEntryFrame){
-  resetEnemyHpCoalescing();
+// @research-hp:boundary-3
+
   awaitingEnemyTile.clear();enemyBirthProofs.clear();
   enemyEntryUnknown=false;
   enemyHealthPhases.clear();
@@ -1812,9 +1874,8 @@ function isEnemy(object,klass=object.readPointer()) {
  if(!enemyClassCache.has(key))enemyClassCache.set(key,enemyEntryConfig.assignable(enemyEntryConfig.enemy,klass));
  return enemyClassCache.get(key);
 }
-function stageTrapId(object) {
- const id=targetKey(object);
- return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,object.readPointer())?id:null;
+function stageTrapId(object,id=targetKey(object),io=null) {
+ return id?.startsWith('trap_')&&enemyEntryConfig.assignable(enemyEntryConfig.bObject,io?ptr(io.trapClass(object)):object.readPointer())?id:null;
 }
 function beginEnemyHook(label) {
  epoch++;active++;activeHooks.set(label,(activeHooks.get(label)||0)+1);
@@ -1968,6 +2029,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
  }
  const output=scope.outputSettlement;
  const targetCommit=!!exactEvidence&&scope.targetSettlementEvidence===exactEvidence;
+ const hpWriterCommit=targetCommit&&!!scope.hpWriterSettlementMethod;
  // Signed result from the exact output callback or a checked elemental
  // ApplyModifier. Do not promote the nominal value of an unmatched callback.
  const real=scope.settlementAmbiguous||
@@ -2005,6 +2067,7 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
     Number.isFinite(exactEvidence.hp_before)&&Number.isFinite(exactEvidence.hp_after)&&
     Math.abs(exactEvidence.hp_before-exactEvidence.hp_after+real)<=Math.max(0.01,Math.abs(real)*1e-6)&&
     (type===5&&exactEvidence.hp_before===scope.hpBefore||
+     hpWriterCommit&&exactEvidence.hp_before===scope.hpBefore||
      (targetCommit||output)&&hit?.target.equals(target)&&hit.uid===scope.settlementTargetUid&&
      !scope.targetHitAmbiguous&&!scope.outputAmbiguous&&exactEvidence.hp_before===checkedHpBefore);
  let killed;
@@ -2043,10 +2106,10 @@ function settleDamage(scope,target,when,amount,type,reduction,exactEvidence=null
                    targetCheckpoint:(targetCommit||nested&&scope.nestedParentSettlementProof)&&hit?.commit?.returned?
                     {version:1,method:'Unit.OnTakeDamage',returned:true,source:scope.source,source_character_uid:scope.sourceCharacterUid,
                      target_uid:String(hit.uid),hp_before:hit.hpBefore,frame:hit.commit.when.frame,game_time:hit.commit.when.game_time}:undefined,
-                   evidenceMethod:targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
+                   evidenceMethod:hpWriterCommit?scope.hpWriterSettlementMethod+'+Entity.ApplyModifier':targetCommit?'Unit.OnTakeDamage+Entity.ApplyModifier':undefined,
                    complete:consistent&&absorbed!==null&&!scope.numericShieldUnknown&&!unverified});
  if(event){scope.settlementRecordEmitted=true;scope.settlementRecord=event;}
- if(event&&targetCommit&&capturedHp&&[1,2,3].includes(type))
+ if(event&&targetCommit&&!hpWriterCommit&&capturedHp&&[1,2,3].includes(type))
   rememberNestedOrdinarySettlement(scope,when,exactEvidence,event);
  return true;
 }
@@ -2327,7 +2390,8 @@ function installMitigationHooks(){
  if(!mitigationMethods)return;
  const attached=[];
  function observe(address,name,enter,leave,cleanup,barrier=false){
-  attached.push(attachEventHook(address,{
+  attached.push(registerProbeHook(address,{
+   arkdpsName:name,
    onEnter(args){
     this.tid=this.threadId;
     if(barrier){
@@ -2454,21 +2518,22 @@ function enemyAttribute(data,index) {
  const value=Number(BigInt.asIntN(64,hidden^key))/4294967296;
  return Math.abs(value)<1e10&&(index!==MAX_HP_ATTRIBUTE||value>0)?value:null;
 }
-function enemyMaxHp(enemy) {
+function decodeEnemyMaxHpWords(key,value,ready){
+ if(ready!==1)return null;
+ const decoded=Number(BigInt.asIntN(64,key^value))/4294967296;
+ return decoded>0&&decoded<1e10?decoded:null;
+}
+function decodeEnemyMaxHp(view){
+ if(view.byteLength!==0x14)throw new Error('native block read unavailable');
+ return decodeEnemyMaxHpWords(view.getBigUint64(0,true),view.getBigUint64(8,true),view.getUint8(0x10));
+}
+function enemyMaxHp(enemy,io=pointerHpIo) {
  if(!enemyAttributesReady)return null;
  try{
-  const attributes=enemy.add(0xb0).readPointer();
-  if(attributes.isNull())return null;
-  const cached=attributes.add(0x68).readPointer();
-  if(cached.isNull())return null;
-  const count=cached.add(0x18).readU32();
-  if(!count||count>64)return null;
-  // Only after the live length admits slot zero, copy its obscuring key,
-  // current value and ready flag. No live field survives this invocation.
-  const view=checkedNativeView(cached.add(0x20),0x14);
-  if(view.getUint8(0x10)!==1)return null;
-  const value=Number(BigInt.asIntN(64,view.getBigUint64(0,true)^view.getBigUint64(8,true)))/4294967296;
-  return value>0&&value<1e10?value:null;
+  const attributes=io.attributes(enemy);if(attributes===null)return null;
+  const count=io.attributeCount(attributes);if(!count||count>64)return null;
+  const words=io.attributeWords(attributes);
+  return decodeEnemyMaxHpWords(words[0],words[1],words[2]);
  }catch(e){return null;}
 }
 function enemyEntryAttributes(enemy) {
@@ -2505,7 +2570,8 @@ function installEnemyEntryHooks() {
   for(const [method,address] of [['_UpdatePlayerSideAndMapLayer',enemyEntryConfig.layer],['Born',enemyEntryConfig.born]]){
    const label='enemy entry '+method;
    const isBorn=method==='Born';
-   installed.push(attachEventHook(address,{
+   installed.push(registerProbeHook(address,{
+    arkdpsName:label,
     onEnter(args){
      if(stopped||fatal||!enemyEntryReady)return;
      try{
@@ -2524,7 +2590,7 @@ function installEnemyEntryHooks() {
        enemyBirthProofs.delete(uid);
        try{this.birth={version:1,source_method:'BObject.Born',target:entityId(enemy),target_uid:String(uid),
         target_instance:enemy.toString(),klass:enemy.readPointer().toString(),frame:when.frame,
-        game_time:when.game_time,fixed:clock.add(4).readS64().toString(),sequence_before_born:sequence,
+        game_time:when.game_time,fixed:captureClockFixed().toString(),sequence_before_born:sequence,
         ...(when.native_autochess_scope!==undefined?{native_autochess_scope:{...when.native_autochess_scope}}:{})};
        }catch(e){/* Keep the ordinary guarded enemy entry without this option. */}
       }
@@ -2546,7 +2612,7 @@ function installEnemyEntryHooks() {
       if(!enemy.add(0x25).readU8())return;
       if(isBorn&&this.birth)try{
        if(uid>0&&this.birth.target===entityId(enemy)&&this.birth.klass===enemy.readPointer().toString()
-          &&this.birth.fixed===clock.add(4).readS64().toString()&&sameNativeEventScope(this.birth,when))
+          &&this.birth.fixed===captureClockFixed().toString()&&sameNativeEventScope(this.birth,when))
         enemyBirthProofs.set(uid,{...this.birth,sequence_after_born:sequence,epoch_after_born:epoch});
       }catch(e){enemyBirthProofs.delete(uid);}
       if(isBorn&&enemyPhaseReady){
@@ -2564,17 +2630,14 @@ function installEnemyEntryHooks() {
     }
    }));
   }
-  installed.push(attachEventHook(enemyEntryConfig.recycle,{
+  installed.push(registerProbeHook(enemyEntryConfig.recycle,{arkdpsName:'BObject.OnRecycle',
    onEnter(args){
-     if(!awaitingEnemyTile.size&&!enemyBirthProofs.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size
-        &&!enemyHpBirths.size)return;
+// @research-hp:recycle-fast-return
+     if(!awaitingEnemyTile.size&&!enemyBirthProofs.size&&!enemyHealthPhases.size&&!pendingEnemyRebirth.size&&!enemyHpWrites.size)return;
     try{
      const object=args[0],uid=object.add(0x18).readU32();
-      if(coalesceEnemyHp){
-       const instance=String(uid);
-       if([...enemyHpRuns.values()].some(run=>run.uid===instance))flushCoalescedEnemyHp();
-       enemyHpBirths.delete(instance);
-      }
+// @research-hp:recycle-index
+
       // Retire an in-flight setter before the pooled pointer can be reused.
       enemyHpWrites.delete(object.toString());
      if(awaitingEnemyTile.get(uid)?.equals(object))awaitingEnemyTile.delete(uid);
@@ -2596,7 +2659,7 @@ function installEnemyPhaseHook() {
  const label='enemy phase DoReborn';
  const installed=[];
  try{
-  installed.push(attachEventHook(enemyPhaseMethods.fakeDeath,{
+  installed.push(registerProbeHook(enemyPhaseMethods.fakeDeath,{arkdpsName:'Enemy.DoFakeDeath',
    onEnter(args){
     if(stopped||fatal)return;
     try{
@@ -2617,7 +2680,7 @@ function installEnemyPhaseHook() {
      if(this.started)endEnemyHook('Enemy.DoFakeDeath');
    }
   }));
-  installed.push(attachEventHook(enemyPhaseMethods.reborn,{
+  installed.push(registerProbeHook(enemyPhaseMethods.reborn,{arkdpsName:'Enemy.DoReborn',
    onEnter(args){
     if(stopped||fatal)return;
     try{
@@ -2668,6 +2731,128 @@ function installEnemyPhaseHook() {
   cfg.enemyPhaseError=String(e);
  }
 }
+// Raw acquisition is separate from the single HP state owner. The ordinary
+// provider preserves independent reads and nullable pointer-chain boundaries.
+const pointerHpIo=Object.freeze({
+ identity(enemy){const view=checkedNativeView(enemy,0x1c);return [view.getBigUint64(0,true),view.getUint32(0x18,true)];},
+ born(enemy){return enemy.add(0x25).readU8();},
+ id(enemy){return str(enemy.add(0x148).readPointer());},
+ hp(enemy){return BigInt(enemy.add(0x40).readS64().toString());},
+ clock(){const bytes=captureRead('clock_open',()=>clock.readByteArray(12));if(bytes===null||bytes.byteLength!==12)throw new Error('callback clock unavailable');const view=new DataView(bytes);return [view.getUint32(0,true),view.getBigInt64(4,true),captureClockFrame()];},
+ closing(enemy){const view=checkedNativeView(enemy.add(0x18),0x30);return [view.getUint32(0,true),view.getBigInt64(0x28,true)];},
+ trapClass(enemy){return BigInt(enemy.readPointer().toString());},
+ attributes(enemy){const attributes=enemy.add(0xb0).readPointer();if(attributes.isNull())return null;const cached=attributes.add(0x68).readPointer();return cached.isNull()?null:cached;},
+ attributeCount(attributes){return attributes.add(0x18).readU32();},
+ attributeWords(attributes){const view=checkedNativeView(attributes.add(0x20),0x14);return [view.getBigUint64(0,true),view.getBigUint64(8,true),view.getUint8(0x10)];}
+});
+function hpObservationIo(edge,enemy){
+ if(typeof probeAdapter.captureHpObservation!=='function')return pointerHpIo;
+ const observation=probeAdapter.captureHpObservation(edge,enemy);
+ return observation===null?pointerHpIo:observation;
+}
+function applyHpEntry(receiver,args,io,label,attributeChange,enemyOverride=null){
+ if(stopped||fatal||(attributeChange&&args[1].toInt32()!==MAX_HP_ATTRIBUTE))return;
+ // Keep every attempt while a modifier is open (including zero changes and
+ // cross-thread writers). Outside settlement, only MaxHP dirty events matter.
+ if(!collectEnemyHpChanges&&!attributeChange&&!activeApplyScopes.size)return;
+ let enemyTarget=true;
+ try{
+  const enemy=enemyOverride??args[0],key=enemy.toString();
+  if(enemy.isNull())return;
+  noteModifierHpWriterAttempt(enemy);
+  const existing=enemyHpWrites.get(key);
+  if(existing){
+   // Same-thread nested setters may implement the outer write. A concurrent
+   // writer cannot share its before/after certificate or coalescing tail.
+   if(existing.thread!==undefined&&receiver.threadId!==undefined&&existing.thread!==receiver.threadId){
+// @research-hp:boundary-4
+
+    existing.superseded=true;enemyStateUnknown=true;return;
+   }
+   if(attributeChange&&existing.enemyTarget&&existing.maxHpBefore===null){
+// @research-hp:boundary-5
+
+    existing.maxHpBefore=fixedArg(args[2]);
+   }
+   return;
+  }
+  if(io===null)io=hpObservationIo('entry',enemy);
+  const identity=io.identity(enemy);
+  const klass=ptr(identity[0]),uid=identity[1];
+  enemyTarget=isEnemy(enemy,klass);
+  // Before Born, enemy HP initialization is covered by enemy_enter.
+  // Stage traps never create an entry; the host admits them via snapshot.
+  if(enemyTarget&&!(io.born(enemy)))return;
+  let capturedId;
+  if(!enemyTarget){
+   if(attributeChange)return;
+   try{capturedId=io.id(enemy)||null;}catch(error){return;}
+   if(!stageTrapId(enemy,capturedId,io))return;
+  }
+  // This setter publishes only the closing scope. The opening clock still
+  // detects a new round and brackets the write with the closing clock.
+// @research-hp:defer-scope
+  const deferScope=!collectEnemyHpChanges&&!attributeChange;
+  const clockValues=io.clock();
+  const when=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope,clockValues[3]);
+  refreshEnemyEntryFrame(when.frame);
+  if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
+// @research-hp:boundary-6
+
+  if(!uid)throw new Error('missing enemy instance UID');
+  const eid=io.id(enemy);if(!eid)throw new Error('missing source identity');
+  const evidence={target:eid,target_instance:String(uid)};
+  const rawHp=Number(io.hp(enemy))/4294967296;
+  const hpBefore=Number.isFinite(rawHp)&&rawHp>=0&&rawHp<1e9?rawHp:null;
+  if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
+  const maxHpBefore=attributeChange?fixedArg(args[2]):null;
+  receiver.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,deferScope,thread:receiver.threadId,superseded:false};
+  beginModifierHpWriter(receiver.write,klass,label);
+  enemyHpWrites.set(key,receiver.write);
+  beginEnemyHook(label);
+ }catch(e){
+// @research-hp:boundary-7
+
+  if(enemyTarget)enemyStateUnknown=true;
+ }
+}
+function applyHpLeave(receiver,io,label){
+ const write=receiver.write;
+ if(!write)return;
+ try{
+  const {enemy,key,uid,when,evidence,hpBefore,maxHpBefore,deferScope,superseded}=write;
+  if(enemyHpWrites.get(key)!==write)return;
+  enemyHpWrites.delete(key);
+  if(stopped||fatal||superseded)return;
+  if(io===null)io=hpObservationIo('leave',enemy);
+  const clockValues=io.clock();
+  const end=validatedClockValues(clockValues[0],clockValues[1],clockValues[2],false,!deferScope,clockValues[3]);
+  const closing=io.closing(enemy);
+  if(end.frame!==when.frame||end.game_time!==when.game_time||closing[0]!==uid)
+   throw new Error('enemy HP callback changed identity or crossed a frame');
+  const hp=Number(closing[1])/4294967296;
+  if(!Number.isFinite(hp)||hp<0||hp>=1e9)throw new Error('enemy HP unreadable after callback');
+  finishModifierHpWriter(write,end,hp);
+  if(!collectEnemyHpChanges&&maxHpBefore===null)return true;
+  if(hp===hpBefore&&maxHpBefore===null)return true;
+  const maxHp=write.enemyTarget?enemyMaxHp(enemy,io):null;
+  if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
+  if(deferScope){
+   // Most setters do not change HP and never ask for a scope. Keep their
+   // entry/closing validation free of memoization and token allocation.
+   if(clockValues[3]!==undefined&&typeof probeAdapter.captureValidatedClockSample==='function')
+    probeAdapter.captureValidatedClockSample(end,clockValues[3]);
+   stampEventScope(end);
+  }
+  return recordEnemyHp(write,end,label,hp,maxHp);
+ }catch(e){
+// @research-hp:boundary-8
+
+  if(write.enemyTarget)enemyStateUnknown=true;
+ }
+ finally{endEnemyHook(label);}
+}
+// @research-hp:leaf-reducer
 function installEnemyStateHooks() {
  if(!enemyEntryReady||!enemyStateMethods)return;
  const installed=[];
@@ -2678,79 +2863,18 @@ function installEnemyStateHooks() {
   for(const [label,address] of writes){
    const attributeChange=label==='Entity.OnAttributeDirty';
    const callbacks={
-    onEnter(args){
-     if(stopped||fatal||(attributeChange&&args[1].toInt32()!==MAX_HP_ATTRIBUTE))return;
-     let enemyTarget=true;
-     try{
-      const enemy=args[0],key=enemy.toString();
-      if(enemy.isNull())return;
-      const existing=enemyHpWrites.get(key);
-      if(existing){
-       // Same-thread nested setters may implement the outer write. A concurrent
-       // writer cannot share its before/after certificate or coalescing tail.
-       if(existing.thread!==undefined&&this.threadId!==undefined&&existing.thread!==this.threadId){
-        if(coalesceEnemyHp)flushCoalescedEnemyHp();
-        existing.superseded=true;enemyStateUnknown=true;return;
-       }
-       if(attributeChange&&existing.enemyTarget&&existing.maxHpBefore===null){
-        if(coalesceEnemyHp)flushCoalescedEnemyHp();
-        existing.maxHpBefore=fixedArg(args[2]);
-       }
-       return;
-      }
-      const identity=checkedNativeView(enemy,0x1c);
-      const klass=ptr(identity.getBigUint64(0,true)),uid=identity.getUint32(0x18,true);
-      enemyTarget=isEnemy(enemy,klass);
-      // Before Born, enemy HP initialization is covered by enemy_enter.
-      // Stage traps never create an entry; the host admits them via snapshot.
-      if(enemyTarget&&!enemy.add(0x25).readU8())return;
-      if(!enemyTarget&&(attributeChange||!stageTrapId(enemy)))return;
-      // This setter publishes only the closing scope. The opening clock still
-      // detects a new round and brackets the write with the closing clock.
-      const deferScope=coalesceEnemyHp&&enemyTarget&&label==='Entity.SetHpInternal';
-      const when=time(false,!deferScope);
-      refreshEnemyEntryFrame(when.frame);
-      if(awaitingEnemyTile.has(uid)||pendingEnemyRebirth.has(uid))return;
-      if(coalesceEnemyHp&&attributeChange)flushCoalescedEnemyHp();
-      const evidence=enemyIdentity(enemy,uid),hpBefore=targetHp(enemy);
-      if(hpBefore===null)throw new Error('enemy HP unreadable before setter');
-      const maxHpBefore=attributeChange?fixedArg(args[2]):null;
-      this.write={enemy,key,uid,when,evidence,hpBefore,maxHpBefore,enemyTarget,deferScope,thread:this.threadId,superseded:false};
-      enemyHpWrites.set(key,this.write);
-      beginEnemyHook(label);
-     }catch(e){
-      if(coalesceEnemyHp)flushCoalescedEnemyHp();
-      if(enemyTarget)enemyStateUnknown=true;
-     }
-    },
-    onLeave(){
-     const write=this.write;
-     if(!write)return;
-     try{
-      const {enemy,key,uid,when,evidence,hpBefore,maxHpBefore,deferScope,superseded}=write;
-      if(enemyHpWrites.get(key)!==write)return;
-      enemyHpWrites.delete(key);
-      if(stopped||fatal||superseded)return;
-      const end=time(false,!deferScope);
-      const closing=checkedNativeView(enemy.add(0x18),0x30);
-      if(end.frame!==when.frame||end.game_time!==when.game_time||closing.getUint32(0,true)!==uid)
-       throw new Error('enemy HP callback changed identity or crossed a frame');
-      const hp=Number(closing.getBigInt64(0x28,true))/4294967296;
-      if(!Number.isFinite(hp)||hp<0||hp>=1e9)throw new Error('enemy HP unreadable after callback');
-      if(hp===hpBefore&&maxHpBefore===null)return;
-      const maxHp=write.enemyTarget?enemyMaxHp(enemy):null;
-      if(hp===hpBefore&&(maxHp===null||maxHp===maxHpBefore))return;
-      if(deferScope)stampEventScope(end);
-      recordEnemyHp(write,end,label,hp,maxHp);
-     }catch(e){
-      if(coalesceEnemyHp)flushCoalescedEnemyHp();
-      if(write.enemyTarget)enemyStateUnknown=true;
-     }
-     finally{endEnemyHook(label);}
-    }
+    onEnter(args){return applyHpEntry(this,args,null,label,attributeChange);},
+    onLeave(){return applyHpLeave(this,null,label);}
    };
+   // Native direct dispatch only changes observation transport. Every path
+   // still applies the exact same HP state transitions and rejection order.
+   if(label==='Entity.SetHpInternal'){
+    callbacks.arkdpsDirectHpEntry=function(enemy,issuedIo){return applyHpEntry(this,null,issuedIo,label,false,enemy);};
+    callbacks.arkdpsDirectHpLeave=function(issuedIo){return applyHpLeave(this,issuedIo,label);};
+   }
    try{
-    installed.push(attachEventHook(address,callbacks));
+    callbacks.arkdpsName='hp.'+label;
+    installed.push(registerProbeHook(address,callbacks));
     if(attributeChange)enemyMaxHpReady=enemyAttributesReady;
    }catch(e){
     if(!attributeChange)throw e;
@@ -2758,7 +2882,7 @@ function installEnemyStateHooks() {
    }
   }
   const label='Enemy.OnFinish';
-  installed.push(attachEventHook(enemyStateMethods.finish,{
+  installed.push(registerProbeHook(enemyStateMethods.finish,{arkdpsName:label,
    onEnter(args){
     if(stopped||fatal)return;
     try{
@@ -2794,7 +2918,7 @@ function installEnemyStateHooks() {
   if(enemyStateMethods.trapFinish){
    const label='Entity.OnFinish';
    try{
-    installed.push(attachEventHook(enemyStateMethods.trapFinish,{
+    installed.push(registerProbeHook(enemyStateMethods.trapFinish,{arkdpsName:label,
      onEnter(args){
       if(stopped||fatal)return;
       try{
@@ -2853,8 +2977,8 @@ function beginCharacterLifecycle(actor){
  if(!characterLifecycleMethods||!actor||actor.isNull()||!actor.readPointer().equals(characterLifecycleMethods.character))return null;
  const source=entityId(actor),uid=sourceCharacterUid(actor,source),instance=actor.add(0x18).readU32();
  if(!source?.startsWith('char_')||!uid||!instance)return null;
- const when=time(),fixed=clock.add(4).readS64().toString();
- if(clock.readU32()!==when.frame)return null;
+ const when=time(),fixed=captureClockFixed().toString();
+ if(captureClockFrame()!==when.frame)return null;
  return {actor,source,uid,instance,when,fixed};
  }catch(e){return null;}
 }
@@ -2868,14 +2992,14 @@ function installCharacterBornHook(){
  if(!characterLifecycleMethods)return;
  const label='Character.Born';
  try{
- const hook=attachEventHook(characterLifecycleMethods.born,{
+ const hook=registerProbeHook(characterLifecycleMethods.born,{arkdpsName:label,
   onEnter(args){
    if(stopped||fatal)return;
    // Born may allocate instanceUid inside the call. Capture receiver/data and the raw clock first.
    if(!args[0].readPointer().equals(characterLifecycleMethods.character))return;
    if(args[0].add(0x25).readU8()!==0)return;
    this.started=true;beginEnemyHook(label);this.actor=args[0];this.when=time();
-   this.fixed=clock.add(4).readS64().toString();this.source=entityId(this.actor);
+   this.fixed=captureClockFixed().toString();this.source=entityId(this.actor);
    this.uid=sourceCharacterUid(this.actor,this.source);
   },
   onLeave(){if(!this.started)return;try{
@@ -2928,14 +3052,15 @@ function installSkillCastStateHook(){
  if(!skillCastStateMethods)return;
  const label='BasicSkill.OnCastFinish';
  try{
-  const hook=attachEventHook(skillCastStateMethods.address,{
+  const hook=registerProbeHook(skillCastStateMethods.address,{
+   arkdpsName:label,
    onEnter(args){
     if(stopped||fatal)return;
     this.started=true;beginEnemyHook(label);
     try{this.skill=args[0];this.identity=nativeSkillCastIdentity(this.skill,this);
      if(!this.identity)return;
-     this.fixed=clock.add(4).readS64().toString();this.when=time();
-     if(clock.readU32()!==this.when.frame||clock.add(4).readS64().toString()!==this.fixed)throw new Error('unstable native skill entry clock');
+     this.fixed=captureClockFixed().toString();this.when=time();
+     if(captureClockFrame()!==this.when.frame||captureClockFixed().toString()!==this.fixed)throw new Error('unstable native skill entry clock');
      this.reason=args[2].toInt32();this.invocation=++nativeSkillCastInvocation;this.tid=this.threadId;
      if(!Number.isSafeInteger(this.invocation))throw new Error('native skill invocation exhausted');
      let stack=nativeSkillCastCalls.get(this.tid);if(!stack){stack=[];nativeSkillCastCalls.set(this.tid,stack);}stack.push(this);
@@ -2950,7 +3075,7 @@ function installSkillCastStateHook(){
      if(!sameMitigationTime(this.when,end)||!sameNativeSkillCastIdentity(this.identity,current))throw new Error('native skill state identity/clock changed');
      const wait=this.skill.add(skillCastStateMethods.wait).readU8();
      if(wait!==0&&wait!==1)throw new Error('invalid native skill wait Boolean');
-     if(clock.readU32()!==end.frame||clock.add(4).readS64().toString()!==this.fixed)throw new Error('native skill fixed clock changed');
+     if(captureClockFrame()!==end.frame||captureClockFixed().toString()!==this.fixed)throw new Error('native skill fixed clock changed');
      record(current.source,'skill_end',1,end,{method:label},
       {...current.info,skill_reason:this.reason,skill_wait_for_end:wait===1,source_instance_uid:current.ownerUid,skill_cast_invocation:this.invocation},current.sourceUid);
     }catch(e){if(this.confirmedLocal)skillUnknown=true;}
@@ -2974,13 +3099,17 @@ function shouldObserveCallback({owner,name}){
    ||owner==='Unit'&&name==='OnAfterOutputDamage');
 }
 for(const m of cfg.methods.filter(shouldObserveCallback)){
- hooks.push(attachEventHook(ptr(m.address),{
+ hooks.push(registerProbeHook(ptr(m.address),{
+  arkdpsName:m.owner+'.'+m.name,
   onEnter(args){
    active++;epoch++;this.callbackEpoch=epoch;this.started=true;this.name=m.owner+'.'+m.name;this.tid=this.threadId;
    activeHooks.set(this.name,(activeHooks.get(this.name)||0)+1);
    if(this.name==='Entity.ApplyModifier'){
     let raw=activeApplyScopes.get(this.tid);
     if(raw){
+     // The independent-writer certificate requires an unnested raw call,
+     // including foreign/unknown calls absent from the money stack.
+     this.hpWriterUncertain=true;for(const parent of raw)parent.hpWriterUncertain=true;
      this.settlementDomainNested=true;
      for(const parent of activeModifiers.get(this.tid)||[])
       if(parent.settlementDomainEntry?.nonEnemyCharacter)parent.settlementDomainNested=true;
@@ -3071,7 +3200,18 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       this.modifierScope=scope;
       if(scope)observeSettlementDomain(scope,readSettlementDomain(this.target,this.mod,this.when));
       if(scope&&scope.source===this.source&&sameMitigationTime(scope.when,this.when)){
-       if(scope.targetHit)scope.targetHitAmbiguous=true;
+       if(!scope.target?.equals(this.target)){
+        const unique=!scope.targetHit&&!scope.targetHitAmbiguous&&!scope.targetCallbackMismatch;
+        // This receiver is a real callback observation, but cannot certify the
+        // parent's different Modifier target. Keep descriptive entry values;
+        // never borrow its pointer from a later parent replay lease.
+        scope.targetCallbackMismatch=unique?{target:targetKey(this.target),
+         target_instance:this.target.toString()}:{target:null,target_instance:null};
+        scope.targetHitAmbiguous=true;scope.targetCommitRejected=true;
+       }else if(scope.targetHit||scope.targetCallbackMismatch){
+        scope.targetHitAmbiguous=true;
+        if(scope.targetCallbackMismatch)scope.targetCallbackMismatch={target:null,target_instance:null};
+       }
        else{
         scope.targetHit={target:this.target,hpBefore:this.hpBefore,uid:damageTargetUid(this.target)};
         beginTargetSettlement(this,scope);
@@ -3289,6 +3429,12 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
      const proof={method:this.name,type,target:targetType};
      if(probeAdapter.directHealingProof&&kind==='healing')proof.direct_healing=directHealingProof(this,amount);
      if(kind==='damage'){
+      if(this.targetCallbackMismatch){
+       evidence={target:this.targetCallbackMismatch.target,
+        target_instance:this.targetCallbackMismatch.target_instance,
+        target_type:targetType,damage_type:type};
+       noteSettlementProofGap(this,end,'target callback receiver differs from modifier target');
+      }else{
       const hit=this.targetHitAmbiguous||this.outputAmbiguous?null:this.targetHit;
       const settlement=hit&&this.settlement;
       // Prefer the settled callback for this exact Modifier& and target. A
@@ -3334,6 +3480,7 @@ for(const m of cfg.methods.filter(shouldObserveCallback)){
       if(this.nestedElementalChainProof)proof.nested_elemental_chain=this.nestedElementalChainProof;
       settleDamage(this,damageTarget,end,amount,type,reduction,targetEvidence||
                    (evidence.settled_after_nested_kill||proof.evidence_method==='Entity.OnAfterOutputDamage'?evidence:null));
+      }
      }
      if(kind==='damage'&&enemyDamageReady){
       finalizeModifierSettlement(this,end);
@@ -3402,6 +3549,10 @@ const terminalClassNames=new Map();
 function terminalClassName(klass){
  const key=klass.toString();
  if(terminalClassNames.has(key))return terminalClassNames.get(key);
+ // A rejected live object can carry a class outside setup's metadata closure.
+ // Its captured class word is enough to reject it; never borrow uncaptured
+ // metadata merely to name it while validating a cold ownership root.
+ if(typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive()&&!immutableClassNames.has(key))return null;
  const name=className(klass);
  if(terminalClassNames.size<128)terminalClassNames.set(key,name);
  return name;
@@ -3409,14 +3560,24 @@ function terminalClassName(klass){
 function terminalIdentity(controller,controllerClass,reject){
  if(controller.isNull())return reject?.('singleton_empty')??null;
  const nativeOffset=probeAdapter.nativeOffset??0x10;
- const controllerFields=nativeOffset===0x10?checkedNativeView(controller,0x18):null;
+ const captured=typeof __arkdpsReplayActive==='function'&&__arkdpsReplayActive();
+ // The cold tree owns only the class word when its exact-type gate rejects.
+ // Read that witness before asking for a block whose bytes require the gate.
+ // Live adapters retain their single block read and validate its class below.
+ let controllerFields=nativeOffset===0x10&&!captured?checkedNativeView(controller,0x18):null;
  const klass=controllerFields?ptr(controllerFields.getBigUint64(0,true)):controller.readPointer();
  if(!klass.equals(controllerClass)){
   if(!reject)return null;
   let observed=null;
-  try{if(!klass.isNull())observed=className(klass);}catch(e){/* The mismatch is already proved. */}
+  try{if(!klass.isNull())observed=captured?immutableClassNames.get(klass.toString())??null:className(klass);
+  }catch(e){/* The mismatch is already proved; diagnostics need no new reads. */}
   return reject('controller_class_mismatch',observed);
  }
+ if(nativeOffset===0x10&&!controllerFields)controllerFields=checkedNativeView(controller,0x18);
+ // Keep the class check on the block too; the preliminary captured class word
+ // is not authority for any subsequently supplied block.
+ if(controllerFields&&!ptr(controllerFields.getBigUint64(0,true)).equals(controllerClass))
+  return reject?.('controller_class_mismatch')??null;
  // Use the same two ownership references as the guarded native snapshot.
  const native=controllerFields?ptr(controllerFields.getBigUint64(0x10,true)):controller.add(nativeOffset).readPointer();
  const logger=controller.add(probeAdapter.loggerOffset).readPointer();
@@ -3453,13 +3614,14 @@ function currentTerminalBoundary(candidate=terminalBoundary){
 function installTerminalHooks(){
  if(!terminalMethods)return;
  try{
-  hooks.push(attachEventHook(terminalMethods.state,{
+  hooks.push(registerProbeHook(terminalMethods.state,{arkdpsName:'BattleController.set_state',
    onEnter(args){
     probeAdapter.enterTerminalStateHook(this,args);
     const state=args[1].toInt32();
     this.nativeStateValue=state;this.nativeStateController=args[0];
     if(state===1||state===2){
-     resetEnemyHpCoalescing();
+// @research-hp:boundary-9
+
      terminalGeneration++;terminalBoundary=null;
       try{
        const identity=terminalIdentity(args[0],terminalMethods.controller);
@@ -3472,13 +3634,14 @@ function installTerminalHooks(){
     probeAdapter.leaveTerminalStateHook(this);
    }
   }));
-  hooks.push(attachEventHook(terminalMethods.destroy,{
+  hooks.push(registerProbeHook(terminalMethods.destroy,{arkdpsName:'BattleController.Destroy',
    onEnter(args){
     countTerminalDiagnostic('destroy_entered');
     this.generation=++terminalGeneration;
     terminalBoundary=null;
     if(active||fatal||stopped){rejectTerminal(active?'callbacks_active':fatal?'fatal':'stopped');return;}
-    if(coalesceEnemyHp)flushCoalescedEnemyHp();
+// @research-hp:boundary-10
+
     try{
      const identity=terminalIdentity(args[0],terminalMethods.controller),stamp=time(true);
      if(identity&&stamp){
@@ -3513,7 +3676,7 @@ installTerminalHooks();
 const enemyStateError=cfg.enemyStateError||cfg.enemyPhaseError||cfg.enemyEntryError||null;
 function enemyEntryQuality(frame){
  if(enemyEntryReady&&frame!==undefined)refreshEnemyEntryFrame(frame);
- return {enemy_entry_ready:enemyEntryReady,enemy_entry_unknown:enemyEntryUnknown,
+ return {...(!collectEnemyHpChanges?{enemy_hp_mode:'snapshots'}:{}),enemy_entry_ready:enemyEntryReady,enemy_entry_unknown:enemyEntryUnknown,
   enemy_phase_ready:enemyPhaseReady,enemy_phase_unknown:enemyPhaseUnknown,
   enemy_state_ready:enemyStateReady&&enemyPhaseReady,
   enemy_state_unknown:enemyStateUnknown||enemyPhaseUnknown||enemyEntryUnknown,
@@ -3565,7 +3728,7 @@ function installAutoChessRoundResetHook(){
  const label='BattleController.ClearRunTimeData';
  const otherCallbacks=()=>active>0||(probeAdapter.pendingMarkCallbacks?.()??0)>1;
  try{
-  hooks.push(attachEventHook(autoChessRoundResetMethod,{
+  hooks.push(registerProbeHook(autoChessRoundResetMethod,{arkdpsName:label,
    onEnter(args){
     if(!probeHooksReady||stopped||fatal)return;
     const unclaimed=autoChessUnclaimedZero;
@@ -3585,7 +3748,8 @@ function installAutoChessRoundResetHook(){
         (!sameAutoChessResetOwner(unclaimed,owner)||unclaimed.sequence!==sequence||unclaimed.epoch!==epoch-1))return;
      // A pending HP tail belongs to the old clock. Queue it before taking the
      // immutable per-round sequence origin, never at the new game clock.
-     if(coalesceEnemyHp)resetEnemyHpCoalescing();
+// @research-hp:boundary-11
+
      this.roundReset={...owner,controller,sequence,epoch,settlementScope:damageSettlementScope};
     }catch(e){/* An unreadable opening owner cannot prove a new origin. */}
    },
@@ -3595,11 +3759,11 @@ function installAutoChessRoundResetHook(){
     const entry=this.roundReset;
     if(!entry||stopped||fatal||otherCallbacks()||sequence!==entry.sequence||epoch!==entry.epoch)return;
     try{
-     if(clock.readU32()!==0||clock.add(4).readS64().toString()!=='0')return;
+     if(captureClockFrame()!==0||captureClockFixed().toString()!=='0')return;
      const binding=nativeBinding(null,true),context=binding?.native_autochess_context;
      const closing=autoChessResetOwner(entry.controller);
      if(!sameAutoChessResetOwner(entry,closing)||otherCallbacks()||sequence!==entry.sequence||
-        epoch!==entry.epoch||clock.readU32()!==0||clock.add(4).readS64().toString()!=='0')return;
+        epoch!==entry.epoch||captureClockFrame()!==0||captureClockFixed().toString()!=='0')return;
      autoChessUnclaimedZero={...closing,sequence,epoch};
      if(!binding||context?.status!=='available'||context.verified_same_frame!==true||
         ![4,5,6].includes(context.phase)||binding.native_frame!==0||binding.native_fixed_time!=='0'||
@@ -3627,7 +3791,8 @@ function captureControlStatus(){
 function resetCaptureContexts(){
  // Preserve every queued record and its old settlement provenance. Only state
  // that could bridge an unobserved interval is discarded at the new segment.
- resetEnemyHpCoalescing();resetDamageSettlementScope();
+// @research-hp:boundary-12
+ resetDamageSettlementScope();
  stacks.clear();nativeSkillCastCalls.clear();activeModifiers.clear();activeApplyScopes.clear();
  formulaScopes.clear();pendingFormulaDamage.clear();activeDamageFactories.clear();
  shieldByFrame.clear();shieldUnknownByFrame.clear();enemyHpWrites.clear();
@@ -3652,12 +3817,13 @@ function setCapturePaused(paused,revision){
  if(paused){
   if(globalThis.__arkdpsNativeCaptureControl!==true)
    for(const entry of captureHooks)if(!entry.detached&&entry.listener){entry.listener.detach();entry.listener=null;}
-  if(coalesceEnemyHp)flushCoalescedEnemyHp();
+// @research-hp:boundary-13
+
  }else{
   if(capturePaused||captureInterrupted)resetCaptureContexts();
   if(globalThis.__arkdpsNativeCaptureControl!==true)
    for(const entry of captureHooks)if(!entry.detached&&!entry.listener)
-    entry.listener=Interceptor.attach(entry.address,entry.callbacks);
+    attachCaptureListener(entry);
  }
  if(globalThis.__arkdpsNativeCaptureControl!==true&&typeof Interceptor.flush==='function')Interceptor.flush();
  if(capturePaused!==paused||!paused&&captureInterrupted)captureGeneration++;
@@ -3669,7 +3835,8 @@ function markEvents(withPresence=false){
  if(pending>0&&!fatal&&!stopped)
   return {sequence,epoch,active:pending,active_hooks:[...activeHooks.keys()],retry:true,error:null,stopped:false,
    mark_retry_reason:'callback_pending_at_start'};
- if(coalesceEnemyHp&&!active)flushCoalescedEnemyHp();
+// @research-hp:boundary-14
+
  const terminal_boundary=currentTerminalBoundary();
  const prepared=probeAdapter.prepareEventEnvelope?.();
  let current;
@@ -3694,6 +3861,78 @@ function markEvents(withPresence=false){
  }
  return mark;
 }
+// Called by the single worker only while this exact closed native record is
+// the sealed replay owner. New producer activity cannot invalidate an already
+// proved historical prefix; every binding input below comes from owned roles.
+function __arkdpsRetireCaptureGraphs(bounds){
+ if(typeof probeAdapter.retireCaptureGraphs!=='function')throw new Error('capture retirement unsupported');
+ return probeAdapter.retireCaptureGraphs(bounds);
+}
+function __arkdpsCaptureModeState(){
+ if(typeof probeAdapter.captureModeState!=='function')throw new Error('capture mode control unsupported');
+ return probeAdapter.captureModeState();
+}
+function __arkdpsInstallCaptureMode(enabled,barrier){
+ if(typeof probeAdapter.installCaptureMode!=='function')throw new Error('capture mode control unsupported');
+ return probeAdapter.installCaptureMode(enabled,barrier);
+}
+function __arkdpsPublicationServed(through){
+ if(!Number.isSafeInteger(through)||through<eventStore.acknowledged||through>sequence)throw new Error('served publication range unavailable');
+ eventStore.served(through);
+}
+function __arkdpsSnapshotPublication(fence,terminalProof=null){
+ if(!fence||fence.sequence!==sequence||fence.epoch!==epoch||active!==0||activeHooks.size!==0)throw new Error('publication reducer fence changed');
+ const published=typeof __arkdpsPublicationJournal==='object'?__arkdpsPublicationJournal.publishedThrough:eventStore.acknowledged;
+ if(!Number.isSafeInteger(published)||published<eventStore.acknowledged||published>sequence)throw new Error('publication delta origin unavailable');
+ const retained=eventStore.snapshot(published,sequence);
+ const records=retained.events;
+ if(records.length!==sequence-published||records.some((event,index)=>event.sequence!==published+index+1))throw new Error('publication delta incomplete');
+ const baseline={};
+ if(typeof probeAdapter.baselineEnvelope==='function')Object.assign(baseline,probeAdapter.baselineEnvelope(fence,queue,eventStore.acknowledged,sequence));
+ Object.assign(baseline,autoChessRoundStartEnvelope(fence,queue,eventStore.acknowledged,sequence));
+ const mark={...fence,...baseline};
+ const read_fields={...eventQuality(),...fence,...baseline,hp_context_dropped:hpContextDropped};
+ let terminal_read=terminalProof;
+ if(terminal_read===null&&currentTerminalBoundary()){
+  const terminal=readTerminalEvents(eventStore.acknowledged,sequence,false);
+  if(terminal.retry===false)terminal_read=terminal;
+ }
+ return Object.freeze({mark,acknowledged:eventStore.acknowledged,events_after:published,events_through:sequence,
+  events:retained.events,hp_context:retained.hp_context,read_fields,terminal_read});
+}
+function __arkdpsOnClosedRecord(record){
+ return typeof probeAdapter.captureRecordMode==='function'?probeAdapter.captureRecordMode(record,()=>capturedClosedRecordProjection(record)):capturedClosedRecordProjection(record);
+}
+function capturedClosedRecordProjection(record){
+ const sampling=record?.kind==='sampling_checkpoint'&&record.edge==='checkpoint'
+  &&probeAdapter.verifiedSamplingCheckpoint?.(record)===true;
+ if(typeof __arkdpsReplayActive!=='function'||!__arkdpsReplayActive()||record!==__arkdpsReplayRecord()||
+    (record.edge!=='leave'&&!sampling)||record.closed_after!==true||active!==0||!Number.isSafeInteger(record.facts?.scope_mode_epoch)||record.facts.scope_mode_epoch<0||typeof probeAdapter.capturedPublicationBinding!=='function')return null;
+ try{
+ const boundary=currentTerminalBoundary();
+ if(boundary){
+  // Only the actual Destroy completion creates this terminal certificate.
+  // Terminal acquisition serves its retained token through the native
+  // scheduler; a sampling point must not re-issue it without a body contract.
+  if(sampling||probeAdapter.capturedTerminalRecord?.(record)!==true)return null;
+  const rawTerminal=readTerminalEvents(eventStore.acknowledged,sequence,false);
+  if(rawTerminal.retry!==false)return null;
+  const terminal={...rawTerminal,native_capture_scope_mode_epoch:record.facts.scope_mode_epoch};
+  const {events:_events,hp_context:_context,after:_after,through:_through,terminal_only:_terminal,...fence}=terminal;
+  return __arkdpsSnapshotPublication(fence,terminal);
+ }
+ const binding=probeAdapter.capturedPublicationBinding();if(!binding)return null;
+// @research-hp:boundary-15
+
+ const current=time(true,false);if(!current)return null;
+ if(binding.native_frame!==current.frame||Number(BigInt(binding.native_fixed_time))/4294967296!==current.game_time)return null;
+ const value={frame:current.frame,game_time:current.game_time,sequence,epoch,active:0,active_hooks:[],error:fatal,stopped,native_capture_scope_mode_epoch:record.facts.scope_mode_epoch,
+  ...eventQuality(current.frame),...binding,terminal_boundary:currentTerminalBoundary(),
+  terminal_boundary_diagnostics:{...terminalDiagnostics},terminal_read_version:1};
+ return __arkdpsSnapshotPublication(value);
+ }catch(error){return null;}
+}
+
 function receiveEventRequest(){
  // Frida recv is one-shot. Rearm before dispatch; a late reply can be safely
  // ignored by the host because reads are replayable and ACKs idempotent.
@@ -3726,9 +3965,10 @@ rpc.exports={
  stop(){stopped=true;if(typeof probeAdapter.discardInitialBoundary==='function')probeAdapter.discardInitialBoundary('stopped');
   for(const h of hooks)h.detach();return {active,error:fatal};}
 };
+if(typeof __arkdpsPublicationJournal==='object')__arkdpsPublicationJournal.bindStore(eventStore.view());
 probeHooksReady=true;
 receiveEventRequest();
-send({ready:true,arch:Process.arch,capture_pause_version:1,skill_ready:!skillUnknown&&cfg.skillReady,
+send({ready:true,arch:Process.arch,...(globalThis.arkdpsNativeAsyncCapture===true&&globalThis.__arkdpsSamplingCapturePlan?.complete===true&&typeof __arkdpsVerifiedSamplingCheckpoint==='function'?{native_sampling_version:1}:{}),capture_pause_version:1,skill_ready:!skillUnknown&&cfg.skillReady,
  ...(probeAdapter.terminalReadVersion===1?{terminal_read_version:1}:{}),
  autochess_round_start_ready:!!autoChessRoundResetMethod&&!cfg.autoChessRoundResetError,
  autochess_round_start_error:cfg.autoChessRoundResetError||null,

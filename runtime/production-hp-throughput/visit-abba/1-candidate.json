@@ -1,0 +1,294 @@
+{
+  "queue": null,
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC/queue",
+    "native dirty callback snapshots"
+  ],
+  "results": [
+    {
+      "visit_calls": 0,
+      "js_profile": {
+        "scope_ms": 0,
+        "scope_inside_pub_ms": 0,
+        "prefix_ms": 0,
+        "journal_ms": 0
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 0,
+        "capture_ms": 0,
+        "capture_read_bytes": 0,
+        "capture_read_count": 0,
+        "edges": 0,
+        "graph_calls": 0,
+        "graph_check_calls": 0,
+        "graph_check_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 0,
+        "registered_plans": 0,
+        "scalar_calls": 0,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 0
+      },
+      "branch": "input_only_baseline",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 3.372299998998642,
+      "setters_per_second": 593067.0464056793,
+      "publication_count": 0,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "visit_calls": 1,
+      "js_profile": {
+        "scope_ms": 0.8984000086784363,
+        "scope_inside_pub_ms": 0.8984000086784363,
+        "prefix_ms": 6.985899984836578,
+        "journal_ms": 0.6442999839782715
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 10002,
+        "capture_ms": 2.853299999999976,
+        "capture_read_bytes": 522886,
+        "capture_read_count": 32238,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2,
+        "graph_check_timing": {
+          "calls": 2,
+          "max_us": 169.3,
+          "sampled_us": 169.3,
+          "samples": 1
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 8007,
+        "registered_plans": 0,
+        "scalar_calls": 12005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 1.1577999999999489
+      },
+      "branch": "unchanged",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 176.5135000050068,
+      "setters_per_second": 11330.578114100452,
+      "publication_count": 1,
+      "scope_stamps": 0,
+      "sequence_delta": 0,
+      "event_kinds": {}
+    },
+    {
+      "visit_calls": 2001,
+      "js_profile": {
+        "scope_ms": 115.70019960403442,
+        "scope_inside_pub_ms": 0.06579998135566711,
+        "prefix_ms": 51.29039999842644,
+        "journal_ms": 36.4108000099659
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 12002,
+        "capture_ms": 7.170400000000286,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_check_timing": {
+          "calls": 2002,
+          "max_us": 18.4,
+          "sampled_us": 60.599999999999994,
+          "samples": 16
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 10007,
+        "registered_plans": 0,
+        "scalar_calls": 20005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 6.208200000000286
+      },
+      "branch": "changed_damage",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 423.4733999967575,
+      "setters_per_second": 4722.846818750159,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 2000,
+      "event_kinds": {
+        "enemy_hp": 2000
+      }
+    },
+    {
+      "visit_calls": 2001,
+      "js_profile": {
+        "scope_ms": 130.039300262928,
+        "scope_inside_pub_ms": 0.07439997792243958,
+        "prefix_ms": 4.224899977445602,
+        "journal_ms": 0.7037000060081482
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 12002,
+        "capture_ms": 9.681000000000214,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_check_timing": {
+          "calls": 2002,
+          "max_us": 9.7,
+          "sampled_us": 71.39999999999999,
+          "samples": 16
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 10007,
+        "registered_plans": 0,
+        "scalar_calls": 20005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 8.237200000000147
+      },
+      "branch": "heal_coalesced",
+      "setters": 2000,
+      "dirty": 0,
+      "elapsed_ms": 392.5324999988079,
+      "setters_per_second": 5095.119512412536,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 2,
+      "event_kinds": {
+        "enemy_hp": 2
+      }
+    },
+    {
+      "visit_calls": 2001,
+      "js_profile": {
+        "scope_ms": 109.58490031957626,
+        "scope_inside_pub_ms": 0.06240001320838928,
+        "prefix_ms": 4.944599986076355,
+        "journal_ms": 1.377100020647049
+      },
+      "native_profile": {
+        "batch_calls": 0,
+        "batch_output_bytes": 0,
+        "byte_read_calls": 12002,
+        "capture_ms": 7.316700000000279,
+        "capture_read_bytes": 3001646,
+        "capture_read_count": 200154,
+        "edges": 4000,
+        "graph_calls": 0,
+        "graph_check_calls": 2002,
+        "graph_check_timing": {
+          "calls": 2002,
+          "max_us": 5.2,
+          "sampled_us": 41.60000000000001,
+          "samples": 16
+        },
+        "graph_output_bytes": 0,
+        "hook_point_calls": 0,
+        "hook_point_timing": {
+          "calls": 0,
+          "max_us": 0,
+          "sampled_us": 0,
+          "samples": 0
+        },
+        "missing_hook_calls": 0,
+        "owned_view_internal_read_calls": "not_measured",
+        "plans_sealed": false,
+        "point_calls": 10007,
+        "registered_plans": 0,
+        "scalar_calls": 20005,
+        "selected_field_slots": 0,
+        "view_initialize_ms": 6.1816000000002616
+      },
+      "branch": "maxhp_dirty",
+      "setters": 2000,
+      "dirty": 20,
+      "elapsed_ms": 328.06130000948906,
+      "setters_per_second": 6096.421613711068,
+      "publication_count": 1,
+      "scope_stamps": 2000,
+      "sequence_delta": 41,
+      "event_kinds": {
+        "enemy_hp": 41
+      }
+    }
+  ],
+  "provenance": {
+    "source": "8d5315e",
+    "bridge": "c83c50f",
+    "binary_sha256": "10cf03ebe8ec192c19c78d161a3ef682211ea11dd01dd2c8b402e4aab8c305ab",
+    "script_sha256": "8a5c17441bcca1b5c9799317db364c69f04d5d1dea35f76c220bf099a2adad64",
+    "files": {
+      "event_probe_native_pc.js": "e691158dcb5de8746613afc9eb712aeb0d8e2ed1a08ece670ab5bc2deaf8061e",
+      "event_probe_runtime.js": "b30931f8633ffc01d3d9170e28638b85f5129825b9ee6ff0ff604fe88a249810",
+      "event_probe_autochess.js": "4fb17c0812fa2e77db3e4cbd4c9960b939f0d300efabef9e9545585ac1766ffc",
+      "native_pc/native_event_runtime/cold_plan.js": "4b9e7615b5dfc5e9dbc6030323cb56ba6b789aa682116114bc77ffd3634dce33",
+      "native_pc/native_event_runtime/publication.js": "5a83506f7f1ba64afbcd8592522d8f9b84f71a60ab7596ce1f718932ba545577",
+      "native_pc/native_event_runtime/bridge.js": "ea533e9d21f8bc0229ade06ef7c26202337d1f1b4141bafbc9072a989b9dcd90"
+    }
+  }
+}

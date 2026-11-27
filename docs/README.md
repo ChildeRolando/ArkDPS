@@ -10,6 +10,13 @@
 
 ## 实验与实证
 
+- [H7-4 开局与嵌套结算根因修复](h7-4-root-fixes.md) — rc.46 实机失败证据、普通 PC 冷绑定发布与零帧前缀、敌情血池下限和干员时长。
+- [手动对局性能计时](performance-timings.md) — 低开销开关、原生/宿主/WPF 阶段、日志解释与 rc.43 私有计时包验收。
+- [PC 原生现场采集与单消费者](native-capture-worker.md) — 现场快照、队列、共享归约、采样调度、单一事件存储及重构收口变更控制。
+- [敌方 HP 轻量采集合同](native-hp-lightweight-contract.md) — 按产品需求取消精确敌方回血指标，保留结算、关键事件与快照刷新；计划边界及严格水位。
+- [按业务消费者裁剪原生伤害取证](native-capture-demand.md) — 全伤害/公式钩子字段账、逐边取证合同、计数与混合负载验证。
+- [HP 叶子事实组研究合同](native-hp-leaf-facts-contract.md) — 已移出产品装配的研究原型、原断言与未完成边界。
+
 - [官服 PC Frida 生命周期与恢复约束](native-pc-frida-state-machine.md) — 状态转换、资源所有权、请求世代与覆盖验证。
 
 - [单局战斗事件与计算要素挖掘](battle-event-research.md) — 当前采集边界、公开线索、事件矩阵和验证顺序。
@@ -29,6 +36,7 @@
 
 ## 发布
 
+- [rc.47 采集重构发布说明](release-rc47.md) — 有界现场取证、普通 PC 冷交接与零帧前缀、生命周期显示及已知性能限制。
 - [rc.42 重构版发布说明](release-rc42.md) — 共用采集与统计链路收敛、小局交接、历史兼容及测13手动迁移说明。
 - [rc.14 发布说明与实机覆盖](release-rc14.md) — PC/MuMu 整合、始终管理员启动、一次迁移与实机验证边界。
 - [Windows WPF 便携包构建与发布验收](windows-release.md) — 当前唯一分发入口：构建、验收、CI 与许可边界。

@@ -1,0 +1,76 @@
+{
+  "queue": {
+    "actual_producer_setters_per_second": 29861.30308164691,
+    "capacity_pass": false,
+    "consumed_bytes": 18788625,
+    "consumed_prefix_contiguous": true,
+    "consumed_records": 5274,
+    "consumer_busy_ms": 420.120399999999,
+    "consumer_service_records_per_second": 12553.544174479537,
+    "elapsed_ms": 728.4915,
+    "entry_compact_max": 917,
+    "entry_compact_min": 917,
+    "failure_code": 4,
+    "leave_compact_max": 128078,
+    "leave_compact_min": 6208,
+    "max_queue_age_ms": 638.2097,
+    "pause_ms": 300,
+    "peak_resident_bytes": 136316990,
+    "producer_ms": 727.8316,
+    "raw_prefix_contiguous": false,
+    "requested_producer_ms": 10000,
+    "requested_setters": 300000,
+    "reserved_records": 43470,
+    "submitted_setters": 21734,
+    "target_setters_per_second": 30000,
+    "trend": [
+      {
+        "backlog": 18380,
+        "consumed": 0,
+        "ms": 307.6025,
+        "reserved": 18380
+      },
+      {
+        "backlog": 22782,
+        "consumed": 1266,
+        "ms": 411.7018,
+        "reserved": 24048
+      },
+      {
+        "backlog": 28050,
+        "consumed": 2564,
+        "ms": 511.7089,
+        "reserved": 30614
+      },
+      {
+        "backlog": 32600,
+        "consumed": 3746,
+        "ms": 611.7349,
+        "reserved": 36346
+      },
+      {
+        "backlog": 36876,
+        "consumed": 5054,
+        "ms": 711.7371,
+        "reserved": 41930
+      }
+    ]
+  },
+  "kind": "actual_shared_hp_callback_quickjs_native_owned",
+  "includes": [
+    "actual HP field plan and compile_plan",
+    "native capture and strict OwnedReplayView",
+    "actual bridge fused packed dispatch and argument proxy",
+    "actual adapter withCapturedMode wrapper",
+    "actual shared HP callback",
+    "actual CaptureLanes private queue and four 32MiB spill banks",
+    "independent paced producer and actual serialized consumer",
+    "real prepared full scope graph",
+    "785-guard publication graph and actual source prefix/journal"
+  ],
+  "excluded": [
+    "IPC and native hook trampoline",
+    "native dirty callback snapshots"
+  ],
+  "results": []
+}

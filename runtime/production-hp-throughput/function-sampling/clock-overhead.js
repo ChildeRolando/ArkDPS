@@ -1,0 +1,1 @@
+const n=10000;let total=0;function noop(){};for(let i=0;i<n;i++){const a=__monotonicMs();noop();total+=(__monotonicMs()-a)*1000;}print(JSON.stringify({clock_pair_plus_empty_call_us:total/n,count:n}));

@@ -10,6 +10,7 @@ from collector import SampleUnavailable, BattleChanged, UnsupportedVersion
 from event_observer import ObserverReadRetry
 from event_probe import (NativePcBinding, NativePcProbeContract, _ROUND_START_BINDING, _ROUND_START_PREFIX_LIMIT,
                          autochess_raw_read_scope, _round_start_integer, _valid_round_start_point,
+                         native_battle_start_boundary, verified_native_battle_start,
                          bind_native_autochess_pair, contract_for, event_processing_payload)
 from roster import RosterUnavailable
 from event_stream import StreamGap, BarrierBusy, baseline_barrier
@@ -18,6 +19,11 @@ from snapshot_adapter import BattleStatisticsAdapter, MappingUnavailable
 
 def apply_event_quality(statistics, payload, enemy_damage_quality, *, baseline_frame, initial_drain):
     """Apply the existing event-family quality rules to one scoped core."""
+    if 'enemy_hp_mode' in payload:
+        mode = payload['enemy_hp_mode']
+        if mode not in ('events', 'snapshots'):
+            raise ValueError('unsupported enemy HP collection mode')
+        statistics.enemy_hp_mode = mode
     for source in payload.get('unknown_sources') or ():
         statistics.mark_overkill_unknown(source)
     for source in payload.get('engagement_unknown_sources') or ():
@@ -64,6 +70,18 @@ def apply_event_quality(statistics, payload, enemy_damage_quality, *, baseline_f
 
 class CaptureRetry(RuntimeError):
     """No stable frame was obtained; queued events remain available."""
+
+
+def confirm_sampling_mark(observer, opening, *, with_presence=False):
+    """Close one acquisition without asking native sampling for another hook.
+
+    Providers still return their own independently verified closing mark. The
+    ordinary barrier below remains the authority for matching clocks/scopes.
+    """
+    confirm = getattr(observer, 'confirm_mark', None)
+    if not with_presence and callable(confirm):
+        return confirm(opening)
+    return observer.mark_with_presence() if with_presence else observer.mark()
 
 
 _ROUND_START_READ_SIZE = 2048
@@ -137,6 +155,30 @@ def read_event_batch(observer, sequence, *, baseline=False):
                 if batch.get('events') != []:
                     raise StreamGap('event baseline did not return an empty window')
                 batch = _read_long_round_start_prefix(observer, sequence, batch, contract)
+                point = native_battle_start_boundary(batch)
+                if point is not None and isinstance(contract, NativePcProbeContract):
+                    committed = getattr(observer, '_committed_sequence', None)
+                    read_range = getattr(observer, 'read_round_start_range', None)
+                    if type(committed) is int and committed == 0 and callable(read_range) and sequence <= _ROUND_START_PREFIX_LIMIT:
+                        records = []
+                        for after in range(0, sequence, _ROUND_START_READ_SIZE):
+                            through = min(sequence, after + _ROUND_START_READ_SIZE)
+                            page = read_range(after, through)
+                            if not isinstance(page, dict) or page.get('error') or page.get('stopped'):
+                                raise StreamGap('native battle-start prefix is unavailable')
+                            if page.get('retry'):
+                                raise CaptureRetry('native battle-start prefix requires retry')
+                            if (native_battle_start_boundary(page) != point
+                                    or any(not NativePcBinding._same(page.get(key), batch.get(key))
+                                           for key in (*_ROUND_START_BINDING, 'native_session', 'source_build', 'damage_settlement_scope'))
+                                    or not isinstance(page.get('events'), list)
+                                    or len(page['events']) != through - after):
+                                raise StreamGap('native battle-start prefix binding or range changed')
+                            records.extend(page['events'])
+                        batch = dict(batch, native_battle_start_events=records,
+                                     native_battle_start_read_after=0, native_battle_start_read_through=sequence,
+                                     native_battle_start_committed_sequence=0,
+                                     native_battle_start_events_complete=True)
         elif hasattr(observer, 'read_through'):
             batch = observer.read_through(sequence)
         else:
@@ -226,14 +268,22 @@ def acknowledge_event_batch(observer, sequence):
     return True
 
 
-def source_attribution_batch(drained, after, through):
+def source_attribution_batch(drained, after, through, *, sample=None, mark=None):
     """Use identity evidence only from this battle's uncommitted, bounded prefix."""
     version = drained.get('source_attribution_version')
     if type(version) is not int or version != 1 or drained.get('error') or drained.get('stopped'):
         return {}
+    events = drained.get('events', ())
+    if sample is not None and mark is not None:
+        try:
+            origin = verified_native_battle_start(sample, drained, mark)
+        except StreamGap:
+            return {}  # Ingestion reports the invalid prefix; it grants no ownership here.
+        if origin is not None:
+            after, events = 0, origin[1]
     return dict(source_attribution=True, settlement_version=drained.get('partial_damage_version'),
                 source_events=(
-        event for event in drained.get('events', ())
+        event for event in events
         if isinstance(event, dict) and type(event.get('sequence')) is int
         and after < event['sequence'] <= through
     ))
@@ -265,9 +315,10 @@ class LiveEventCapture:
             self.adapter.on_event_gap()
             self.closed = True
 
-    def _mark(self):
+    def _mark(self, opening=None):
         try:
-            mark = self.observer.mark()
+            mark = (self.observer.mark() if opening is None
+                    else confirm_sampling_mark(self.observer, opening))
         except ObserverReadRetry as exc:
             raise CaptureRetry(str(exc)) from exc
         except Exception as exc:
@@ -322,7 +373,7 @@ class LiveEventCapture:
             before = self._mark()
             sample = self.collector.read()
             roster = self.collector.read_roster()
-            after = self._mark()
+            after = self._mark(before)
             self.audit('sample', {'before': before, 'sample': sample, 'roster': roster, 'after': after})
         except (StreamGap, BattleChanged, UnsupportedVersion):
             self.close()
@@ -359,7 +410,8 @@ class LiveEventCapture:
             except Exception as exc:
                 raise StreamGap(f'observer event batch unavailable: {exc}') from exc
             self.adapter.update(sample, roster, **source_attribution_batch(
-                drained, self.adapter.event_stream.sequence if self.adapter.event_stream else sequence, sequence))
+                drained, self.adapter.event_stream.sequence if self.adapter.event_stream else sequence, sequence,
+                sample=sample, mark=after))
             self.audit('drain', drained)
             result = self.ingest(sample, roster, sequence, drained, mark=after)
             acknowledge_event_batch(self.observer, sequence)
@@ -393,9 +445,13 @@ class LiveEventCapture:
             contract.validate_binding(sample, mark)
             contract.validate_batch(sample, sequence, drained, stream=self.adapter.event_stream)
             if self.baseline_sequence is None:
-                self.baseline_sequence = sequence
+                origin = verified_native_battle_start(sample, drained, mark)
+                self.baseline_sequence = 0 if origin is not None else sequence
                 self.adapter.start_events(session=sample['session'], frame=sample['frame'],
-                                          sequence=sequence, allow_late_baseline=allow_late_baseline)
+                                          sequence=self.baseline_sequence, allow_late_baseline=allow_late_baseline,
+                                          retained_zero_origin=origin is not None)
+                if origin is not None:
+                    drained = dict(drained, events=origin[1])
             stream = self.adapter.event_stream
             if drained.get('error'):
                 raise StreamGap(f"observer callback error: {drained['error']}")

@@ -1,0 +1,1 @@
+{"before":["4096","12"],"afterError":"Error: HP observation receiver changed","complete":false}

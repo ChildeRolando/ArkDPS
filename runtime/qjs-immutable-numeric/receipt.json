@@ -1,0 +1,315 @@
+{
+  "kind": "owned QuickJS immutable numeric property microbenchmark only",
+  "archive_sha256": "6f1f322aea3bb3a90858db85c9fe717013fde4df7dfcafe2f57e78f5bb4b4a0c",
+  "archive_sources_exact": true,
+  "command": [
+    "g++",
+    "-std=c++17",
+    "-static",
+    "-O2",
+    "-I",
+    "..\\..\\..\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\quickjs-headers",
+    "micro.cpp",
+    "..\\..\\..\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-0.o",
+    "..\\..\\..\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-1.o",
+    "..\\..\\..\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-2.o",
+    "..\\..\\..\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-3.o",
+    "..\\..\\..\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-4.o",
+    "-o",
+    "micro.exe"
+  ],
+  "driver_sha256": "49691db04303c58b445dc6e7cdc2b450da78198c0b9143f5943e6b359f555ce5",
+  "inputs_sha256": {
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-scope-binary-view\\runtime\\qjs-immutable-numeric\\micro.cpp": "8843ac348e66f8fb76f7eee03850651315678a9789627c710c6de92403a47624",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-0.o": "9b57de662910a8500a96eb201fa51a9b5a22881b5f44083bfcf6295e36df7a61",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-1.o": "d42a47f5f2a9d8b619496753faec5691c137a77d6726ba7b998072d28ead71a6",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-2.o": "13058fb02edd05f161d2e437a21a4d72dcc6ee194b56488ac59f6371fbc1abdd",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-3.o": "2a234ea2e284edb4f3c36bdd936bcb124df699321199ff329527df8b5b3c31af",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-4.o": "3eb1e8db3d287e212ce53de2aaad29c5200c7b18c5941b2eaacbbec1328bcbd3",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\quickjs-headers\\quickjs.h": "ad3455cafab56a036e5b94c8e6915e653a09f48e32e72cb66f0d0775047a7bb5",
+    "E:\\\u6587\u6863\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\quickjs-2025-09-13\\quickjs.c": "f1c17b0c9bda1e7e7a3436f3b426085962d361294c5ada2a21b719ac39287170"
+  },
+  "binary_sha256": "10bf1ded7bfdf843f0f269793c7674e0a9b320a38611b4357e9b0d1304aa0db2",
+  "summary": {
+    "0": {
+      "0": {
+        "read_ns": 52.84468749538064,
+        "construct_ns": 3689.058332393567
+      },
+      "1": {
+        "read_ns": 52.574437484145164,
+        "construct_ns": 2605.5916659533978
+      },
+      "2": {
+        "read_ns": 67.02543750405312,
+        "construct_ns": 295.36249985297525
+      },
+      "3": {
+        "read_ns": 52.496062498539686,
+        "construct_ns": 2334.187498937051
+      }
+    },
+    "1": {
+      "0": {
+        "read_ns": 76.07093747705221,
+        "construct_ns": 3611.812500904004
+      },
+      "1": {
+        "read_ns": 81.706000007689,
+        "construct_ns": 2820.0624994933605
+      },
+      "2": {
+        "read_ns": 94.3788125179708,
+        "construct_ns": 298.7208341558774
+      },
+      "3": {
+        "read_ns": 74.82687501236796,
+        "construct_ns": 2322.0041655004025
+      }
+    }
+  },
+  "types": {
+    "0": "native enumerable-only readonly array + PreventExtensions + JS freeze",
+    "1": "C_W_E array + JS freeze",
+    "2": "custom immutable exotic numeric object fixed atom table",
+    "3": "native enumerable-only readonly array + PreventExtensions"
+  },
+  "limitations": [
+    "microbenchmark not shared source/worker/Game/FPS",
+    "custom object not Array-compatible drop-in",
+    "no native provider/source API change",
+    "fixed atom table is setup-owned; payload separately allocated and finalized",
+    "cached object source compile flags not independently rebuilt; actual object SHA preserved"
+  ],
+  "result": {
+    "rows": [
+      {
+        "mixed": 0,
+        "rep": 0,
+        "type": 3,
+        "read_ns": 52.523999996483326,
+        "construct_ns": 2377.5666654109955
+      },
+      {
+        "mixed": 0,
+        "rep": 0,
+        "type": 0,
+        "read_ns": 53.022124990820885,
+        "construct_ns": 3802.916665871938
+      },
+      {
+        "mixed": 0,
+        "rep": 0,
+        "type": 1,
+        "read_ns": 53.00712499767542,
+        "construct_ns": 2690.291665494442
+      },
+      {
+        "mixed": 0,
+        "rep": 0,
+        "type": 2,
+        "read_ns": 67.41687498986721,
+        "construct_ns": 352.82499839862186
+      },
+      {
+        "mixed": 0,
+        "rep": 1,
+        "type": 2,
+        "read_ns": 66.86174999922514,
+        "construct_ns": 304.29166555404663
+      },
+      {
+        "mixed": 0,
+        "rep": 1,
+        "type": 1,
+        "read_ns": 52.504124976694584,
+        "construct_ns": 2623.44166636467
+      },
+      {
+        "mixed": 0,
+        "rep": 1,
+        "type": 0,
+        "read_ns": 53.27987499535084,
+        "construct_ns": 3794.883333146572
+      },
+      {
+        "mixed": 0,
+        "rep": 1,
+        "type": 3,
+        "read_ns": 52.46812500059605,
+        "construct_ns": 2412.2666666905084
+      },
+      {
+        "mixed": 0,
+        "rep": 2,
+        "type": 3,
+        "read_ns": 53.21949999779463,
+        "construct_ns": 2279.708333313465
+      },
+      {
+        "mixed": 0,
+        "rep": 2,
+        "type": 0,
+        "read_ns": 51.5531250089407,
+        "construct_ns": 3565.3083324432373
+      },
+      {
+        "mixed": 0,
+        "rep": 2,
+        "type": 1,
+        "read_ns": 51.34050000458956,
+        "construct_ns": 2579.025000333786
+      },
+      {
+        "mixed": 0,
+        "rep": 2,
+        "type": 2,
+        "read_ns": 67.18912500888109,
+        "construct_ns": 285.13333449761075
+      },
+      {
+        "mixed": 0,
+        "rep": 3,
+        "type": 2,
+        "read_ns": 66.38550002127886,
+        "construct_ns": 286.4333341519038
+      },
+      {
+        "mixed": 0,
+        "rep": 3,
+        "type": 1,
+        "read_ns": 52.644749991595745,
+        "construct_ns": 2587.7416655421257
+      },
+      {
+        "mixed": 0,
+        "rep": 3,
+        "type": 0,
+        "read_ns": 52.667249999940395,
+        "construct_ns": 3583.2333316405616
+      },
+      {
+        "mixed": 0,
+        "rep": 3,
+        "type": 3,
+        "read_ns": 52.17887498438358,
+        "construct_ns": 2290.8083324631057
+      },
+      {
+        "mixed": 1,
+        "rep": 0,
+        "type": 3,
+        "read_ns": 75.00225000083447,
+        "construct_ns": 2294.224999845028
+      },
+      {
+        "mixed": 1,
+        "rep": 0,
+        "type": 0,
+        "read_ns": 75.96762496978045,
+        "construct_ns": 3598.849999407927
+      },
+      {
+        "mixed": 1,
+        "rep": 0,
+        "type": 1,
+        "read_ns": 73.33662498742342,
+        "construct_ns": 2640.416666865349
+      },
+      {
+        "mixed": 1,
+        "rep": 0,
+        "type": 2,
+        "read_ns": 94.10862501710653,
+        "construct_ns": 297.0583314696948
+      },
+      {
+        "mixed": 1,
+        "rep": 1,
+        "type": 2,
+        "read_ns": 93.77837501466274,
+        "construct_ns": 299.0666677554448
+      },
+      {
+        "mixed": 1,
+        "rep": 1,
+        "type": 1,
+        "read_ns": 80.22012501955032,
+        "construct_ns": 2798.308332761129
+      },
+      {
+        "mixed": 1,
+        "rep": 1,
+        "type": 0,
+        "read_ns": 78.96712500602007,
+        "construct_ns": 3608.5083335638046
+      },
+      {
+        "mixed": 1,
+        "rep": 1,
+        "type": 3,
+        "read_ns": 74.61649999022484,
+        "construct_ns": 2349.783331155777
+      },
+      {
+        "mixed": 1,
+        "rep": 2,
+        "type": 3,
+        "read_ns": 74.65150002390146,
+        "construct_ns": 2258.8499983151755
+      },
+      {
+        "mixed": 1,
+        "rep": 2,
+        "type": 0,
+        "read_ns": 74.94074996560812,
+        "construct_ns": 3615.116668244203
+      },
+      {
+        "mixed": 1,
+        "rep": 2,
+        "type": 1,
+        "read_ns": 90.72625000029802,
+        "construct_ns": 3428.825000921885
+      },
+      {
+        "mixed": 1,
+        "rep": 2,
+        "type": 2,
+        "read_ns": 97.75012500584126,
+        "construct_ns": 298.37500055631
+      },
+      {
+        "mixed": 1,
+        "rep": 3,
+        "type": 2,
+        "read_ns": 94.64900001883507,
+        "construct_ns": 370.0999990105629
+      },
+      {
+        "mixed": 1,
+        "rep": 3,
+        "type": 1,
+        "read_ns": 83.19187499582767,
+        "construct_ns": 2841.816666225592
+      },
+      {
+        "mixed": 1,
+        "rep": 3,
+        "type": 0,
+        "read_ns": 76.17424998432398,
+        "construct_ns": 3830.27500162522
+      },
+      {
+        "mixed": 1,
+        "rep": 3,
+        "type": 3,
+        "read_ns": 77.81687501817942,
+        "construct_ns": 2440.1083340247474
+      }
+    ],
+    "sink": 540160000,
+    "checks": true
+  },
+  "stderr": "type=0 fast_array_delta=0 properties_delta=41\ntype=1 fast_array_delta=0 properties_delta=42\ntype=2 fast_array_delta=0 properties_delta=0\ncustom made=96010 finalized=96010 mark_calls=2\n"
+}

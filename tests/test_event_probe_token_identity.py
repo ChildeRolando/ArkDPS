@@ -36,6 +36,8 @@ def test_derived_iron_pincer_callbacks_credit_their_own_white_iron_host_once(cal
     packet = callback_packets
     assert set(packet['platforms']) == {'mumu', 'native_pc'}
     for platform, case in packet['platforms'].items():
+        assert case['owned_lineage_classes'] == 18
+        assert {'class_cycle', 'incomplete_ancestry', 'missing_data'} <= packet['rejected'][platform].keys()
         before, mark = case['before'], case['mark']
         baseline, batch = case['baseline'], case['batch']
         identities = case['identities']

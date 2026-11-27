@@ -1,0 +1,27 @@
+{
+  "base": "d107f11e883adbc6d4209c8be9c3279a4ef1c6ef",
+  "tests": "112 passed in 4.79s; PYTEST_DISABLE_PLUGIN_AUTOLOAD=1, --assert=plain",
+  "mutations": {
+    "fixed_equality": {
+      "returncode": 1,
+      "failure": "node:assert:152\n  throw new AssertionError(obj);\n  ^\n\nAssertionError [ERR_ASSERTION]: Missing expected exception.\n    at Object.<anonymous> (E:\\\u93c2\u56e8\u3002\\ChatGPT\\ArkDPS\\arkdps-hp-clock-close-reuse\\tests\\event_probe_hp_observation_fixture.js:31:9)\n    at Module._compile (node:internal/modules/cjs/loader:1830:14)\n    at Object..js (node:internal/modules/cjs/loader:1961:10)\n    at Module.load (node:internal/modules/cjs/loader:1553:32)\n    at Module._load (node:internal/modules/cjs/loader:1355:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.require (node:internal/modules/cjs/loader:1576:12)\n    at require (node:internal/modules/helpers:153:16)\n    at [eval]:1:425\n    at runScriptInThisContext (node:internal/vm:219:10) {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: undefined,\n  expected: /unstable callback clock/,\n  operator: 'throws',\n  diff: 'simple'\n}\n\nNode.js v24.15.0\n"
+    },
+    "same_item_token": {
+      "returncode": 1,
+      "failure": "node:internal/assert/utils:77\n    throw err;\n    ^\n\nAssertionError [ERR_ASSERTION]: crossRecordClockRead\n    at Object.<anonymous> (E:\\\u93c2\u56e8\u3002\\ChatGPT\\ArkDPS\\arkdps-hp-clock-close-reuse\\tests\\native_pc_captured_publication_fixture.js:213:164)\n    at Module._compile (node:internal/modules/cjs/loader:1830:14)\n    at Object..js (node:internal/modules/cjs/loader:1961:10)\n    at Module.load (node:internal/modules/cjs/loader:1553:32)\n    at Module._load (node:internal/modules/cjs/loader:1355:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.require (node:internal/modules/cjs/loader:1576:12)\n    at require (node:internal/modules/helpers:153:16)\n    at [eval]:1:387\n    at runScriptInThisContext (node:internal/vm:219:10) {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: false,\n  expected: true,\n  operator: '==',\n  diff: 'simple'\n}\n\nNode.js v24.15.0\n"
+    }
+  },
+  "files_sha256": {
+    "event_probe_native_pc.js": "a2f54fdd2b17dec417a33a6a5f6ae0fda7928b957bef95374eed21d38b2b0f82",
+    "event_probe_runtime.js": "ddcc0bf4ef69a88201ad4a403d2b9b448dc497bbfbd73cb81d40090641b3a385",
+    "native_pc/native_event_runtime/bridge.js": "9c273bc6f70d69447655eb6b9c7dd3f22143d1cb861d03af42a9f499bb8001f1"
+  },
+  "review": {
+    "evidence": "full 12-byte clock_close field already captured with unique/expected-ID/guard; extra codec reads no new memory",
+    "owner": "same shared validatedClockValues and applyHpEntry/Leave; no amount/state rules added",
+    "lease": "private sample WeakMap uses exact bridge-owned immutable per-item ModeRecord identity, plus sample frame/time; no publicRecord creation or claimed manual ticket read",
+    "fallback": "old IO three tuple and missing mode helper preserve original captureClockFixed; cold/mark/nondeferred stamping before cache registration unchanged",
+    "freshness": "scope graph all independent clocks/roots/phase/state guards still execute before tail reuse",
+    "coverage": "independent closing fixed mismatch/allowRetry; old and new provider tuple; same-item reuse; old IO; absent mode helper; cross-record fallback; changed raw scope close; no publicRecord remember"
+  }
+}

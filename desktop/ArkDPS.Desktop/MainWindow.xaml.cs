@@ -371,6 +371,13 @@ public partial class MainWindow : Window
     }
     internal void ApplyState(JsonElement state)
     {
+        PerformanceTimings.Shared.Enabled=state.Get("layout").Bool("performance_diagnostics");
+        long measured=PerformanceTimings.Shared.Begin();
+        try { ApplyStateCore(state); }
+        finally { PerformanceTimings.Shared.End(PerformanceTimings.Phase.ApplyState,measured); }
+    }
+    private void ApplyStateCore(JsonElement state)
+    {
         if(state.Number("protocol")!=BridgeClient.Version) throw new IOException("不支持的统计消息版本");
         var lastState=State;
         try {ApplySnapshot(state);}
@@ -390,6 +397,7 @@ public partial class MainWindow : Window
         UpdateGameFpsStatus(state);
         var layout=state.Get("layout");string theme=Theme.Normalize(layout.Text("theme"));
         UpdateDebugMode(layout.Bool("debug_mode"));
+        PerformanceTimingSetting.IsChecked=layout.Bool("performance_diagnostics");
         string units = layout.Text("number_units") == "chinese" ? "chinese" : "western";
         bool unitsChanged = Json.NumberUnits != units;
         Json.NumberUnits = units;
@@ -1561,6 +1569,28 @@ public partial class MainWindow : Window
     {
         DebugModeSetting.IsChecked = enabled;
         DebugModeSetting.Content = enabled ? "调试模式已开启 · 点击关闭" : "开启调试模式";
+    }
+    private async void ChangePerformanceTiming(object sender,RoutedEventArgs e)
+    {
+        bool enabled=PerformanceTimingSetting.IsChecked==true;
+        PerformanceTimingSetting.IsEnabled=false;
+        try { await Command("performance_diagnostics",new() { ["enabled"]=enabled }); }
+        finally {
+            PerformanceTimingSetting.IsChecked=State.Get("layout").Bool("performance_diagnostics");
+            PerformanceTimingSetting.IsEnabled=true;
+        }
+    }
+    protected override Size MeasureOverride(Size availableSize)
+    {
+        long started=PerformanceTimings.Shared.Begin();
+        try { return base.MeasureOverride(availableSize); }
+        finally { PerformanceTimings.Shared.End(PerformanceTimings.Phase.Measure,started); }
+    }
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        long started=PerformanceTimings.Shared.Begin();
+        try { return base.ArrangeOverride(finalSize); }
+        finally { PerformanceTimings.Shared.End(PerformanceTimings.Phase.Arrange,started); }
     }
     private async void ChangeDebugMode(object sender,RoutedEventArgs e)
     {
