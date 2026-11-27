@@ -58,6 +58,58 @@ def start_pending(case):
     assert case.fixture.commits == [0, 1]
 
 
+@pytest.mark.parametrize('empty_exit', [False, True], ids=['first_hit', 'empty_exit'])
+def test_cross_frame_pending_anchor_keeps_its_opening_mark_on_bootstrap(monkeypatch, empty_exit):
+    case = pending_case(monkeypatch)
+    source = case.fixture
+    case.advance(1.5, phase=5)
+    with monkeypatch.context() as sampling:
+        mark = source.observer.mark
+
+        def opening_mark():
+            before = mark()
+
+            def closing_mark():
+                case.advance(1.625)
+                sampling.setattr(source.observer, 'mark', mark)
+                return mark()
+
+            sampling.setattr(source.observer, 'mark', closing_mark)
+            return before
+
+        sampling.setattr(source.observer, 'mark', opening_mark)
+        assert source.poll().kind == 'preparing'
+    anchor = source.runtime.feed._pending_scope['anchor']
+    assert anchor['before']['game_time'] == anchor['sample']['autochess_snapshot_anchor']['game_time'] == 1.5
+    assert anchor['after']['game_time'] == anchor['sample']['game_time'] == 1.625
+    assert source.commits == [0, 1]
+
+    if empty_exit:
+        case.advance(2, phase=7)
+        ending = source.poll()
+        assert 'pending_scope_exit' in ending.events
+        archive = source.runtime.sessions.pop_archives()[-1]
+        assert 'outside the event window' not in (archive['event_error'] or '')
+        case.advance(2.5, phase=4, next_round=True)
+        source.poll()
+    case.advance(3, amount=75)
+    first = source.poll()
+    case.advance(3.5, amount=25)
+    second = source.poll()
+    assert source.runtime.sessions.event_status == 'recording'
+    assert source.runtime.feed._pending_scope is None
+    assert source.commits[-2:] == [2, 3] and source.queue == []
+    first_hit, = first.events['drain']['events']
+    second_hit, = second.events['drain']['events']
+    assert [(hit['sequence'], hit['amount']) for hit in (first_hit, second_hit)] == [(2, 75), (3, 25)]
+    multiplayer = source.runtime.sessions.multiplayer.result()
+    assert multiplayer['players'][2]['observed_damage'] == 100
+    replay = BattleSessions(second.feed)
+    for record in case.records:
+        assert replay.consume(observation_from_json(asdict(record)))
+    assert replay.multiplayer.result() == multiplayer
+
+
 def sample_empty_window_with_callback(case, monkeypatch):
     source = case.fixture
     case.advance(1.75)

@@ -1845,8 +1845,12 @@ class BattleSessions:
                 self.snapshot_intervals = []
                 self._snapshot_open = False
                 if bootstrap is not None:
+                    # A pending baseline keeps the original independent read
+                    # window, even when its published clock is the closing mark.
+                    opening_mark = (observation.events['pending_scope_start']['anchor']['before']
+                                    if pending_bootstrap is not None else zero_mark)
                     zero_observation = replace(observation, sample=zero_sample, roster=zero_roster,
-                        events=dict(before=zero_mark, after=zero_mark,
+                        events=dict(before=opening_mark, after=zero_mark,
                                     sequence=zero_mark['sequence'], drain=zero_drain))
                     self._events(zero_observation)
                     adapter.update(observation.sample, observation.roster)
