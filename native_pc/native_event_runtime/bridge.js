@@ -155,15 +155,16 @@ const __arkdpsBatchAuthority=(()=>{
   run(advance,controller,header,dispatch){
    if(typeof dispatch!=='function'||typeof advance!=='function'||!(header instanceof ArrayBuffer)||header.byteLength!==176)throw Error('invalid bounded replay entry');
    const trusted=controlledFinish&&typeof nativeAdvance==='function'&&advance===nativeAdvance&&dispatch===dispatchOwner&&__arkdpsSealedProvider()!==null;
-   const view=new DataView(header);let answer,count=0;
+   // One private permit/state per bounded run; neither escapes to callbacks.
+   // Every successful advance rebinds all nine arguments before consumption.
+   const view=new DataView(header),token=Object.freeze({}),state={item:null,view:null,record:null};let answer,count=0;
    for(;;){
     const item=advance(controller,answer);answer=undefined;
     if(item===null)return count;
     if(count>=32||!Array.isArray(item)||item.length!==9)throw Error('invalid bounded replay item');
     const controlled=trusted&&item[0]===header&&typeof item[1]==='function'&&typeof item[3]==='bigint'&&item[4]===1&&item[5]===undefined&&item[6]===undefined&&item[7]!==null&&typeof item[7]==='object';
-    let token,state;
-    if(controlled){token=Object.freeze({});state={item,view,record:null};pending.set(token,state);}
-    try{answer=dispatch(item[0],item[1],item[2],item[3],item[4],item[5],item[6],item[7],item[8],view,token);++count;}
+    if(controlled){state.item=item;state.view=view;pending.set(token,state);}
+    try{answer=dispatch(item[0],item[1],item[2],item[3],item[4],item[5],item[6],item[7],item[8],view,controlled?token:undefined);++count;}
     finally{if(controlled){pending.delete(token);active.delete(state);state.item=null;state.view=null;state.record=null;}}
    }
   }

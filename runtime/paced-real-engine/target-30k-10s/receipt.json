@@ -1,0 +1,262 @@
+{
+  "scope": "paced owned producer / actual engine capture-queue-prepare-finish-drain / shared production JS",
+  "excluded": [
+    "game",
+    "detours",
+    "assembly ingress",
+    "IPC",
+    "FPS",
+    "per-fact p99 publication acceptance"
+  ],
+  "build_identity": {
+    "source_sha256": {
+      "native_pc\\native_event_runtime\\capture_queue.h": "03b7bd11dfadd15976065ee109c70d26d71d9d8ee99811e488cd08c56f601fb2",
+      "native_pc\\native_event_runtime\\capture_spill_pool.h": "be99e87c159fe7dcd382b8f6fa020e614687e3b56901f47a110d8bada3b177e4",
+      "native_pc\\native_event_runtime\\engine.h": "faf029c9e14b76075678dc4ad558e8d2a7489f1e3ca901ee69d717bdb5ba056a",
+      "native_pc\\native_event_runtime\\engine_capture_config.h": "6813bc6d7bac66ac9599399cb87355e525323bb9ca91849695a5a32fa399cd34",
+      "native_pc\\native_event_runtime\\engine_capture_lane.h": "d0f68f0733c3456cf9ca7090c5ffc43c9fa959fdf2283fd4e6e7642f1b0ba9a3",
+      "native_pc\\native_event_runtime\\engine_capture_pipeline.h": "fedc71be3a1ed10fa818d4e9f4d01dcf14c5c8effe773c49a586b9e939e9b891",
+      "native_pc\\native_event_runtime\\engine_capture_plan.h": "11a50d55860cb6b2e166aa22cb8f9c05ec62a28da292c079967bcd3c596f76ef",
+      "native_pc\\native_event_runtime\\engine_capture_timing.h": "7bf5360fa15ea46c148aaf94dcf3058ee7287ca802f99480e872bd4f51fc73a1",
+      "native_pc\\native_event_runtime\\engine_terminal_fence.h": "a20ea172703f0483a73d065d417f40684e6ad809a2e4e4d07565317fbc8296d3",
+      "native_pc\\native_event_runtime\\engine_worker.h": "648cd3b9c3071b7211ad7a30f2f5867eefc2223338603c8fcd01a6f1b468aedd",
+      "native_pc\\native_event_runtime\\native_capture.h": "d787bda15d26afea7ef605def24fbc6bcad0e2c04391fbaccf65570cd0d9db2a",
+      "native_pc\\native_event_runtime\\owned_replay_js.h": "d595b13983bd1c2b0443221dadf21e1513b9679b548687b6ef5af98237e27e4d",
+      "native_pc\\native_event_runtime\\owned_replay_view.h": "13f993309f0d1c3890d69683a18ea6537c5142f256703ce26fa23a73b1b5df59",
+      "native_pc\\native_event_runtime\\owned_role_index.h": "507ed4e8fd1fb8d5eaa4ba8ac9bb7143405df7240f6eda577e6fc8081ea49fd4",
+      "native_pc\\native_event_runtime\\engine.cpp": "7a47893bb822e355fe0fd83aaec3011bacc4725cf9ffe9994b9a540695e0bcbd",
+      "native_pc\\native_event_runtime\\native_capture.cpp": "c714fb232d5a3661ac6a5b587d31c0d2870f7fb39fe540afff92167a3b179b2a",
+      "native_pc\\native_event_runtime\\bridge.js": "cece7a461e65631168d051d27144aed79c4ea818b6c791bf373753e01117b80a",
+      "tests\\owned_bounded_replay_test.cpp": "8ebc570137d4df592ef6f208329f1dae80da84a9a20f519b088f622b4fdf568d",
+      "tests\\owned_hp_observation_test.cpp": "cbfb051e5b4d349f017c1fabc5bd2450302317167bed0d5484bf52f551be77bd",
+      "tests\\owned_hp_opaque_io_test.cpp": "3c58c63a946905bbc33050aa7cbdeea6a61f41ad74a8dc92919096f4b07da92a",
+      "tests\\owned_read_plan_test.cpp": "21a713a9b21e1067bc905a9045d6d272b87591099709453c340cdedd14d124b5",
+      "tests\\owned_replay_view_test.cpp": "d6eb2743bf1b08d5e8ddda84642d9b1b2d57ace5c7bddf061bd7663fee92b289",
+      "tests\\production_hp_actual_engine.cpp": "b41d87b66cc7aaef00a70cce50c29d3178baa817a4717da651b5c3077fc76a34",
+      "tests\\production_hp_paced_engine.h": "d1d7f7daebf00d356e4e4e4a6c8239f20c9acbc3ae66cf14085baf4d1beff3b6"
+    },
+    "command": [
+      "C:/msys64/ucrt64/bin/g++.exe",
+      "-std=c++17",
+      "-static",
+      "-O2",
+      "-pthread",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-Wno-unused-function",
+      "-I",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime",
+      "-isystem",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\paced-real-engine\\build\\dependencies",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\tests\\production_hp_actual_engine.cpp",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\native_pc\\native_event_runtime\\native_capture.cpp",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\paced-real-engine\\build\\dependencies\\quickjs.o",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\paced-real-engine\\build\\dependencies\\dtoa.o",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\paced-real-engine\\build\\dependencies\\libregexp.o",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\paced-real-engine\\build\\dependencies\\libunicode.o",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\paced-real-engine\\build\\dependencies\\cutils.o",
+      "-lpsapi",
+      "-o",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-async-capture-performance\\runtime\\paced-real-engine\\build\\owned-batch-test.exe"
+    ],
+    "executed": false,
+    "fixture": "production-hp",
+    "optimization": "O2",
+    "binary_sha256": "d744345a9c1bd22271843a286e789c7dd16ae7a873a78d323c2ce2fde73bafdc",
+    "dependency_sha256": {
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-0.o": "9b57de662910a8500a96eb201fa51a9b5a22881b5f44083bfcf6295e36df7a61",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-1.o": "d42a47f5f2a9d8b619496753faec5691c137a77d6726ba7b998072d28ead71a6",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-2.o": "13058fb02edd05f161d2e437a21a4d72dcc6ee194b56488ac59f6371fbc1abdd",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-3.o": "2a234ea2e284edb4f3c36bdd936bcb124df699321199ff329527df8b5b3c31af",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\object-4.o": "3eb1e8db3d287e212ce53de2aaad29c5200c7b18c5941b2eaacbbec1328bcbd3",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\quickjs-headers\\quickjs.h": "ad3455cafab56a036e5b94c8e6915e653a09f48e32e72cb66f0d0775047a7bb5",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-native-async-engine\\runtime\\async-engine-build\\stage\\json.hpp": "9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6",
+      "E:\\文档\\ChatGPT\\ArkDPS\\arkdps-controlled-batch-finish\\runtime\\controlled-finish\\dependencies\\MinHook.h": "62dff05e63155c6bf8135c36a0d79dedbdcaaede9da26fe38daf0bea34323e38"
+    }
+  },
+  "bundle_sha256": "62d57ef8a20863bcf0bb561f5a62d7a4eaf6c2a71c7fb5ec26b0feea3f8ba6b2",
+  "event_sha256": "6620a718c2ebff1ba78de8784be7ca4e6d1be0d2495539b1ec3c392154812c43",
+  "event_count": 8,
+  "supplied_rate": 29688.38000756792,
+  "requested_target_pass": false,
+  "complete": false,
+  "result": {
+    "kind": "paced_actual_engine_production_hp_self_owned",
+    "count": 300000,
+    "scope_fields": 64,
+    "publication_fields": 1604,
+    "report": {
+      "active_after": 0,
+      "batch_calls": 714,
+      "batch_finalized": 13787,
+      "batch_issued": 13788,
+      "capture_read_bytes": 38767222,
+      "capture_reads": 2598546,
+      "catchup_ms": -1,
+      "closed_ticket": 13792,
+      "elapsed_ms": 879.6976,
+      "failure_code": 4,
+      "fatal": "native capture failed: code=4",
+      "last_hp_raw": "539894568976384",
+      "max_pacing_lateness_ns": 14929034,
+      "maximum_raw_age_ticks": 6269094,
+      "native_hp_io_issued": 13794,
+      "paced": true,
+      "pause_ms": 0,
+      "pause_observed": false,
+      "payload_bytes": 186187750,
+      "peak_bytes": 136309197,
+      "peak_lag_edges": 37615,
+      "peak_records": 37613,
+      "pin_mismatches": 0,
+      "processed_ticket": 13793,
+      "produce_ms": 865.7596,
+      "produced_setters": 25703,
+      "producer_error": "queue publish failed",
+      "publication_changes": 7,
+      "published_sequence": 8,
+      "published_ticket": 0,
+      "qpc_frequency": 10000000,
+      "raw_produced_edges": 51407,
+      "raw_reserved": 51408,
+      "requested_rate": 30000,
+      "requested_setters": 300000,
+      "samples": [
+        {
+          "closed": 0,
+          "ms": 0.0565,
+          "processed": 0,
+          "published": 0,
+          "reserved": 0
+        },
+        {
+          "closed": 932,
+          "ms": 51.659,
+          "processed": 932,
+          "published": 0,
+          "reserved": 2714
+        },
+        {
+          "closed": 1754,
+          "ms": 102.6071,
+          "processed": 1754,
+          "published": 0,
+          "reserved": 6128
+        },
+        {
+          "closed": 2558,
+          "ms": 154.5865,
+          "processed": 2558,
+          "published": 2000,
+          "reserved": 8890
+        },
+        {
+          "closed": 3324,
+          "ms": 205.2104,
+          "processed": 3324,
+          "published": 2000,
+          "reserved": 11740
+        },
+        {
+          "closed": 4188,
+          "ms": 256.5403,
+          "processed": 4188,
+          "published": 4000,
+          "reserved": 15460
+        },
+        {
+          "closed": 4962,
+          "ms": 307.1655,
+          "processed": 4963,
+          "published": 4000,
+          "reserved": 18254
+        },
+        {
+          "closed": 5868,
+          "ms": 357.9622,
+          "processed": 5868,
+          "published": 4000,
+          "reserved": 21106
+        },
+        {
+          "closed": 6690,
+          "ms": 408.1624,
+          "processed": 6690,
+          "published": 6000,
+          "reserved": 23850
+        },
+        {
+          "closed": 7446,
+          "ms": 460.0029,
+          "processed": 7446,
+          "published": 6000,
+          "reserved": 27648
+        },
+        {
+          "closed": 8258,
+          "ms": 511.0125,
+          "processed": 8259,
+          "published": 8000,
+          "reserved": 30462
+        },
+        {
+          "closed": 8978,
+          "ms": 562.0468,
+          "processed": 8978,
+          "published": 8000,
+          "reserved": 33344
+        },
+        {
+          "closed": 9912,
+          "ms": 613.183,
+          "processed": 9913,
+          "published": 8000,
+          "reserved": 36134
+        },
+        {
+          "closed": 10646,
+          "ms": 669.7355,
+          "processed": 10647,
+          "published": 10000,
+          "reserved": 39826
+        },
+        {
+          "closed": 11534,
+          "ms": 720.6158,
+          "processed": 11534,
+          "published": 10000,
+          "reserved": 42728
+        },
+        {
+          "closed": 12344,
+          "ms": 772.0173,
+          "processed": 12345,
+          "published": 12000,
+          "reserved": 46406
+        },
+        {
+          "closed": 13040,
+          "ms": 822.0276,
+          "processed": 13040,
+          "published": 12000,
+          "reserved": 49198
+        }
+      ],
+      "single_replayed": 6
+    },
+    "source_active": 0,
+    "source_error": null,
+    "unknown": false,
+    "dispatch_counters": {
+      "graph_format0": 6,
+      "graph_format1": 6903,
+      "args_proxy": 0,
+      "direct_entry": 6897,
+      "direct_leave": 6891,
+      "hp_adopt_requests": 0,
+      "hp_ordinary_requests": 6,
+      "fallback_reasons": {}
+    }
+  }
+}

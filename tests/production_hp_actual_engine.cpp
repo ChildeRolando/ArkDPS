@@ -14,7 +14,7 @@ extern "C" MH_STATUS WINAPI MH_QueueEnableHook(LPVOID){return MH_OK;}
 extern "C" MH_STATUS WINAPI MH_QueueDisableHook(LPVOID){return MH_OK;}
 extern "C" MH_STATUS WINAPI MH_ApplyQueued(){return MH_OK;}
 extern "C" const char* WINAPI MH_StatusToString(MH_STATUS){return "unused owned stub";}
-static bool fixture_configured=false,legacy_boundary=false;
+static bool fixture_configured=false,legacy_boundary=false,legacy_hp_io=false;
 static JSValue actual_configure(JSContext* c,JSValueConst,int n,JSValueConst* args){return guarded(c,[&]{
  if(n!=1)throw std::runtime_error("actual configure arity");
  const auto j=J::parse(string(c,args[0]));
@@ -40,9 +40,11 @@ static JSValue actual_callbacks(JSContext* c,JSValueConst,int n,JSValueConst* ar
  r.prefix_projection=JS_DupValue(c,args[1]);r.graph_retire=JS_DupValue(c,args[2]);r.initialized=true;
  return JS_UNDEFINED;
 });}
+#include "production_hp_paced_engine.h"
 static JSValue actual_run(JSContext* c,JSValueConst,int n,JSValueConst* args){return guarded(c,[&]{
  if(n!=1||!fixture_configured)throw std::runtime_error("actual run setup");
  const auto options=J::parse(string(c,args[0]));
+ if(options.contains("rate"))return actual_paced_run(c,options);
  const unsigned count=options.at("count").get<unsigned>(),pub_every=options.at("pub_every").get<unsigned>();
  const bool batch=options.at("batch").get<bool>();
  const auto branch=options.at("branch").get<std::string>();
@@ -71,17 +73,16 @@ static JSValue actual_run(JSContext* c,JSValueConst,int n,JSValueConst* args){re
  if(!r.fatal.empty())throw std::runtime_error(r.fatal);
  std::uint64_t hp=0;read_memory(nullptr,input.args[0]+0x40,&hp,8);std::uint64_t maxhp=0;auto* hpfield=region(input.args[0]+0xb0,8);
  if(hpfield){std::uintptr_t attrs=0,cache=0;read_memory(nullptr,input.args[0]+0xb0,&attrs,8);read_memory(nullptr,attrs+0x68,&cache,8);read_memory(nullptr,cache+0x28,&maxhp,8);}
- J result{{"legacy_boundary",legacy_boundary},{"replay_lease_calls",arkdps::owned_js::binding().lease_calls},{"replay_status_calls",arkdps::owned_js::binding().status_calls},{"replay_health_calls",r.replay_health_calls},{"controlled_finish_checks",r.controlled_finish_checks},{"failure_code",r.lanes->failure.load()},{"processed_ticket",r.processed_ticket},{"closed_ticket",r.closed_ticket},{"published_ticket",r.published_ticket},{"published_sequence",r.published_sequence},{"raw_entry_count",count},{"raw_leave_count",count},{"batch_calls",r.batch_calls},{"batch_issued",r.batch_issued},{"batch_finalized",r.batch_finalized},{"batch_barriers",r.batch_barriers},{"single_replayed",r.single_replayed},{"maximum_batch_edges",r.maximum_batch_edges},{"capture_reads",reads},{"capture_read_bytes",read_bytes},{"payload_bytes",payload_bytes},{"payload_max",payload_max},{"last_hp_raw",std::to_string(hp)},{"max_hp_raw",std::to_string(maxhp)},{"produce_ms",std::chrono::duration<double,std::milli>(produced-produce_start).count()},{"consume_ms",std::chrono::duration<double,std::milli>(ended-produced).count()}};
+ J result{{"legacy_boundary",legacy_boundary},{"legacy_hp_io",legacy_hp_io},{"native_hp_io_issued",arkdps::owned_js::binding().hp_opaque_issued},{"replay_lease_calls",arkdps::owned_js::binding().lease_calls},{"replay_status_calls",arkdps::owned_js::binding().status_calls},{"replay_health_calls",r.replay_health_calls},{"controlled_finish_checks",r.controlled_finish_checks},{"failure_code",r.lanes->failure.load()},{"processed_ticket",r.processed_ticket},{"closed_ticket",r.closed_ticket},{"published_ticket",r.published_ticket},{"published_sequence",r.published_sequence},{"raw_entry_count",count},{"raw_leave_count",count},{"batch_calls",r.batch_calls},{"batch_issued",r.batch_issued},{"batch_finalized",r.batch_finalized},{"batch_barriers",r.batch_barriers},{"single_replayed",r.single_replayed},{"maximum_batch_edges",r.maximum_batch_edges},{"capture_reads",reads},{"capture_read_bytes",read_bytes},{"payload_bytes",payload_bytes},{"payload_max",payload_max},{"last_hp_raw",std::to_string(hp)},{"max_hp_raw",std::to_string(maxhp)},{"produce_ms",std::chrono::duration<double,std::milli>(produced-produce_start).count()},{"consume_ms",std::chrono::duration<double,std::milli>(ended-produced).count()}};
  return JS_NewString(c,result.dump().c_str());
 });}
 int main(int argc,char** argv){
  (void)sealed_owner;
- if(argc<2||argc>3)return 2;
- legacy_boundary=argc==3&&std::string(argv[2])=="--legacy-boundary";
- if(argc==3&&!legacy_boundary)return 2;
+ if(argc<2||argc>4)return 2;
+ for(int i=2;i<argc;++i){if(std::string(argv[i])=="--legacy-boundary")legacy_boundary=true;else if(std::string(argv[i])=="--legacy-hp-io")legacy_hp_io=true;else return 2;}
  auto& r=state();r.runtime=JS_NewRuntime();r.context=JS_NewContext(r.runtime);auto* c=r.context;JS_SetMemoryLimit(r.runtime,512*1024*1024);
  CaptureLanes::Config capacity;capacity.lane_queue={2048,2*1024*1024};capacity.spill={32768,32*1024*1024};r.lanes=std::make_unique<CaptureLanes>(capacity);
- arkdps::owned_js::install(c,[]()noexcept{state().lanes->poison(LaneFault::replay_structure);});auto g=JS_GetGlobalObject(c);
+ arkdps::owned_js::install(c,[]()noexcept{state().lanes->poison(LaneFault::replay_structure);},true,!legacy_hp_io);auto g=JS_GetGlobalObject(c);
  for(auto pair:std::array<std::pair<const char*,JSCFunction*>,4>{{{"print",print},{"__monotonicMs",timer},{"__ownedPut",put},{"__sealReadonlyPlans",seal_plans}}})function(c,g,pair.first,pair.second,1);
  function(c,g,"__ownedConfigure",actual_configure,1);function(c,g,"__ownedGraphPublish",actual_graph_publish,2);function(c,g,"__ownedSetCallbacks",actual_callbacks,3);function(c,g,"__ownedEngineRun",actual_run,1);function(c,g,"__nativeReplayHealthy",js_replay_healthy,0);function(c,g,"__nativeActive",js_active,0);function(c,g,"__pid",js_pid,0);install_controlled_advance(c,g);r.batch_advance=JS_GetPropertyStr(c,g,"__nativeBoundedReplayAdvance");if(legacy_boundary)JS_SetPropertyStr(c,g,"__nativeBoundedReplayAdvance",JS_UNDEFINED);JS_FreeValue(c,g);
  std::ifstream stream(argv[1]);std::string source((std::istreambuf_iterator<char>(stream)),{});auto answer=JS_Eval(c,source.data(),source.size(),"actual-engine-production-hp.js",JS_EVAL_TYPE_GLOBAL);

@@ -4,7 +4,7 @@ import argparse,json
 from production_hp_quickjs_bundle import bundle
 ROOT=Path(__file__).resolve().parents[1]
 
-def engine_bundle(count=500,batch=True,branch='heal_coalesced',source_root=ROOT,pub_every=1000,bridge_root=None):
+def engine_bundle(count=500,batch=True,branch='heal_coalesced',source_root=ROOT,pub_every=1000,bridge_root=None,paced=None):
     text=bundle(count,True,source_root=source_root,bridge_root=bridge_root or source_root,full_scope=True,pub_every=pub_every)
     marker='const results=[];'
     assert text.count(marker)==1
@@ -20,7 +20,15 @@ def engine_bundle(count=500,batch=True,branch='heal_coalesced',source_root=ROOT,
     assert text.count(old)==1
     text=text.replace(old,'nativeCaptureScopeGraph(nativeAutoCache,nativeAutoStage,graphClock,++nativeCaptureScopeRevision)')
     text=text.replace('nativeCaptureScopes.set(101,graphScope)','nativeCaptureScopes.set(graphScope.revision,graphScope)')
-    options=json.dumps(json.dumps({'count':count,'batch':batch,'branch':branch,'pub_every':pub_every}))
+    options=json.dumps(json.dumps({'count':count,'batch':batch,'branch':branch,'pub_every':pub_every,**(paced or {})}))
+    if paced is not None:
+        return text+r'''
+__ownedSetCallbacks(setter,sourcePrefix,f.vm.runInContext('__arkdpsRetireCaptureGraphs',f.context));
+f.write(enemy.add(0x40),fp(100000));
+const report=JSON.parse(__ownedEngineRun(OPTIONS));
+const outcome=f.vm.runInContext('flushCoalescedEnemyHp();({active,error:fatal,enemyStateUnknown,sequence,events:queue.filter(e=>e.kind==="enemy_hp")})',f.context);
+print(JSON.stringify({kind:'paced_actual_engine_production_hp_self_owned',count:COUNT,scope_fields:scope.fields.length,publication_fields:publication.chunks.reduce((n,c)=>n+c.fields.length,0),report,source_active:outcome.active,source_error:outcome.error,unknown:outcome.enemyStateUnknown,event_json:JSON.stringify(outcome.events),dispatch_counters:dispatchCounters}));
+'''.replace('OPTIONS',options).replace('COUNT',str(count))
     return text+r'''
 __ownedSetCallbacks(setter,sourcePrefix,f.vm.runInContext('__arkdpsRetireCaptureGraphs',f.context));
 f.write(enemy.add(0x40),fp(100000));

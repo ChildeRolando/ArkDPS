@@ -746,52 +746,9 @@ bool replay_arguments_valid(const PreparedReplay& item) {
 void release_replay_arguments(PreparedReplay& item) {
     for(const unsigned index:{0u,1u,3u,6u,7u})JS_FreeValue(state().context,item.arguments[index]);
 }
-void finish_replay_record(const PreparedReplay& item,JSValue answer,bool controlled=false) {
-    using namespace arkdps::capture;
-    auto& runtime=state();auto* c=runtime.context;const auto& header=item.header;auto* hook=item.hook;
-    auto& depth=runtime.replay_depth[header.lane];auto& call=runtime.receivers[header.lane][header.depth-1];
-    const auto* bytes=item.bytes;const auto segment_start=item.segment_start,field_start=item.field_start;const auto* payload=item.payload;
-    if(controlled){
-        ++runtime.controlled_finish_checks;
-        const auto& owner=arkdps::owned_js::binding();
-        const auto status=static_cast<unsigned>(owner.error);
-        // Deferred, unused HP slot errors are not committed here. Only the
-        // current binding status and persistent native poison are authoritative.
-        const bool valid=runtime.replay_active && owner.active && owner.ticket==header.ticket
-            && owner.roles==&runtime.configurations.roles && owner.hp_plan==&hook->capture_plan
-            && owner.hp_phase==header.phase && owner.hp_root==header.args[0]
-            && owner.hp_checkpoint==header.checkpoint && owner.hp_mode==header.mode_epoch
-            && owner.hp_issued && owner.hp_packet_context==c
-            && owner.configuration==runtime.configurations.find(header.configuration_id)
-            && (!(header.configuration_id||header.scope_revision||header.publication_revision)||owner.configuration!=nullptr)
-            && (!owner.configuration||owner.configuration->mode_epoch==header.mode_epoch)
-            && owner.scope_revision==header.scope_revision && owner.publication_revision==header.publication_revision
-            && owner.graph_mode==header.mode_epoch && owner.graph_checkpoint==header.checkpoint
-            && owner.concurrent==header.capture_concurrent && status<=10
-            && !OwnedReplayView::structural(owner.error)
-            && runtime.replay_header.ticket==header.ticket && runtime.replay_header.hook_id==header.hook_id
-            && runtime.replay_header.phase==header.phase;
-        if(!valid)runtime.lanes->poison(LaneFault::replay_structure);
-    }
-    runtime.replay_active=false;
-    if (const auto failure=runtime.lanes->failure.load(std::memory_order_acquire)) {
-        if (JS_IsException(answer)) {auto ignored=JS_GetException(c);JS_FreeValue(c,ignored);}
-        JS_FreeValue(c,answer);
-        throw std::runtime_error("native capture failed: code="+std::to_string(failure));
-    }
-    if (JS_IsException(answer)) throw std::runtime_error(exception(c));
-    if (JS_IsArray(c,answer)!=1) {JS_FreeValue(c,answer);throw std::runtime_error("invalid native replay dispatch result");}
-    auto record=JS_GetPropertyUint32(c,answer,0);
-    auto projection=JS_GetPropertyUint32(c,answer,1);
-    auto complete=JS_GetPropertyUint32(c,answer,2);
-    auto receiver=JS_GetPropertyUint32(c,answer,3);
-    const bool reducer_complete=JS_IsBool(complete) && JS_ToBool(c,complete)==1;
-    const bool receiver_valid=JS_IsObject(receiver)
-        && (header.phase==Phase::entry || JS_VALUE_GET_PTR(receiver)==JS_VALUE_GET_PTR(call.receiver));
-    const bool valid=reducer_complete && receiver_valid;
-    JS_FreeValue(c,complete);
-    if (!valid || JS_IsException(record) || JS_IsException(projection)) {
-        std::string diagnostic="native_replay_gap:v1,h="+std::to_string(header.hook_id)
+std::string replay_gap_diagnostic(const arkdps::capture::RecordHeader& header,JSValueConst answer,bool reducer_complete,bool receiver_valid) {
+    using namespace arkdps::capture;auto& runtime=state();auto* c=runtime.context;
+    std::string diagnostic="native_replay_gap:v1,h="+std::to_string(header.hook_id)
             +",e="+std::to_string(header.phase==Phase::entry?0:1)+",t="+std::to_string(header.ticket);
         const auto diagnostic_base=diagnostic;
         const auto fallback_code=std::string(reducer_complete&&!receiver_valid?"31":"30");
@@ -831,7 +788,65 @@ void finish_replay_record(const PreparedReplay& item,JSValue answer,bool control
             }
             if(first)diagnostic+="0";
         } catch(...) {diagnostic=diagnostic_base+",r=0,p=0,f=-1,g=1,m=0,k="+fallback_code+",q=0";}
-        JS_FreeValue(c,failure_detail);JS_FreeValue(c,answer);
+    JS_FreeValue(c,failure_detail);return diagnostic;
+}
+void finish_replay_record(const PreparedReplay& item,JSValue answer,bool controlled=false) {
+    using namespace arkdps::capture;
+    auto& runtime=state();auto* c=runtime.context;const auto& header=item.header;auto* hook=item.hook;
+    auto& depth=runtime.replay_depth[header.lane];auto& call=runtime.receivers[header.lane][header.depth-1];
+    const auto* bytes=item.bytes;const auto segment_start=item.segment_start,field_start=item.field_start;const auto* payload=item.payload;
+    if(controlled){
+        ++runtime.controlled_finish_checks;
+        const auto& owner=arkdps::owned_js::binding();
+        const auto status=static_cast<unsigned>(owner.error);
+        // Deferred, unused HP slot errors are not committed here. Only the
+        // current binding status and persistent native poison are authoritative.
+        const bool valid=runtime.replay_active && owner.active && owner.ticket==header.ticket
+            && owner.roles==&runtime.configurations.roles && owner.hp_plan==&hook->capture_plan
+            && owner.hp_phase==header.phase && owner.hp_root==header.args[0]
+            && owner.hp_checkpoint==header.checkpoint && owner.hp_mode==header.mode_epoch
+            && owner.hp_issued && owner.hp_packet_context==c
+            && owner.configuration==runtime.configurations.find(header.configuration_id)
+            && (!(header.configuration_id||header.scope_revision||header.publication_revision)||owner.configuration!=nullptr)
+            && (!owner.configuration||owner.configuration->mode_epoch==header.mode_epoch)
+            && owner.scope_revision==header.scope_revision && owner.publication_revision==header.publication_revision
+            && owner.graph_mode==header.mode_epoch && owner.graph_checkpoint==header.checkpoint
+            && owner.concurrent==header.capture_concurrent && status<=10
+            && !OwnedReplayView::structural(owner.error)
+            && runtime.replay_header.ticket==header.ticket && runtime.replay_header.hook_id==header.hook_id
+            && runtime.replay_header.phase==header.phase;
+        if(!valid)runtime.lanes->poison(LaneFault::replay_structure);
+    }
+    runtime.replay_active=false;
+    if (const auto failure=runtime.lanes->failure.load(std::memory_order_acquire)) {
+        std::string failure_message="native capture failed: code="+std::to_string(failure);
+        // A native structural fault remains fatal. Preserve the same bounded
+        // source ledger when it explains that fault, rather than replacing it
+        // with a generic wrapper. No prefix/watermark advances on this branch.
+        if(!JS_IsException(answer)&&JS_IsArray(c,answer)==1){
+            auto complete=JS_GetPropertyUint32(c,answer,2);
+            if(JS_IsBool(complete)&&JS_ToBool(c,complete)==0)
+                failure_message+="; "+replay_gap_diagnostic(header,answer,false,true);
+            JS_FreeValue(c,complete);
+        }
+        auto pending=JS_GetException(c);JS_FreeValue(c,pending);
+        JS_FreeValue(c,answer);
+        throw std::runtime_error(failure_message);
+    }
+    if (JS_IsException(answer)) throw std::runtime_error(exception(c));
+    if (JS_IsArray(c,answer)!=1) {JS_FreeValue(c,answer);throw std::runtime_error("invalid native replay dispatch result");}
+    auto record=JS_GetPropertyUint32(c,answer,0);
+    auto projection=JS_GetPropertyUint32(c,answer,1);
+    auto complete=JS_GetPropertyUint32(c,answer,2);
+    auto receiver=JS_GetPropertyUint32(c,answer,3);
+    const bool reducer_complete=JS_IsBool(complete) && JS_ToBool(c,complete)==1;
+    const bool receiver_valid=JS_IsObject(receiver)
+        && (header.phase==Phase::entry || JS_VALUE_GET_PTR(receiver)==JS_VALUE_GET_PTR(call.receiver));
+    const bool valid=reducer_complete && receiver_valid;
+    JS_FreeValue(c,complete);
+    if (!valid || JS_IsException(record) || JS_IsException(projection)) {
+        const auto diagnostic=replay_gap_diagnostic(header,answer,reducer_complete,receiver_valid);
+        JS_FreeValue(c,answer);
         JS_FreeValue(c,record);JS_FreeValue(c,projection);JS_FreeValue(c,receiver);
         throw std::runtime_error(diagnostic);
     }
@@ -1007,7 +1022,7 @@ JSValue js_batch_advance(JSContext* c,JSValueConst,int count,JSValueConst* args)
         auto packet=JS_NewArray(c);
         if(JS_IsException(packet))return packet;
         for(unsigned i=0;i<batch.pending->arguments.size();++i)
-            if(JS_DefinePropertyValueUint32(c,packet,i,JS_DupValue(c,batch.pending->arguments[i]),JS_PROP_ENUMERABLE)<0){JS_FreeValue(c,packet);return JS_EXCEPTION;}
+            if(JS_DefinePropertyValueUint32(c,packet,i,JS_DupValue(c,batch.pending->arguments[i]),JS_PROP_C_W_E)<0){JS_FreeValue(c,packet);return JS_EXCEPTION;}
         return packet;
     });
 }
