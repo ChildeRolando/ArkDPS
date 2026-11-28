@@ -1338,10 +1338,13 @@ public partial class MainWindow
         try
         {
             UpdateWaitingTrend("waiting", "观察中·等待进入战斗", hasBattle: false, arkPieListening: true);
-            await Settle();
+            // Keep the synthetic presentation and its capture in one dispatcher turn.
+            root.UpdateLayout();
             Require(WaitingTrend.IsVisible && !CompactTrend.IsVisible && !MetricCards.IsVisible &&
-                    HasText(WaitingTrend,"ArkPie 监听中") && WaitingTrendSettings.IsVisible,
-                    "waiting overview did not show its recovery entry");
+                    WaitingTrendStatus.Text == "ArkPie 监听中" && WaitingTrendSettings.IsVisible && WaitingTrendSettings.IsEnabled,
+                    $"waiting overview did not show its recovery entry: waiting={WaitingTrend.IsVisible}, " +
+                    $"trend={CompactTrend.IsVisible}, metrics={MetricCards.IsVisible}, " +
+                    $"status={WaitingTrendStatus.Text}, settings={WaitingTrendSettings.IsVisible}/{WaitingTrendSettings.IsEnabled}");
             File.WriteAllBytes(Path.Combine(output,"lone-trail-empty.png"),Screenshot.CaptureRegion(root,LiveOverviewFrame));
             UpdateWaitingTrend("waiting", "观察中·等待进入战斗", hasBattle: true, arkPieListening: true);
             Require(!WaitingTrend.IsVisible && CompactTrend.IsVisible && MetricCards.IsVisible,
