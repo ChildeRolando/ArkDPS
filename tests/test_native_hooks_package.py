@@ -28,6 +28,47 @@ def test_archive_variant_preserves_existing_names():
     assert package.archive_name('1.2.3', False) == 'ArkDPS-1.2.3-win-x64-snapshot.zip'
     assert package.archive_name('1.2.3', True, with_native_events=True).endswith('-native-events.zip')
     assert package.archive_name('1.2.3', False, internal_backend=True).endswith('-internal-events.zip')
+    assert package.update_archive_name('ArkDPS-1.2.3-win-x64.zip') == 'ArkDPS-1.2.3-win-x64-update.zip'
+    assert package.update_archive_name('ArkDPS-1.2.3-win-x64-snapshot.zip') == 'ArkDPS-1.2.3-win-x64-snapshot-update.zip'
+
+
+def layered_files():
+    return {
+        'ArkDPS.Desktop.exe': 'a' * 64, 'ArkDPS.Desktop.dll': 'b' * 64,
+        'README.txt': 'c' * 64, 'collector/desktop_bridge.py': 'd' * 64,
+        'python/python.exe': 'e' * 64, 'python/python312.zip': 'f' * 64,
+        'collector/vendor/frida/17/FridaGadget.dll': '0' * 64,
+        'collector/frida-server/frida-server.xz': '1' * 64,
+        'licenses/LICENSE': '2' * 64, 'licenses/frida-server-COPYING.txt': '3' * 64,
+    }
+
+
+def test_layered_paths_split_matches_update_membership():
+    files = layered_files()
+    manifest = dict(files=files, update_shared_paths=sorted(
+        name for name in files if package.shared_update_path(name)))
+    members = {name for name in files if not package.shared_update_path(name)}
+    resolved = package.layered_manifest_paths(manifest, members)
+    assert resolved == {name: ('installed' if package.shared_update_path(name) else 'update')
+                        for name in files}
+
+
+def test_layered_paths_reject_membership_drift():
+    files = layered_files()
+    manifest = dict(files=files, update_shared_paths=sorted(
+        name for name in files if package.shared_update_path(name)))
+    with pytest.raises(ValueError, match='outside the manifest'):
+        package.layered_manifest_paths(manifest, {'collector/unlisted.py'})
+    members = {name for name in files if not package.shared_update_path(name)}
+    missing = members - {'README.txt'}
+    with pytest.raises(ValueError, match='missing a payload path'):
+        package.layered_manifest_paths(manifest, missing)
+    shared_drift = dict(manifest, update_shared_paths=manifest['update_shared_paths'][1:])
+    with pytest.raises(ValueError, match='missing from update_shared_paths'):
+        package.layered_manifest_paths(shared_drift, members)
+    double = dict(manifest, update_shared_paths=manifest['update_shared_paths'])
+    with pytest.raises(ValueError, match='also shipped'):
+        package.layered_manifest_paths(double, members | {'python/python.exe'})
 
 
 @pytest.mark.parametrize('options', [

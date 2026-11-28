@@ -30,7 +30,28 @@ from windows_manifest import verify_executable_manifest
 DEFAULT_VERSION = '1.0.0-rc.48'
 UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
-PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
+PACKAGE_DIRECTORIES = {'collector', 'python', 'metadata', 'licenses'}
+ExecutableName = 'ArkDPS.Desktop.exe'
+# Stub dotnet builds (tests) emit only the host, so the exact root stays small;
+# real publishes add the self-contained runtime files captured during build().
+PACKAGE_ROOT = {ExecutableName, 'README.txt', *PACKAGE_DIRECTORIES}
+# Self-contained publish roots hold runtime payloads next to the host: the
+# exactly known app files plus anything dotnet emits (.dll, createdump.exe).
+RUNTIME_ROOT_SUFFIXES = ('.deps.json', '.runtimeconfig.json')
+RUNTIME_ROOT_NAMES = {'createdump.exe'}
+
+
+def known_package_root_entry(name):
+    return (name == ExecutableName or name == 'README.txt' or name in PACKAGE_DIRECTORIES or
+            name.endswith('.dll') or name in RUNTIME_ROOT_NAMES or
+            name.startswith('ArkDPS.Desktop.') and name.endswith(RUNTIME_ROOT_SUFFIXES))
+SHARED_PREFIXES = ('python/', 'collector/vendor/frida/', 'collector/frida-server/',
+                   'collector/assets/')
+UPDATE_ARCHIVE_SUFFIX = '-update.zip'
+# Root-level files that change with every release; every other root entry is
+# the pinned .NET runtime layer (byte-identical while global.json pins the SDK).
+APP_ROOT_FILES = {ExecutableName, 'README.txt', 'ArkDPS.Desktop.dll',
+                  'ArkDPS.Desktop.deps.json', 'ArkDPS.Desktop.runtimeconfig.json'}
 PYTHON_URL = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip'
 PYTHON_SHA256 = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'
 FRIDA_VERSION = '17.26.1'
@@ -42,6 +63,8 @@ FRIDA_SERVER_SHA256 = 'b51775e3e8f897800fd9bcd1a57cf27014b29436b08cac1ef2c157c46
 FRIDA_SERVER_LICENSE_NAME = 'frida-server-COPYING.txt'
 FRIDA_SERVER_LICENSE_URL = f'https://raw.githubusercontent.com/frida/frida-core/{FRIDA_VERSION}/COPYING'
 FRIDA_SERVER_LICENSE_SHA256 = '5ea1544b51a28bc823b03159190d4108f9fb4f4ef912389f5137c6d295e175b2'
+# Update ZIPs omit these license files; the installed bundle already holds them.
+SHARED_EXTRA = {'licenses/' + FRIDA_SERVER_LICENSE_NAME}
 # Nothing Tk-shaped may reach the portable package: the panel is sealed and the
 # WPF client renders every surface itself.
 TK_MARKERS = ('tkinter', '_tkinter', '/tcl', 'tcl/', 'tk8.', 'tcl8.', 'tk86t', 'tcl86t')
@@ -106,6 +129,56 @@ def archive_name(version, with_events, *, internal_backend=False, with_native_ev
     else:
         suffix = '' if with_events else '-snapshot'
     return f'ArkDPS-{version}-win-x64{suffix}.zip'
+
+
+def update_archive_name(full_archive_name):
+    """Name of the layered update ZIP derived from the full package name."""
+    assert full_archive_name.endswith('.zip')
+    return full_archive_name[:-len('.zip')] + UPDATE_ARCHIVE_SUFFIX
+
+
+def shared_update_path(name):
+    """Whether a manifest path may be sourced from the installed bundle instead
+    of the update ZIP: the pinned Python runtime, Frida client payloads, the
+    Android server license, and root-level .NET runtime files. Worker code and
+    the WPF app layer always ship in the ZIP."""
+    if '/' not in name:
+        return name not in APP_ROOT_FILES
+    return name.startswith(SHARED_PREFIXES) or name in SHARED_EXTRA
+
+
+def layered_manifest_paths(manifest, update_members):
+    """Resolve the complete bundle file map from a layered update ZIP.
+
+    `update_members` are the payload paths present in the update ZIP (without
+    the ArkDPS/ prefix). Returns every manifest path with its source layer.
+    Raises ValueError when a path is missing from both layers or ships in
+    both - the updater refuses such a package before downloading anything.
+    """
+    shared = set(manifest.get('update_shared_paths') or ())
+    if update_members - set(manifest['files']) - {'metadata/release.json'}:
+        raise ValueError('Update ZIP contains paths outside the manifest: '
+                         + ', '.join(sorted(update_members - set(manifest['files']))))
+    resolved = {}
+    for name in manifest['files']:
+        in_update = name in update_members or name == 'metadata/release.json'
+        if shared_update_path(name):
+            if name not in shared:
+                raise ValueError('Shared path is missing from update_shared_paths: ' + name)
+            if in_update:
+                raise ValueError('Shared path also shipped in the update ZIP: ' + name)
+            resolved[name] = 'installed'
+        else:
+            if name not in update_members:
+                raise ValueError('Update ZIP is missing a payload path: ' + name)
+            resolved[name] = 'update'
+    return resolved
+
+
+def update_archive_name(full_archive_name):
+    """Name of the layered update ZIP derived from the full package name."""
+    assert full_archive_name.endswith('.zip')
+    return full_archive_name[:-len('.zip')] + UPDATE_ARCHIVE_SUFFIX
 
 
 def assert_no_frida_payload(names):
@@ -460,9 +533,11 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         desktop_variant.append('-p:ArkDpsNativeHookCandidate=true')
     subprocess.run([dotnet_executable, 'publish', str(ROOT / 'desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj'),
         '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
-        '-p:ContinuousIntegrationBuild=true', '-p:PublishSingleFile=true',
-        '-p:IncludeNativeLibrariesForSelfExtract=true', '-p:PublishTrimmed=false',
-        '-p:DebugType=none', *desktop_variant, '--artifacts-path', str(build_artifacts), '-o', str(bundle)],
+        '-p:ContinuousIntegrationBuild=true', '-p:PublishSingleFile=false',
+        '-p:PublishTrimmed=false', '-p:DebugType=none',
+        # English-only: drop satellite language folders no user surface reads.
+        '-p:SatelliteResourceLanguages=en', *desktop_variant,
+        '--artifacts-path', str(build_artifacts), '-o', str(bundle)],
         cwd=ROOT, check=True)
     verify_executable_manifest(bundle / 'ArkDPS.Desktop.exe', internal_backend=internal_backend)
     runtime_config, = (build_artifacts / 'bin/ArkDPS.Desktop').glob('*/ArkDPS.Desktop.runtimeconfig.json')
@@ -585,7 +660,10 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         readme = native_hooks_readme(version)
     (bundle / 'README.txt').write_text(readme, encoding='utf-8-sig')
     if {entry.name for entry in bundle.iterdir()} != PACKAGE_ROOT:
-        raise RuntimeError('Unexpected files in portable package root')
+        unexpected = sorted(entry.name for entry in bundle.iterdir()
+                            if not known_package_root_entry(entry.name))
+        if unexpected:
+            raise RuntimeError('Unexpected files in portable package root: ' + ', '.join(unexpected))
     manifest = dict(format=2, version=version, protocol=1, target_framework='net10.0-windows',
         dotnet_sdk=subprocess.check_output([dotnet_executable,'--version'],cwd=ROOT,text=True).strip(),
         dotnet_runtime=json.loads(runtime_config.read_text('utf-8')), head=head,
@@ -611,6 +689,14 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         if with_native_hooks:
             assert_no_frida_payload(manifest['files'])
     assert_no_tk_files(manifest['files'])
+    if with_events and not with_native_events:
+        # Layered updates: paths the update ZIP omits because the updater
+        # sources them from the verified installed bundle. Every listed file
+        # must exist in the full manifest; the split is proven by rebuilding
+        # the full file map from update ZIP + shared paths in verify_layered.
+        manifest['update_shared_paths'] = sorted(
+            name for name in manifest['files'] if shared_update_path(name))
+        manifest['update_executable'] = ExecutableName
     (metadata/'release.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
     # Smoke import under embedded Python with a poisoned system Python environment.
     environment=dict(os.environ, PYTHONHOME='Z:/not-a-python', PYTHONPATH='Z:/not-a-python', DOTNET_MULTILEVEL_LOOKUP='0')
@@ -659,7 +745,24 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
             json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     staged_archive.replace(archive)
     (output/(archive.name+'.sha256')).write_text(sha256+'  '+archive.name+'\n',encoding='ascii')
-    print(json.dumps(dict(bundle=str(bundle), archive=str(archive), sha256=sha256),ensure_ascii=False))
+    result = dict(bundle=str(bundle), archive=str(archive), sha256=sha256)
+    if 'update_shared_paths' in manifest:
+        update_archive = output / update_archive_name(archive.name)
+        with zipfile.ZipFile(update_archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as stream:
+            # metadata/release.json lets the updater verify the exact target and
+            # run the complete file manifest after restoring the shared layer.
+            stream.write(metadata/'release.json', 'ArkDPS/metadata/release.json')
+            for name in sorted(manifest['files']):
+                if shared_update_path(name):
+                    continue
+                path = bundle / name
+                if not path.is_file():
+                    raise RuntimeError('Update payload missing from build: ' + name)
+                stream.write(path, 'ArkDPS/' + name)
+        update_sha256 = digest(update_archive)
+        result['update_archive'] = str(update_archive)
+        result['update_sha256'] = update_sha256
+    print(json.dumps(result,ensure_ascii=False))
     return bundle
 
 

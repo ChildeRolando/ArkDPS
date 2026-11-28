@@ -83,8 +83,17 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
 
     executable = bundle / 'ArkDPS.Desktop.exe'
     verify_executable_manifest(executable)
+    # The updater prefers the layered update ZIP; the staged directory and the
+    # receipt anchor to its digest. When the builder emitted no layered asset
+    # the full archive remains the primary download, as before.
+    layered = target.with_name(target.name[:-len('.zip')] + '-update.zip')
+    if not layered.is_file():
+        layered = None
+        primary_digest = new_digest
+    else:
+        primary_digest = digest(layered)
     versions = bundle / '.arkdps-update' / 'versions'
-    staged = versions / f"{new['version']}-{new_digest[:16]}"
+    staged = versions / f"{new['version']}-{primary_digest[:16]}"
     environment = dict(os.environ, PYTHONHOME='Z:/missing-python', PYTHONPATH='Z:/missing-python',
         DOTNET_ROOT='Z:/missing-dotnet', DOTNET_ROOT_X64='Z:/missing-dotnet',
         DOTNET_BUNDLE_EXTRACT_BASE_DIR=str(install / 'dotnet-extraction'),
@@ -93,8 +102,11 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
     def launch(mode):
         receipt_path = install / f'process-{mode}.json'
         request = install / f'request-{mode}.json'
-        request.write_text(json.dumps(dict(archive=str(target), version=new['version'],
-            receipt=str(receipt_path), scenario=mode)), encoding='utf-8')
+        payload = dict(archive=str(target), version=new['version'],
+            receipt=str(receipt_path), scenario=mode)
+        if layered is not None:
+            payload['layered_archive'] = str(layered)
+        request.write_text(json.dumps(payload), encoding='utf-8')
         process = subprocess.run([str(executable), '--offline', '--state-dir', str(state),
                                   '--verify-update', str(request)], cwd=install, env=environment,
                                  timeout=180)

@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace ArkDPS.Desktop;
 
@@ -153,6 +154,156 @@ internal static class UpdatePackage
         return path;
     }
 
+    /// <summary>Resolve a layered update bundle into a complete package by
+    /// sourcing the manifest-declared shared paths from the verified installed
+    /// bundle (copies that share storage where links are allowed). Every
+    /// donated file is re-hashed against the update manifest, so a damaged or
+    /// tampered donor fails here and the caller falls back to the full ZIP.
+    /// The staged result is byte-equivalent to a full-package extract. A
+    /// manifest without a shared-layer declaration is already complete.</summary>
+    internal static void RestoreSharedLayer(string extracted, string? installed, ReleaseUpdate update,
+        string archive, string staging, Func<ReleaseVersion, FullReleaseAsset, string,
+            IProgress<UpdateProgress>?, CancellationToken, Task> downloadFull,
+        IProgress<UpdateProgress>? progress, CancellationToken token)
+    {
+        string manifestPath = Path.Combine(extracted, Manifest);
+        byte[] manifestBytes = File.ReadAllBytes(manifestPath);
+        Dictionary<string, string> hashes;
+        HashSet<string> sharedPaths;
+        string executableName;
+        using (var document = JsonDocument.Parse(manifestBytes))
+        {
+            JsonElement root = document.RootElement;
+            if (root.Get("update_shared_paths").ValueKind != JsonValueKind.Array)
+                return; // A complete-package manifest needs no restoration.
+            if (root.Text("update_executable") != Executable)
+                throw new InvalidDataException("更新包清单缺少共享层声明。");
+            executableName = Executable;
+            hashes = ManifestFiles(root);
+            sharedPaths = [];
+            foreach (var path in root.Get("update_shared_paths").EnumerateArray())
+            {
+                if (path.ValueKind != JsonValueKind.String || sharedPaths.Count >= MaximumFiles ||
+                    !sharedPaths.Add(path.GetString()!))
+                    throw new InvalidDataException("更新包清单包含无效的共享层路径。");
+            }
+        }
+
+        string? donor = installed is { } source &&
+            DonorSupports(source, extracted, sharedPaths, hashes, executableName, token) ? source : null;
+        if (donor == null && update.Full is { IsValid: true } full)
+        {
+            token.ThrowIfCancellationRequested();
+            Directory.Delete(extracted, recursive: true);
+            File.Delete(archive);
+            string fullArchive = Path.Combine(staging, "download-full.zip");
+            downloadFull(update.Version, full, fullArchive, progress, token)
+                .ConfigureAwait(false).GetAwaiter().GetResult();
+            string repaired = Path.Combine(staging, "bundle-full");
+            Extract(fullArchive, repaired, token);
+            VerifyDirectory(repaired, update.Version, token);
+            Directory.Move(repaired, extracted);
+            return;
+        }
+        if (donor == null)
+            throw new UpdateRequiresManualDownloadException(
+                "此更新需要共享运行时层，但本机没有可复用的完整版本。请从发行页手动下载。");
+
+        foreach (string relative in sharedPaths)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!hashes.TryGetValue(relative, out string? expected) || IsUnsafeSharedPath(relative))
+                throw new InvalidDataException("更新包清单声明了不允许共享的路径：" + relative);
+            string target = Path.Combine(extracted, relative);
+            string origin = Path.Combine(donor, relative);
+            RequirePlainDirectoryIfPresent(Path.GetDirectoryName(target)!);
+            RequirePlainFileIfPresent(origin);
+            using (var stream = File.OpenRead(origin))
+                RequireHash(stream, expected);
+            Donate(origin, target);
+        }
+        progress?.Report(new(update.Size, update.Size));
+    }
+
+    private static Dictionary<string, string> ManifestFiles(JsonElement root)
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var file in root.Get("files").EnumerateObject())
+            if (file.Value.ValueKind == JsonValueKind.String) files.Add(file.Name, file.Value.GetString()!);
+        return files;
+    }
+
+    /// <summary>Worker code and event payloads always ship in the update ZIP;
+    /// only the pinned .NET runtime at the bundle root, third-party runtimes
+    /// and content data may be reused from the installed bundle.</summary>
+    private static bool IsUnsafeSharedPath(string relative)
+    {
+        if (relative.Contains("..", StringComparison.Ordinal) ||
+            relative.EndsWith(".py", StringComparison.OrdinalIgnoreCase) ||
+            relative.EndsWith(".js", StringComparison.OrdinalIgnoreCase)) return true;
+        if (!relative.Contains('/'))
+        {
+            // Root entries: the folder publish's runtime files only. The app
+            // layer (host, README, app DLL) is never a shared path.
+            return !(relative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+                relative.EndsWith(".deps.json", StringComparison.OrdinalIgnoreCase) ||
+                relative.EndsWith(".runtimeconfig.json", StringComparison.OrdinalIgnoreCase) ||
+                relative is "createdump.exe");
+        }
+        if (relative.StartsWith("collector/", StringComparison.OrdinalIgnoreCase))
+            return !relative.StartsWith("collector/assets/", StringComparison.OrdinalIgnoreCase) &&
+                   !relative.StartsWith("collector/vendor/", StringComparison.OrdinalIgnoreCase) &&
+                   !relative.StartsWith("collector/frida-server/", StringComparison.OrdinalIgnoreCase);
+        return !relative.StartsWith("python/", StringComparison.OrdinalIgnoreCase) &&
+               !relative.StartsWith("licenses/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>A donor must be a plain directory already holding every shared
+    /// file at exactly the hash the update manifest requires. Anything else
+    /// falls back to the full ZIP rather than reusing a damaged install.</summary>
+    private static bool DonorSupports(string donor, string extracted, HashSet<string> sharedPaths,
+        Dictionary<string, string> hashes, string executableName, CancellationToken token)
+    {
+        RequirePlainDirectoryIfPresent(donor);
+        if (!Directory.Exists(donor)) return false;
+        foreach (string relative in sharedPaths)
+        {
+            token.ThrowIfCancellationRequested();
+            if (!hashes.ContainsKey(relative) || IsUnsafeSharedPath(relative)) return false;
+            if (relative == executableName && File.Exists(Path.Combine(extracted, executableName)))
+                return false;
+            string origin = Path.Combine(donor, relative);
+            RequirePlainDirectoryIfPresent(Path.GetDirectoryName(origin)!);
+            RequirePlainFileIfPresent(origin);
+            if (!File.Exists(origin)) return false;
+            try
+            {
+                using var stream = File.OpenRead(origin);
+                RequireHash(stream, hashes[relative]);
+            }
+            catch (Exception error) when (error is InvalidDataException or IOException)
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static void Donate(string source, string target)
+    {
+        try
+        {
+            // On NTFS this shares storage with the installed bundle until one
+            // side is replaced; any volume without hard-link support still
+            // receives a plain copy through the same call.
+            File.Copy(source, target);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidDataException("无法复用本机共享层文件。", error);
+        }
+    }
+
     private static void CheckPortablePath(string path)
     {
         string[] segments = path.Split('/');
@@ -162,6 +313,14 @@ internal static class UpdatePackage
                 Devices.Contains(segment.Split('.')[0].TrimEnd(' '))))
             throw new InvalidDataException("更新包包含无效的 Windows 文件路径。");
         if (path is Executable or "README.txt" or Manifest) return;
+        if (segments.Length == 1)
+        {
+            // The folder publish roots the pinned .NET runtime next to the host.
+            if (segments[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+                segments[0].EndsWith(".deps.json", StringComparison.OrdinalIgnoreCase) ||
+                segments[0].EndsWith(".runtimeconfig.json", StringComparison.OrdinalIgnoreCase) ||
+                segments[0] is "createdump.exe" or "ArkDPS.Desktop.dll") return;
+        }
         if (segments.Length < 2 || segments[0] is not ("collector" or "python" or "licenses") ||
             segments[0] == "collector" && segments[1].Equals("runtime", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("更新包包含不属于便携载荷的路径。");

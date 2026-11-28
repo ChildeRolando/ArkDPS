@@ -14,7 +14,7 @@ Windows x64 便携包的已发布版本和各版说明见 [GitHub Releases](http
 
 适配环境、解压与启动步骤见 [README](../README.md#下载与启动)。可用 `Get-FileHash <zip> -Algorithm SHA256` 对比随包发布的 `.zip.sha256` 文件。验证未发布的候选时，从对应提交的 CI 运行下载 `windows-wpf-candidate-<sha>`。
 
-支持应用内更新的标准便携版启动后会在后台检查并下载新版，设置页也提供「检查更新」。下载完成后，用户可点击「重启并更新」确认切换。下载使用 GitHub Release 的完整 Windows x64 ZIP，先按 GitHub API 提供的 SHA-256 校验 ZIP，再按包内清单校验解包后的文件。稳定版只接收稳定版本，预发行版可接收更新的预发行版或稳定版。手动下载入口仍指向对应的 GitHub Release。
+支持应用内更新的标准便携版启动后会在后台检查并下载新版，设置页也提供「检查更新」。下载完成后，用户可点击「重启并更新」确认切换。下载优先使用 GitHub Release 的增量 ZIP（`ArkDPS-<版本>-win-x64-update.zip`）：只含 WPF 应用层与 worker 载荷，Python 运行时、Frida 组件、游戏头像图集与 .NET 运行时从本机已安装版本的对应文件复用（逐文件 SHA-256 校验后才复用，最终仍按包内清单校验完整目录）。增量包失败时自动回退下载完整 ZIP。发行页同时发布两种资产；先卸载全部旧版本或增量清单不可复用时走完整包。先按 GitHub API 提供的 SHA-256 校验 ZIP，再按包内清单校验解包后的文件。稳定版只接收稳定版本，预发行版可接收更新的预发行版或稳定版。手动下载入口仍指向对应的 GitHub Release。
 
 ### 观察者
 
@@ -43,10 +43,11 @@ python -m pytest tests -q --assert=plain
 python tools/package_windows.py --output runtime/packages
 ```
 
-构建器先验证「HEAD 精确 + 工作区干净」，构建并核验 ArkPie DLL，再 `dotnet publish` 自包含 WPF 单文件、解包固定 SHA-256 的
+构建器先验证「HEAD 精确 + 工作区干净」，构建并核验 ArkPie DLL，再 `dotnet publish` 自包含 WPF 文件夹布局（host 与运行时 DLL 并列在包根目录，禁用 Trim、单文件与调试符号，卫星语言仅保留英文）、解包固定 SHA-256 的
 CPython 3.12.10 embeddable 运行时、下载并核验固定的 Frida 17.26.1 wheel、PC Gadget 与 Android x86_64 服务端，核验生成 EXE 的管理员 manifest，然后按 `BACKEND` 白名单复制
 worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还会断言包内 manifest 不存在
 `tkinter` / Tcl / Tk 文件，并用包内 Python 执行 `import desktop_bridge` 且断言 `"tkinter" not in sys.modules`。
+标准事件包同时产出增量 ZIP（`-update.zip`，仅 WPF 应用层、worker 载荷与完整清单）；其 `metadata/release.json` 的 `update_shared_paths` 列出由已安装版本复用的路径（Python 运行时、Frida 组件、头像图集、.NET 运行时与设备端服务许可）。
 
 已发布的便携包使用 `ArkDPS-<版本>-win-x64.zip` 命名，RC 在 GitHub 标为预发行。复现某个发布包时，切到该版本的构建提交，再按该提交的构建器参数与清单格式操作。构建器可用 `--version` 指定包版本。
 
@@ -92,7 +93,7 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 `verify_wpf_package.py` 在新目录验证清洁解压、载荷摘要、使用包内 Python/.NET 运行、v1 → WPF v3 布局迁移和 WPF 重启恢复。
 WPF 验收用模拟 GitHub 响应检查版本、下载入口和网络错误。
 
-`verify_hot_update.py <当前ZIP> <新版ZIP> --output <目录>` 使用两个实际构建的标准便携包。在模拟 GitHub 响应下验证正常更新、经原入口再次启动、新版启动失败或旧版退出失败时回退、切换中断后仍启动旧版，以及拒绝摘要不匹配的 ZIP。检查包括运行版本、worker 握手、设置与战绩、原程序文件和新版载荷摘要。CI 中两份 ZIP 均由打包器从已提交的工作区构建，第二份使用更高的验收版本号。
+`verify_hot_update.py <当前ZIP> <新版ZIP> --output <目录>` 使用两个实际构建的标准便携包。在模拟 GitHub 响应下验证正常更新、经原入口再次启动、新版启动失败或旧版退出失败时回退、切换中断后仍启动旧版，以及拒绝摘要不匹配的 ZIP。新版本同时提供增量 ZIP 时，更新走增量路径：从当前安装复用共享层（逐文件校验），校验后与完整包内容一致；`update_shared_paths` 声明不可复用或本机文件摘要不符时自动回退完整 ZIP。检查包括运行版本、worker 握手、设置与战绩、原程序文件和新版载荷摘要。CI 中两份 ZIP 均由打包器从已提交的工作区构建，第二份使用更高的验收版本号。
 
 **这些都是明确标注的合成数据。** 私有窗口接收点击不是 MuMu/游戏接收点击；物理托盘图标不可定位时回执明确
 `NOT VERIFIED`。混合 DPI 与实机项仍以独立验收为准，不得把离线回执当作实机通过证据。
