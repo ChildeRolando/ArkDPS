@@ -71,7 +71,7 @@ def wait_for_exit(pid):
 
 
 def verify_scenario(source, target, old, new, primary_digest, output, case, scenario, *,
-                    layered=None, expected_downloads=None, damaged_donor=None, check_relaunch_recovery=False):
+                    layered=None, expected_downloads=None, mismatched_donor=None, check_relaunch_recovery=False):
     install = Path(tempfile.mkdtemp(prefix=case + '-', dir=output))
     unpack(source, install / 'package')
     bundle = install / 'package' / 'ArkDPS'
@@ -90,11 +90,21 @@ def verify_scenario(source, target, old, new, primary_digest, output, case, scen
 
     executable = bundle / 'ArkDPS.Desktop.exe'
     verify_executable_manifest(executable)
-    damaged_content = b'Donor file modified by the offline update verifier.\n'
-    if damaged_donor is not None:
-        original = bundle / damaged_donor
-        assert digest(original) == old['files'][damaged_donor] == new['files'][damaged_donor]
-        original.write_bytes(damaged_content)
+    old_manifest_path = bundle / 'metadata/release.json'
+    installed_manifest = old
+    donor_evidence = None
+    if mismatched_donor is not None:
+        donor_path = bundle / mismatched_donor
+        expected_hash = new['files'][mismatched_donor]
+        assert digest(donor_path) == old['files'][mismatched_donor] == expected_hash
+        # Model a valid earlier installation with different shared bytes. The
+        # existing ArkPie startup check verifies every source manifest digest.
+        donor_path.write_bytes(b'Different shared-layer content for offline acceptance.\n')
+        installed_hash = digest(donor_path)
+        assert installed_hash != expected_hash
+        installed_manifest = dict(old, files={**old['files'], mismatched_donor: installed_hash})
+        old_manifest_path.write_text(json.dumps(installed_manifest), encoding='utf-8')
+        donor_evidence = dict(path=mismatched_donor, installed_sha256=installed_hash, target_sha256=expected_hash)
 
     versions = bundle / '.arkdps-update' / 'versions'
     staged = versions / f"{new['version']}-{primary_digest[:16]}"
@@ -116,7 +126,9 @@ def verify_scenario(source, target, old, new, primary_digest, output, case, scen
                                   '--verify-update', str(request)], cwd=install, env=environment,
                                  timeout=180)
         allowed_exit_codes = (0, 1) if mode == 'old_exit_failure' else (0,)
-        assert process.returncode in allowed_exit_codes, (case, mode, process.returncode, receipt_path)
+        if process.returncode not in allowed_exit_codes:
+            failure = receipt_path.read_text(encoding='utf-8') if receipt_path.is_file() else None
+            raise AssertionError((case, mode, process.returncode, receipt_path, failure))
         return receipt_path
 
     def require_result(receipt_path, outcome, expected):
@@ -150,16 +162,15 @@ def verify_scenario(source, target, old, new, primary_digest, output, case, scen
         transfers = read_receipt(start_receipt.with_suffix('.downloads.json'))
         assert transfers == expected_downloads, (case, transfers, expected_downloads)
         receipts[case]['downloads'] = transfers
+    if donor_evidence is not None:
+        receipts[case]['donor_mismatch'] = donor_evidence
     assert LayoutStore(state / 'layout.json').load().layout.theme == 'babel'
     assert ConnectionConfigStore(state / 'connection.json').load().config == connection
     assert {path.name: path.read_bytes() for path in (state / 'history').glob('*.json')} == history
     assert capture.read_bytes() == capture_record
-    assert json.loads((bundle / 'metadata/release.json').read_text(encoding='utf-8')) == old
-    for name, expected_digest in old['files'].items():
-        if name == damaged_donor:
-            assert (bundle / name).read_bytes() == damaged_content, name
-        else:
-            assert digest(bundle / name) == expected_digest, name
+    assert json.loads(old_manifest_path.read_text(encoding='utf-8')) == installed_manifest
+    for name, expected_digest in installed_manifest['files'].items():
+        assert digest(bundle / name) == expected_digest, name
 
     if scenario == 'success':
         metadata = staged / 'metadata/release.json'
@@ -219,21 +230,21 @@ def main():
     scenarios = {}
 
     def run(case, scenario, *, archive=source, source_manifest=old, use_layered=False, transfers=None,
-            damaged_donor=None, check_relaunch_recovery=False):
+            mismatched_donor=None, check_relaunch_recovery=False):
         print(f'Verifying hot update scenario {case}', flush=True)
         scenarios.update(verify_scenario(
             archive, target, source_manifest, new, layered_digest if use_layered else target_digest,
             output, case, scenario, layered=layered if use_layered else None, expected_downloads=transfers,
-            damaged_donor=damaged_donor, check_relaunch_recovery=check_relaunch_recovery,
+            mismatched_donor=mismatched_donor, check_relaunch_recovery=check_relaunch_recovery,
         ))
 
     run('full_only', 'success', transfers=[full_transfer], check_relaunch_recovery=True)
     if layered is not None:
         run('layered', 'success', use_layered=True, transfers=primary_transfers)
-        damaged_donor = 'licenses/' + FRIDA_SERVER_LICENSE_NAME
-        assert damaged_donor in new['update_shared_paths']
+        mismatched_donor = 'licenses/' + FRIDA_SERVER_LICENSE_NAME
+        assert mismatched_donor in new['update_shared_paths']
         run('layered_fallback', 'success', use_layered=True,
-            transfers=[*primary_transfers, full_transfer], damaged_donor=damaged_donor)
+            transfers=[*primary_transfers, full_transfer], mismatched_donor=mismatched_donor)
     for scenario in ('failure', 'tampered', 'interrupted', 'old_exit_failure'):
         run(scenario, scenario, use_layered=layered is not None, transfers=primary_transfers)
 
