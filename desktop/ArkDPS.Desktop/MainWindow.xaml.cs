@@ -891,6 +891,7 @@ public partial class MainWindow : Window
 
         EnemySummaryColumn.Width = wide ? new GridLength(22, GridUnitType.Star) : new GridLength(0);
         RankingColumn.Width = new GridLength(41, GridUnitType.Star);
+        RankingColumn.MinWidth = width >= 1380 ? 495 : 0;
         DetailColumn.Width = wide ? new GridLength(37, GridUnitType.Star) : new GridLength(narrow ? 0 : 340);
         LivePage.VerticalScrollBarVisibility = scrollLive ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Disabled;
         LiveBodyFirstRow.Height = wide && !scrollLive ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;

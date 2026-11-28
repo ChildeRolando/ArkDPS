@@ -492,8 +492,8 @@ public partial class StatisticPanel : UserControl
         foreach(var label in new[]{CategoryLabel,RankingLabel,RateLabel})
             label.SetResourceReference(TextBlock.ForegroundProperty,enable ? "ConsoleMuted" : "Muted");
         StyleSelector(Category,CategoryField,CategoryLabel,liveToolbar,72,88);
-        StyleSelector(Ranking,RankingField,RankingLabel,liveToolbar,64,96);
-        StyleSelector(Rate,RateField,RateLabel,liveToolbar,68,104);
+        StyleSelector(Ranking,RankingField,RankingLabel,liveToolbar,62,96);
+        StyleSelector(Rate,RateField,RateLabel,liveToolbar,64,104);
         if(enable)
         {
             RateAction.SetResourceReference(StyleProperty,"ReferencePanelAction");
@@ -549,7 +549,7 @@ public partial class StatisticPanel : UserControl
             combo.ClearValue(PaddingProperty);
             label.ClearValue(MarginProperty);
         }
-        field.Margin=compact ? new Thickness(0,0,3,3) : new Thickness(0,0,8,0);
+        field.Margin=compact ? new Thickness(0,0,2,0) : new Thickness(0,0,8,0);
     }
 
     internal void Update(JsonElement value, bool canDelete=true)
