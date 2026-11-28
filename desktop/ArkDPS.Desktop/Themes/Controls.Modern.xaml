@@ -561,7 +561,8 @@
         <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Foreground" Value="{DynamicResource Ink}"/>
         <Setter Property="CaretBrush" Value="{DynamicResource Accent}"/>
-        <Setter Property="SelectionBrush" Value="{DynamicResource ControlSelection}"/>
+        <Setter Property="SelectionBrush" Value="{DynamicResource Accent}"/>
+        <Setter Property="SelectionTextBrush" Value="{DynamicResource AccentInk}"/>
         <Setter Property="Background" Value="{DynamicResource Inset}"/>
         <Setter Property="BorderBrush" Value="{DynamicResource Line}"/>
         <Setter Property="BorderThickness" Value="1"/>

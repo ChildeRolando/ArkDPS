@@ -37,6 +37,18 @@ public partial class MainWindow
     [DllImport("user32.dll",SetLastError=true)] private static extern uint SendInput(uint count,Input[] input,int size);
     [DllImport("shell32.dll")] private static extern int Shell_NotifyIconGetRect(ref IconId id,out RectNative rect);
     private static void Require(bool value,string message){if(!value)throw new InvalidOperationException(message);}
+
+    private static void VerifyTextBoxSelection(TextBox input)
+    {
+        Require(input.Background is SolidColorBrush background &&
+            input.SelectionBrush is SolidColorBrush selection && selection.Color != background.Color &&
+            Equals(selection, Theme.Resource("Accent")) && input.SelectionOpacity == 1 &&
+            Equals(input.SelectionTextBrush, Theme.Resource("AccentInk")),
+            $"{Theme.Key} {input.Name} has unreadable selection: " +
+            $"background={input.Background}, fill={input.SelectionBrush}, " +
+            $"text={input.SelectionTextBrush}, opacity={input.SelectionOpacity}");
+    }
+
     // The collection owner writes validated BattleRecord JSON atomically. The
     // harness writes the same shape so the real reader validates real records.
     private static string ArchiveJson(string stateDirectory,string battleId,string stage)
@@ -2976,11 +2988,18 @@ public partial class MainWindow
                 await Settle();
                 Screenshot.Window(this,Path.Combine(output,theme+"-history.png"));
                 File.WriteAllBytes(Path.Combine(output,theme+"-ranking.png"),Screenshot.Statistics(selected,theme));
-                string selectedId=selected.Text("battle_id");Search.Text="no-such-record";await Command("history_refresh");
+                string selectedId=selected.Text("battle_id");Search.Text="no-such-record";
+                Search.SelectAll();
+                Require(Search.SelectionLength == Search.Text.Length, "history search text could not be selected");
+                VerifyTextBoxSelection(Search);
+                await Command("history_refresh");
                 Require(State.Get("history_selected").Text("battle_id")==selectedId,"filter/refresh replaced selected history");Search.Text="";
                 checks.Add(theme+" frozen selected history survives search and refresh");
+                checks.Add(theme+" history search text selection remains readable");
             }
             await Navigate("settings");await Settle();
+            VerifyTextBoxSelection(AdbPath);
+            checks.Add(theme+" connection settings text selection remains readable");
             Require(SettingsPage.VerticalScrollBarVisibility == ScrollBarVisibility.Auto &&
                 SettingsPage.HorizontalScrollBarVisibility == ScrollBarVisibility.Disabled &&
                 SettingsPage.ScrollableWidth <= 1, "settings scrolling policy or horizontal layout is invalid");

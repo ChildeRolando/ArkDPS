@@ -99,6 +99,8 @@ def test_actual_wpf_theme_text_pairs_have_aa_contrast():
                 ('HeroCardInk','HeroCard'), ('HeroCardMuted','HeroCard')]:
             ratio = contrast(colors[foreground], colors[background])
             assert ratio >= 4.5, (keys[key], foreground, background, ratio)
+        selection_ratio = contrast(colors['Accent'], colors['Inset'])
+        assert selection_ratio >= 3, (keys[key], 'TextBox selection', selection_ratio)
 
 
 def test_hud_has_single_title_row_close_and_rich_rows():

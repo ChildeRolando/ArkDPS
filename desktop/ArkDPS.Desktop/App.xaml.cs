@@ -10,6 +10,12 @@ namespace ArkDPS.Desktop;
 
 public partial class App : System.Windows.Application
 {
+    static App()
+    {
+        // WPF honors SelectionTextBrush when it draws the highlight behind the text.
+        AppContext.SetSwitch("Switch.System.Windows.Controls.Text.UseAdornerForTextboxSelectionRendering", false);
+    }
+
     internal static string Root = "";
     internal static string Python = "python.exe";
     internal static string StateDirectory = "";
