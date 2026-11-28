@@ -603,6 +603,22 @@ _STREAM_GAP_REASONS = {
     'pending empty scope handoff changed its process/match/accounts': 'pending_handoff_binding',
     'pending empty scope handoff has an unread tail or nonquiet source': 'pending_handoff_tail',
     'pending empty reset lacks a strict source-generation fence': 'pending_reset_fence',
+    'invalid retained partial scope prefix': 'partial_prefix_shape',
+    'invalid retained partial prefix range': 'partial_prefix_cursor',
+    'retained partial prefix does not start at the accepted cursor': 'partial_prefix_cursor',
+    'retained partial prefix changed its independent window': 'partial_prefix_window',
+    'retained partial prefix requires its platform AutoChess replay contract': 'partial_prefix_contract',
+    'invalid retained partial prefix page range': 'partial_prefix_page',
+    'incomplete retained partial prefix': 'partial_prefix_incomplete',
+    'retained partial prefix does not reach its watermark': 'partial_prefix_incomplete',
+    'retained partial prefix page changed source or scope': 'partial_prefix_binding',
+    'retained partial event has a different sequence/scope/clock': 'partial_prefix_event',
+    'retained partial drain differs from its raw pages': 'partial_prefix_drain',
+    'retained partial prefix exceeds page budget': 'partial_prefix_budget',
+    'retained partial prefix exceeds byte budget': 'partial_prefix_budget',
+    'invalid retained partial prefix JSON': 'partial_prefix_shape',
+    'invalid retained partial prefix reply': 'partial_prefix_shape',
+    'retained partial prefix page is unavailable': 'partial_prefix_unavailable',
 }
 _STREAM_GAP_FRAMES = {
     'battle_lifecycle': frozenset(('poll', '_acquire', 'acquire', '_consume', 'consume',
@@ -612,9 +628,10 @@ _STREAM_GAP_FRAMES = {
     'event_probe': frozenset(('contract_for', 'validate_binding', 'validate_batch', 'ack_scope',
         'validate_ack_mark', 'verified_pending_scope_start', '_verified_pending_scope_anchor',
         'pending_scope_anchor', 'pending_scope_successor', '_verified_autochess_event_window',
-        'verified_autochess_event_window', 'bind_native_autochess_pair', 'check_cursor_lifetime')),
+        'verified_autochess_event_window', 'bind_native_autochess_pair', 'check_cursor_lifetime',
+        'verified_partial_scope_prefix')),
     'event_capture': frozenset(('read_pending_scope_prefix', 'acknowledge_event_batch',
-        'read_event_batch', 'ingest', 'baseline', '_read_long_round_start_prefix')),
+        'read_event_batch', 'ingest', 'baseline', '_read_long_round_start_prefix', 'read_partial_scope_prefix')),
     'event_stream': frozenset(('baseline_barrier', 'ingest', 'consume')),
 }
 
@@ -1189,18 +1206,19 @@ def verified_pending_scope_successor(raw):
     return point, context
 
 
-def _autochess_scope_accounts(context):
+def _autochess_scope_accounts(context, *, require_match=True):
     """Identity of a normalized combat scope, without borrowing live membership."""
     if (context is None or context.get('status') not in ('available', 'partial')
-            or context.get('phase') not in (4, 5, 6) or not context.get('match_key')
-            or context.get('self_player_uid') is None or context.get('collection_mode') not in ('all', 'local')):
+            or context.get('phase') not in (4, 5, 6)
+            or require_match and (not context.get('match_key') or context.get('self_player_uid') is None
+                                  or context.get('collection_mode') not in ('all', 'local'))):
         raise StreamGap('invalid AutoChess read scope or account table')
-    return (context['identity'], context['match_key'], context['self_player_index'],
-            context['self_player_uid'], context['collection_mode'],
+    return (context['identity'], context.get('match_key'), context['self_player_index'],
+            context['self_player_uid'], context.get('collection_mode'),
             tuple(sorted((row['index'], row['uid']) for row in context['players'])))
 
 
-def autochess_raw_read_scope(payload, *, require_native_frame=False):
+def autochess_raw_read_scope(payload, *, require_native_frame=False, require_match_accounts=True):
     """Interpret the one raw read envelope used by zero and late-start origins.
 
     Existing zero-origin reads permit their historical frame fallback. The new
@@ -1218,14 +1236,14 @@ def autochess_raw_read_scope(payload, *, require_native_frame=False):
         raise StreamGap('pending scope read requires a raw native frame')
     context = normalize_native_autochess(payload.get('native_autochess_context'), expected_frame=frame,
         expected_game_time=int(fixed) / (1 << 32), expected_scope_key=scope)
-    return context, _autochess_scope_accounts(context)
+    return context, _autochess_scope_accounts(context, require_match=require_match_accounts)
 
 
-def _pending_scope_identity(sample, mark, *, read=False):
+def _pending_scope_identity(sample, mark, *, read=False, require_match=True):
     if read:
-        return autochess_raw_read_scope(mark, require_native_frame=True)
+        return autochess_raw_read_scope(mark, require_native_frame=True, require_match_accounts=require_match)
     context = autochess_event_mark_context(sample, mark)
-    return context, _autochess_scope_accounts(context)
+    return context, _autochess_scope_accounts(context, require_match=require_match)
 
 
 def _verified_pending_scope_anchor(anchor, *, allow_epoch_advance=False):
@@ -1258,6 +1276,95 @@ def _verified_pending_scope_anchor(anchor, *, allow_epoch_advance=False):
         raise StreamGap('pending scope baseline source/accounts changed')
     contract.normalize_quality(drained)
     return point, identity, contract
+
+
+def verified_partial_scope_prefix(sample, evidence, *, previous_sequence=None):
+    """Verify retained current-scope facts, without inventing a past snapshot."""
+    if not isinstance(evidence, dict) or 'partial_scope_prefix' not in evidence:
+        return None
+    tx = evidence['partial_scope_prefix']
+    if (not isinstance(tx, dict) or set(tx) != {'version', 'after', 'pages'}
+            or type(tx['version']) is not int or tx['version'] != 1
+            or not _round_start_integer(tx['after']) or not isinstance(tx['pages'], list)
+            or not isinstance(sample, dict)
+            or any(not isinstance(evidence.get(key), dict) for key in ('before', 'after', 'drain'))
+            or not isinstance(sample.get('battle_metadata'), dict)
+            or (sample.get('battle_metadata') or {}).get('platform') not in ('native_pc', 'android')
+            or sample.get('native_counter_scope') != 'events_only' or sample.get('state') != 2):
+        raise StreamGap('invalid retained partial scope prefix')
+    after, through = tx['after'], evidence.get('sequence')
+    if (previous_sequence is not None and after != previous_sequence
+            or not _round_start_integer(through) or not after < through <= after + _ROUND_START_PREFIX_LIMIT):
+        raise StreamGap('retained partial prefix does not start at the accepted cursor')
+    context, sequence = verified_autochess_event_window(sample, evidence['before'], evidence['after'],
+        anchor=sample.get('autochess_snapshot_anchor', sample))
+    if sequence != through or context != sample.get('autochess_context'):
+        raise StreamGap('retained partial prefix changed its independent window')
+    _, identity = _pending_scope_identity(sample, evidence['after'], require_match=False)
+    contract = contract_for(sample=sample, descriptor=evidence['drain'].get('probe_contract'))
+    platform = (sample.get('battle_metadata') or {}).get('platform')
+    if not (platform == 'native_pc' and isinstance(contract, NativePcProbeContract)
+            or platform == 'android' and isinstance(contract, MuMuAutoChessProbeContract)):
+        raise StreamGap('retained partial prefix requires its platform AutoChess replay contract')
+    reference = evidence['after']
+    binding = (*_ROUND_START_BINDING, 'native_session', 'native_process_created_filetime',
+               'source_build', 'damage_settlement_scope')
+    optional_binding = ()
+    if platform == 'android':
+        # Android admission derives process/root ownership from its independent
+        # guard, not Windows-only fields a host may have decorated onto marks.
+        optional_binding = ('native_generation', 'native_session', 'native_process_created_filetime', 'source_build')
+        binding = tuple(key for key in binding if key not in optional_binding)
+    records, cursor, size = [], after, 0
+    import json
+    if len(tx['pages']) > (_ROUND_START_PREFIX_LIMIT + _PENDING_SCOPE_PAGE_SIZE - 1) // _PENDING_SCOPE_PAGE_SIZE:
+        raise StreamGap('retained partial prefix exceeds page budget')
+    for page in tx['pages']:
+        if (not isinstance(page, dict) or set(page) != {'after', 'through', 'batch'}
+                or type(page['after']) is not int or type(page['through']) is not int
+                or page['after'] != cursor or not cursor < page['through'] <= min(cursor + _PENDING_SCOPE_PAGE_SIZE, through)):
+            raise StreamGap('invalid retained partial prefix page range')
+        batch = page['batch']
+        if (not isinstance(batch, dict) or batch.get('error') or batch.get('stopped') or batch.get('retry')
+                or 'active' in batch and (type(batch['active']) is not int or batch['active'] != 0)
+                or 'active_hooks' in batch and batch['active_hooks'] != []):
+            raise StreamGap('retained partial prefix page is unavailable')
+        contract.validate_binding(sample, batch)
+        _, page_identity = _pending_scope_identity(sample, batch, read=True, require_match=False)
+        if (page_identity != identity or any((key in batch) != (key in reference)
+                or not NativePcBinding._same(batch.get(key), reference.get(key)) for key in binding)):
+            raise StreamGap('retained partial prefix page changed source or scope')
+        if any(key in batch and key in reference and not NativePcBinding._same(batch[key], reference[key])
+               for key in optional_binding):
+            raise StreamGap('retained partial prefix page changed source or scope')
+        events = batch.get('events')
+        if not isinstance(events, list) or len(events) != page['through'] - cursor:
+            raise StreamGap('incomplete retained partial prefix')
+        records.extend(events)
+        cursor = page['through']
+    try:
+        size = len(json.dumps(dict(sample=sample, evidence=evidence),
+                              ensure_ascii=True, allow_nan=False).encode('utf-8'))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise StreamGap('invalid retained partial prefix JSON') from exc
+    if cursor != through or size > _PENDING_SCOPE_BYTES or not records:
+        raise StreamGap('retained partial prefix does not reach its watermark')
+    from autochess_context import native_autochess_event_identity
+    scope = tuple(identity[0][key] for key in ('scope_key', 'phase', 'round'))
+    frame, when = -1, -1
+    for number, record in enumerate(records, after + 1):
+        if (not isinstance(record, dict) or type(record.get('sequence')) is not int or record['sequence'] != number
+                or type(record.get('frame')) is not int or not max(frame, 0) <= record['frame'] <= sample['frame']
+                or not _round_start_time(record.get('game_time')) or not max(when, 0) <= record['game_time'] <= sample['game_time']
+                or record['frame'] == frame and record['game_time'] != when
+                or record['frame'] == sample['frame'] and record['game_time'] != sample['game_time']
+                or native_autochess_event_identity(record) != scope
+                or record['native_autochess_scope'].get('collection_mode') != identity[4]):
+            raise StreamGap('retained partial event has a different sequence/scope/clock')
+        frame, when = record['frame'], record['game_time']
+    if evidence['drain'].get('events') != records:
+        raise StreamGap('retained partial drain differs from its raw pages')
+    return dict(after=after, frame=records[0]['frame'], game_time=records[0]['game_time'], events=deepcopy(records))
 
 
 def verified_pending_scope_start(sample, evidence, *, previous_sequence=None):

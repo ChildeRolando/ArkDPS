@@ -9,7 +9,7 @@ from test_pc_serial_clock_reset_end import CollectorClockBattle
 from test_autochess_scope_end import OwnedScopeEnd
 
 
-def pending_case(monkeypatch):
+def live_scope_case(monkeypatch):
     import test_autochess_scope_end
     from event_probe import reset_probe_cursor
     class SourceWithLifetime(CollectorClockBattle):
@@ -26,6 +26,17 @@ def pending_case(monkeypatch):
             if after < event['sequence'] <= through]))
     source.observer.read_round_start_range = read_range
     return case
+
+
+def pending_case(monkeypatch):
+    """Recreate the retired pending protocol for raw-record/replay regressions.
+
+    New live collection installs an empty partial baseline immediately. These
+    older transaction tests still exercise their historical on-wire contract.
+    """
+    from legacy_pending_fixture import enable_legacy_pending_creation
+    enable_legacy_pending_creation(monkeypatch)
+    return live_scope_case(monkeypatch)
 
 
 def test_pending_empty_scope_retains_first_75_and_replays_at_actual_positive_anchor(monkeypatch):

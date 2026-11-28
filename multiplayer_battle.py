@@ -869,7 +869,7 @@ class MultiplayerBattleStatistics:
             for player in self._players.values():
                 player.statistics.settlement_stream_incomplete = True
 
-    def _start_events(self, sequence, version, *, sample, drained):
+    def _start_events(self, sequence, version, *, sample, drained, partial=None):
         self._baseline = self._sequence = sequence
         self._settlement_version = version
         for player in self._players.values():
@@ -883,9 +883,20 @@ class MultiplayerBattleStatistics:
             player.stream = EventStream(stats, session=stats.session,
                 baseline_frame=self._frame, baseline_sequence=sequence,
                 retain_owned_replay_records=True)
+            if partial is not None:
+                stats.event_coverage_start = stats.last_event_time = partial['game_time']
+                stats.lifecycle_watermark = partial['game_time']
+                stats.event_coverage_broken = True
+                player.stream.game_time = partial['game_time']
             stats.mark_boss_watermark(self._now)
         if self._native_mode:
             self._initialize_native_skills(sample, drained)
+        if partial is not None:
+            self._skill_initialization.setdefault('reason_codes', []).append('retained_partial_prefix')
+            for player in self._players.values():
+                player.statistics.mark_skill_unknown()
+                for owner, entry in player.actors.items():
+                    player.mark_unknown_skill_prefix(owner, entry.unique_id, 'retained_partial_prefix')
 
     def _batch(self, sample, through, drained):
         """Validate the entire ordered prefix before any player's accounting."""
@@ -1000,19 +1011,20 @@ class MultiplayerBattleStatistics:
                                 baseline_frame=player.stream.baseline_frame, initial_drain=initial)
 
     def consume(self, sample, roster: RosterSnapshot, sequence=None, drained=None, *, mark=None,
-                round_id=None, return_result=True, terminal=False):
+                round_id=None, return_result=True, terminal=False, partial_prefix=None):
         stage = str((sample.get('battle_metadata') or {}).get('stage_id') or '')
         if 'AUTOCHESS' not in stage.upper():
             return None
         self._terminal_tail = False
         try:
-            self._consume(sample, roster, sequence, drained, mark=mark, round_id=round_id, terminal=terminal)
+            self._consume(sample, roster, sequence, drained, mark=mark, round_id=round_id, terminal=terminal,
+                          partial_prefix=partial_prefix)
         finally:
             self._terminal_tail = False
         if return_result:
             return self.result()
 
-    def _consume(self, sample, roster, sequence, drained, *, mark, round_id, terminal):
+    def _consume(self, sample, roster, sequence, drained, *, mark, round_id, terminal, partial_prefix=None):
         if type(terminal) is not bool:
             self.gap('终局投影标记无效')
             return
@@ -1127,6 +1139,13 @@ class MultiplayerBattleStatistics:
             self.gap('结算事件版本发生变化')
             return
         self._settlement_quality(sample, quality)
+        from event_probe import verified_partial_scope_prefix
+        partial = verified_partial_scope_prefix(sample, partial_prefix) if partial_prefix is not None else None
+        if partial_prefix is not None and partial is None:
+            raise StreamGap('retained partial multiplayer prefix evidence is missing')
+        if partial is not None and (self._baseline is not None or partial_prefix.get('drain') != drained
+                or partial_prefix.get('sequence') != sequence or partial_prefix.get('after') != mark):
+            raise StreamGap('retained partial prefix is not this initial multiplayer window')
         if self._baseline is None:
             self._now, self._frame = sample['game_time'], sample['frame']
             self._start = self._now
@@ -1143,10 +1162,16 @@ class MultiplayerBattleStatistics:
                             for row in sample.get('rows', ())))
             for player in self._players.values():
                 player.statistics.advance(self._now)
-            self._start_events(sequence, version, sample=sample, drained=drained)
+            if partial is not None:
+                self._from_start = False
+                self._start = self._now = partial['game_time']
+                self._frame = partial['frame']
+            self._start_events(partial['after'] if partial is not None else sequence, version,
+                               sample=sample, drained=drained, partial=partial)
             self._quality(sample, drained, quality, initial=True)
             self._observe_presence(sample)
-            return
+            if partial is None:
+                return
         try:
             events, pending = self._batch(sample, sequence, drained)
             self._quality(sample, drained, quality, initial=False)

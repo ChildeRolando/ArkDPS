@@ -21,7 +21,7 @@ from autochess_context import (NATIVE_AUTOCHESS_CHARACTER_COUNTERS, native_autoc
 from snapshot_adapter import BattleStatisticsAdapter, FrameMismatch, AdapterError, MappingUnavailable
 from event_capture import (LiveEventCapture, CaptureRetry, read_event_batch,
                            acknowledge_event_batch, read_terminal_mark, source_attribution_batch,
-                           read_pending_scope_prefix, confirm_sampling_mark)
+                           read_pending_scope_prefix, read_partial_scope_prefix, confirm_sampling_mark)
 from event_observer import ObserverReadRetry
 from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcProbeContract,
                          android_autochess_event_window, android_autochess_mark_context,
@@ -31,6 +31,7 @@ from event_probe import (CallbackBusyMark, MuMuAutoChessProbeContract, NativePcP
                          bind_native_autochess_pair, contract_for, native_autochess_context_bound,
                          native_identity_sampling_mark, TerminalReadRetry,
                          verified_autochess_round_start, autochess_round_start_origin,
+                         verified_partial_scope_prefix,
                          pending_scope_anchor, verified_pending_scope_start,
                          pending_scope_successor, verified_pending_scope_successor,
                          _verified_pending_scope_anchor,
@@ -1015,7 +1016,7 @@ class BattleFeed:
     def _pending_scope_drain(self, observer, evidence, sample, roster, *, generation,
                              published_generation, published_capture, published_observer, published_event_mark,
                              cursor_lifetime, capture):
-        """Retain an empty late anchor until its first explicitly acquired prefix."""
+        """Read the current scope; retain compatibility with recorded late anchors."""
         check_cursor_lifetime(observer, cursor_lifetime)
         pending = self._pending_scope
         rejected = getattr(published_capture, 'rejected_pending_prefix', None)
@@ -1062,34 +1063,19 @@ class BattleFeed:
         result = self._drain(observer, evidence, sample, capture=capture)
         check_cursor_lifetime(observer, cursor_lifetime)
         stream = published_capture.adapter.event_stream if published_capture is not None else None
-        previous = stream.sequence if stream is not None and observer is published_observer else 0
-        if (generation == published_generation + 1 and observer is not None
-                and callable(getattr(observer, 'read_round_start_range', None))
-                and sample.get('native_counter_scope') == 'events_only'
-                and sample.get('state') == 2 and type(sample.get('frame')) is int and sample['frame'] > 0
-                and type(sample.get('game_time')) in (int, float) and sample['game_time'] > 0
-                and not roster.entries and isinstance(result, dict) and not result.get('error')
-                and stream is not None and observer is published_observer
-                and not published_capture.closed and not published_capture.pending
-                and stream.baseline_frame == 0 and published_capture.adapter.statistics.event_coverage_start == 0
-                and _verified_autochess_successor_cursor(published_capture.last_sample, published_event_mark,
-                    dict(sample, native_session=sample.get('native_session', sample['session'])),
-                    evidence, stream, published_capture.adapter.last_game_time, published_capture.contract)
-                and result.get('sequence') == previous and isinstance(result.get('drain'), dict)
-                and result['drain'].get('events') == [] and 'autochess_round_start' not in result['drain']):
-            try:
-                anchor = pending_scope_anchor(sample, result, roster.frame)
-            except BarrierBusy as error:
-                annotate_barrier_busy(error, 'pending_anchor', sample=sample,
-                                      before=result.get('before'), after=result.get('after'))
-                raise
-            except StreamGap:
-                # Legacy snapshots without the new raw independent proof retain
-                # their existing explicit late-baseline behavior; never retag zero.
-                return result, False
-            self._pending_scope = dict(observer=observer, cursor_lifetime=cursor_lifetime, generation=generation,
-                                       anchor=anchor, latest=anchor)
-            return result, True
+        if (generation > published_generation and sample.get('native_counter_scope') == 'events_only'
+                and sample.get('state') == 2 and stream is not None
+                and observer is published_observer and isinstance(result, dict)
+                and not result.get('error') and isinstance(result.get('drain'), dict)
+                and 'autochess_round_start' not in result['drain']
+                and result.get('sequence', stream.sequence) > stream.sequence):
+            # A baseline-only read would discard the new scope's first output.
+            # Keep the real independent window and read every retained record
+            # after the already accepted cursor before installing this scope.
+            result = read_partial_scope_prefix(observer, stream.sequence, result, sample,
+                cursor_lifetime=cursor_lifetime)
+        # A valid empty combat window is already a usable partial baseline.
+        # Waiting for its first output adds an unnecessary cross-scope owner.
         return result, False
 
     def acquire(self, collector, observer=None, *, published_generation=0,
@@ -1392,7 +1378,9 @@ class BattleSessions:
                 self.multiplayer = MultiplayerBattleStatistics()
             self._multiplayer_call('consume', observation.sample, observation.roster, sequence,
                                    drained, mark=mark, round_id=self.battle_id, return_result=False,
-                                   terminal=observation.kind == 'terminal')
+                                   terminal=observation.kind == 'terminal',
+                                   **({'partial_prefix': observation.events}
+                                      if 'partial_scope_prefix' in (observation.events or {}) else {}))
         except Exception as exc:
             self.multiplayer_error = str(exc)
 
@@ -1441,7 +1429,8 @@ class BattleSessions:
                 raise StreamGap('event observation barrier was altered')
             self.capture.ingest(observation.sample, observation.roster, sequence, evidence['drain'],
                                 mark=evidence['after'],
-                                allow_late_baseline=observation.kind == 'sample')
+                                allow_late_baseline=observation.kind == 'sample',
+                                partial_prefix=evidence if 'partial_scope_prefix' in evidence else None)
             if project:
                 self._consume_multiplayer(observation, sequence, evidence['drain'], evidence['after'])
             self._last_event_mark = evidence['after']
@@ -1905,6 +1894,12 @@ class BattleSessions:
             self.connection = 'connected'
             self.reason = observation.reason
         elif observation.kind == 'sample':
+            if 'partial_scope_prefix' in (observation.events or {}):
+                stream = self.adapter.event_stream if self.adapter is not None else None
+                if stream is None or observation.generation <= self.generation:
+                    raise StreamGap('partial scope prefix requires a new scope and its accepted cursor')
+                verified_partial_scope_prefix(observation.sample, observation.events,
+                                              previous_sequence=stream.sequence)
             pending_fields = {'pending_scope_start', 'pending_scope_exit', 'pending_scope_end',
                               'pending_scope_superseded'} & (observation.events or {}).keys()
             if pending_fields and observation.generation <= self.generation:

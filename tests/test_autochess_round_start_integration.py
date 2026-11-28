@@ -8,7 +8,7 @@ import pytest
 from connection import ConnectionConfig
 from desktop_bridge import DesktopState
 from event_capture import CaptureRetry
-from event_probe import CallbackBusyMark, TerminalReadRetry
+from event_probe import CallbackBusyMark, TerminalReadRetry, StreamGap
 from panel_model import PanelConfig
 from test_desktop_native_defense_retention import view_values
 from test_multiplayer_native_context import QUALITY, stamp
@@ -35,6 +35,7 @@ class OwnedRoundStart:
         self.battle.observer.mark = self.mark
         self.battle.observer.read_through = self.read_through
         self.battle.observer.read_baseline = self.read_baseline
+        self.battle.observer.read_round_start_range = self.read_range
         self.battle.probe.sample = self.guarded_sample
 
         self.state = DesktopState(tmp_path / 'desktop')
@@ -87,6 +88,11 @@ class OwnedRoundStart:
     def read_through(self, through):
         packet = self.decorate(self.original_batch(through))
         packet['events'] = [event for event in packet['events'] if self.ack < event['sequence']]
+        return packet
+
+    def read_range(self, after, through):
+        packet = self.read_through(through)
+        packet['events'] = [event for event in packet['events'] if after < event['sequence']]
         return packet
 
     def record_origin(self):
@@ -295,20 +301,24 @@ def test_unverified_round_origin_stops_event_coverage_without_ack(tmp_path, faul
     assert source.battle.runtime.sessions.event_status == 'gap'
 
 
-def test_missing_round_origin_uses_conservative_legacy_baseline(tmp_path):
-    source, _, first = enter_late(tmp_path, prefix_fault='absent')
-    assert first.kind == 'sample'
-    assert source.local()['observed_damage'] is None
-    assert source.ack == 7
-    battle = source.battle
-    battle.advance(1.5)
-    battle.advance(1.5, [source.hit(8, 3, 43)])
-    source.poll()
-    player = source.local()
-    lane = player['actor_ledgers'][0]['ledger']
-    assert player['observed_damage'] == 43
-    assert lane['skill_initial_unknown_hits'] == 1
-    assert lane['observed_skill_damage'] is None
+def test_missing_round_origin_cannot_discard_a_mixed_scope_prefix(tmp_path, monkeypatch):
+    seen = []
+    poll = OwnedRoundStart.poll
+    def observed(owner):
+        seen.append(owner)
+        return poll(owner)
+    monkeypatch.setattr(OwnedRoundStart, 'poll', observed)
+    # Without the real origin, seq5 is still an unread old-scope 2000, not a
+    # baseline discard. It cannot be ACKed together with the new skill/31.
+    with pytest.raises(StreamGap, match='retained partial event'):
+        enter_late(tmp_path, prefix_fault='absent')
+    source = seen[-1]
+    assert source.ack == 4
+    retained = [event for event in source.battle.records if event['sequence'] > source.ack]
+    assert [event['sequence'] for event in retained] == [5, 6, 7]
+    assert retained[0]['amount'] == 2000 and retained[-1]['amount'] == 31
+    assert source.battle.runtime.sessions.event_status == 'gap'
+    assert source.battle.runtime.sessions.adapter.event_stream.sequence == 4
 
 
 def test_origin_with_live_actors_replays_prefix_without_guessing_initial_skill(tmp_path):

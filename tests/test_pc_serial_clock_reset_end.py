@@ -105,6 +105,17 @@ def test_actual_native_pc_collector_binding_pair_and_serial_reset_reach_lifecycl
     source.native_generation += 1
     source.autochess_epoch += 1
     case.advance(0)
+    if fault == 'unread_tail':
+        # A reset alone cannot authorize a baseline ACK that skips the retained
+        # old-scope record. This provider has no bounded historical-range API.
+        from event_probe import StreamGap
+        cursor, retained = list(source.commits), deepcopy(source.queue)
+        with pytest.raises(StreamGap, match='cannot read retained partial prefixes'):
+            source.poll()
+        assert source.commits == cursor and source.queue == retained
+        assert source.runtime.sessions.adapter.event_stream.sequence == cursor[-1]
+        assert source.runtime.sessions.event_status == 'gap'
+        return
     successor = source.poll()
     assert collector.process._serial == (3 if fault == 'serial_skip' else 2)
     assert successor.sample['native_session'] != old['native_session']
@@ -152,6 +163,14 @@ def test_new_serial_does_not_authorize_a_missing_prefix_or_replaced_observer(fau
         case.fixture.observer = SimpleNamespace(**vars(case.fixture.observer))
     reset_native_clock(case, serial_step=2 if fault == 'serial_skip' else 1,
                        generation_step=2 if fault == 'source_generation_skip' else 1)
+    if fault == 'unread_tail':
+        from event_probe import StreamGap
+        cursor, retained = list(case.fixture.commits), deepcopy(case.fixture.queue)
+        with pytest.raises(StreamGap, match='cannot read retained partial prefixes'):
+            case.fixture.poll()
+        assert case.fixture.commits == cursor and case.fixture.queue == retained
+        assert case.fixture.runtime.sessions.event_status == 'gap'
+        return
     case.fixture.poll()
     archive, = case.fixture.runtime.sessions.pop_archives()
     assert archive['event_status'] == 'gap' and archive['event_error'] == '未取得最终事件水位'

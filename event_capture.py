@@ -188,6 +188,48 @@ def read_event_batch(observer, sequence, *, baseline=False):
         raise CaptureRetry(str(exc)) from exc
 
 
+def read_partial_scope_prefix(observer, after, evidence, sample, *, cursor_lifetime):
+    """Read an owned current-scope prefix; neither baseline nor ACK is advanced."""
+    from event_probe import (_PENDING_SCOPE_PAGE_SIZE, _ROUND_START_PREFIX_LIMIT,
+                             _PENDING_SCOPE_BYTES, check_cursor_lifetime, verified_partial_scope_prefix)
+    import json
+    through = evidence.get('sequence')
+    if (type(after) is not int or after < 0 or type(through) is not int
+            or not after < through <= after + _ROUND_START_PREFIX_LIMIT):
+        raise StreamGap('invalid retained partial prefix range')
+    read_range = getattr(observer, 'read_round_start_range', None)
+    if not callable(read_range):
+        raise StreamGap('event probe cannot read retained partial prefixes')
+    contract = contract_for(observer, sample)
+    pages, records, cursor, size = [], [], after, 0
+    while cursor < through:
+        end = min(cursor + _PENDING_SCOPE_PAGE_SIZE, through)
+        try:
+            check_cursor_lifetime(observer, cursor_lifetime)
+            batch = read_range(cursor, end)
+            check_cursor_lifetime(observer, cursor_lifetime)
+        except ObserverReadRetry as exc:
+            raise CaptureRetry(str(exc)) from exc
+        if isinstance(batch, dict) and batch.get('retry'):
+            raise CaptureRetry('retained partial prefix read requires retry')
+        if not isinstance(batch, dict) or not isinstance(batch.get('events'), list):
+            raise StreamGap('invalid retained partial prefix reply')
+        page = dict(after=cursor, through=end, batch=batch)
+        try:
+            size += len(json.dumps(page, ensure_ascii=True, allow_nan=False).encode('utf-8'))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise StreamGap('invalid retained partial prefix JSON') from exc
+        if size > _PENDING_SCOPE_BYTES:
+            raise StreamGap('retained partial prefix exceeds byte budget')
+        pages.append(deepcopy(page))
+        records.extend(batch['events'])
+        cursor = end
+    result = dict(evidence, drain=dict(pages[-1]['batch'], events=records, probe_contract=contract.describe()),
+                  partial_scope_prefix=dict(version=1, after=after, pages=pages))
+    verified_partial_scope_prefix(sample, result, previous_sequence=after)
+    return result
+
+
 def read_pending_scope_prefix(observer, anchor, evidence, sample, *, cursor_lifetime):
     """Acquire retained pages once; Sessions and multiplayer never read them."""
     from event_probe import (_verified_pending_scope_anchor, _PENDING_SCOPE_PAGE_SIZE,
@@ -433,7 +475,8 @@ class LiveEventCapture:
                                 baseline_frame=self.adapter.event_stream.baseline_frame,
                                 initial_drain=self.initial_drain)
 
-    def ingest(self, sample, roster, sequence, drained, *, mark=None, allow_late_baseline=False):
+    def ingest(self, sample, roster, sequence, drained, *, mark=None, allow_late_baseline=False,
+               partial_prefix=None):
         """Apply an acquired barrier/drain to the lifecycle-owned adapter.
 
         Acquisition has already bracketed the singleton and updated the native
@@ -444,12 +487,22 @@ class LiveEventCapture:
             self.contract = contract
             contract.validate_binding(sample, mark)
             contract.validate_batch(sample, sequence, drained, stream=self.adapter.event_stream)
+            from event_probe import verified_partial_scope_prefix
+            partial = verified_partial_scope_prefix(sample, partial_prefix) if partial_prefix is not None else None
+            if partial_prefix is not None and partial is None:
+                raise StreamGap('retained partial prefix evidence is missing')
+            if partial is not None and (self.baseline_sequence is not None
+                    or partial_prefix.get('drain') != drained or partial_prefix.get('sequence') != sequence
+                    or partial_prefix.get('after') != mark):
+                raise StreamGap('retained partial prefix is not this initial captured window')
             if self.baseline_sequence is None:
                 origin = verified_native_battle_start(sample, drained, mark)
-                self.baseline_sequence = 0 if origin is not None else sequence
+                if origin is not None and partial is not None:
+                    raise StreamGap('retained partial prefix cannot replace a verified zero origin')
+                self.baseline_sequence = 0 if origin is not None else partial['after'] if partial is not None else sequence
                 self.adapter.start_events(session=sample['session'], frame=sample['frame'],
                                           sequence=self.baseline_sequence, allow_late_baseline=allow_late_baseline,
-                                          retained_zero_origin=origin is not None)
+                                          retained_zero_origin=origin is not None, retained_partial_prefix=partial)
                 if origin is not None:
                     drained = dict(drained, events=origin[1])
             stream = self.adapter.event_stream

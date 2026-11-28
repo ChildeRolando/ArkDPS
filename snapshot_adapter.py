@@ -323,7 +323,8 @@ class BattleStatisticsAdapter:
         self.last_roster_frame = roster.frame
         self.session_switches += 1
 
-    def start_events(self, *, session, frame, sequence, allow_late_baseline=False, retained_zero_origin=False):
+    def start_events(self, *, session, frame, sequence, allow_late_baseline=False, retained_zero_origin=False,
+                     retained_partial_prefix=None):
         """Start at the guarded frame, normally the initial native baseline."""
         reasons = []
         if self.statistics is None:
@@ -341,6 +342,13 @@ class BattleStatisticsAdapter:
             reasons.append('retained native zero origin requires the initial uncommitted prefix')
         if late and not allow_late_baseline:
             reasons.append(f'time {self.last_game_time} != coverage start {self.coverage_start}')
+        partial = retained_partial_prefix
+        if partial is not None and (not self._events_only or retained_zero_origin
+                or not isinstance(partial, dict) or partial.get('after') != sequence
+                or type(partial.get('frame')) is not int or not 0 <= partial['frame'] <= frame
+                or type(partial.get('game_time')) not in (int, float)
+                or not math.isfinite(partial['game_time']) or not 0 <= partial['game_time'] <= self.last_game_time):
+            reasons.append('retained partial prefix requires an event-only bounded initial prefix')
         if self.owner_map.unknown_token_cids and not self.source_attribution:
             reasons.append('unknown token sources: ' + ', '.join(sorted(self.owner_map.unknown_token_cids)))
         if self.owner_map.ambiguous_cids and not self.source_attribution:
@@ -362,10 +370,19 @@ class BattleStatisticsAdapter:
             self.statistics.initial_damage = {}
         try:
             self.event_stream = EventStream(self.statistics, session=session,
-                                            baseline_frame=0 if retained_zero_origin else frame,
+                                            baseline_frame=partial['frame'] if partial is not None else 0 if retained_zero_origin else frame,
                                             baseline_sequence=sequence)
             if retained_zero_origin:
                 self.event_stream.game_time = 0
+            elif partial is not None:
+                # A retained event is a real past fact, not a past counter read.
+                # Preserve the actual sample and its initial native values.
+                start = partial['game_time']
+                self.event_stream.game_time = start
+                self.statistics.event_coverage_start = self.statistics.last_event_time = start
+                self.statistics.lifecycle_watermark = start
+                self.statistics.event_coverage_broken = True
+                self.statistics.mark_skill_unknown()
         except ValueError:
             self.statistics.event_coverage = False
             raise

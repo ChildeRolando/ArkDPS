@@ -188,6 +188,8 @@ def test_first_transport_failure_in_live_read_degrades_without_generic_escape(tm
 
 
 def pending_native_session(monkeypatch):
+    from legacy_pending_fixture import enable_legacy_pending_creation
+    enable_legacy_pending_creation(monkeypatch)
     import test_autochess_scope_end
     from connection import DetectionStatus
     from test_autochess_scope_end import OwnedScopeEnd

@@ -11,6 +11,7 @@ import pytest
 
 from battle_lifecycle import BattleSessions
 from capture_battles import observation_from_json
+from event_probe import StreamGap
 from test_autochess_scope_end import OwnedScopeEnd, old_local
 
 
@@ -53,6 +54,21 @@ def test_defense_assist_candidate_never_hides_a_real_missing_prefix(platform, fa
     case = OwnedScopeEnd(platform, phase=4, mode='all', start=.5 if fault == 'late_start' else 0)
     if fault == 'unread_tail':
         case.advance(1.25, amount=75)
+        source = case.fixture
+        retained = deepcopy(source.queue if platform == 'native_pc' else source.events)
+        commits = list(source.commits)
+        batch = source.batch if platform == 'native_pc' else source.read_through
+        source.observer.read_round_start_range = lambda after, through: dict(
+            batch(through), events=deepcopy([event for event in retained
+                                            if after < event['sequence'] <= through]))
+        with pytest.raises(StreamGap, match='retained partial event'):
+            case.finish(phase=5)
+        assert source.commits == commits
+        assert (source.queue if platform == 'native_pc' else source.events) == retained
+        assert source.runtime.sessions.adapter.event_stream.sequence == commits[-1]
+        assert source.runtime.display_sample()['multiplayer']['players'][2]['observed_damage'] == 300
+        assert source.runtime.sessions.event_status == 'gap'
+        return
     elif fault == 'no_output_callback':
         case.extra_epoch += 1
     elif fault == 'observer':
