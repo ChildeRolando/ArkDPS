@@ -1781,6 +1781,33 @@ public partial class MainWindow
             ReleaseList(releases.Replace("v2.0.0-rc.1", "v0.2.0-rc.1")))));
         Require((await new ReleaseUpdates(stableData).Check(new(1, 0, 0, 10)))?.Version == stable, "RC to stable promotion");
 
+        var fullDigest = "sha256:" + new string('a', 64);
+        var layeredDigest = "sha256:" + new string('b', 64);
+        Require(await SelectAssets(layeredDigest) is { CanDownload: true, IsLayered: true, AssetId: 456,
+                Full: { AssetId: 123 } }, "preferred valid layered asset did not retain the full fallback");
+        Require(await SelectAssets("invalid") is { CanDownload: true, IsLayered: false, AssetId: 123 },
+            "invalid layered metadata hid the downloadable full asset");
+
+        async Task<ReleaseUpdate?> SelectAssets(string digest)
+        {
+            string assets = JsonSerializer.Serialize(new[]
+            {
+                new
+                {
+                    tag_name = "v" + stable, draft = false, prerelease = false,
+                    assets = new[]
+                    {
+                        new { name = ReleaseUpdate.AssetName(stable), state = "uploaded", id = 123, size = 250,
+                            digest = fullDigest },
+                        new { name = ReleaseUpdate.LayeredAssetName(stable), state = "uploaded", id = 456, size = 25,
+                            digest },
+                    },
+                },
+            });
+            using var fixtureClient = new HttpClient(new ReleaseFixture(() => Task.FromResult(ReleaseList(assets))));
+            return await new ReleaseUpdates(fixtureClient).Check(new(0, 9, 0, 0));
+        }
+
         var reply = new TaskCompletionSource<HttpResponseMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         var fixture = new ReleaseFixture(() => reply.Task);
         using var shared = new HttpClient(fixture);
@@ -1897,40 +1924,48 @@ public partial class MainWindow
         return buffer.ToArray();
     }
 
-    /// <summary>A layered update ZIP plus the shared layer contents a complete
-    /// install holds. The manifest describes the union; the ZIP omits every
-    /// shared path and carries only the app layer and the manifest itself.</summary>
-    private static (byte[] Update, Dictionary<string, string> Shared, Dictionary<string, string> Hashes)
-        LayeredUpdateArchive(ReleaseVersion version)
+    private static (byte[] Layered, byte[] Full, Dictionary<string, string> Shared, Dictionary<string, string> Files)
+        LayeredUpdateArchives(ReleaseVersion version)
     {
-        var shared = new Dictionary<string, string> { ["python/python.exe"] = "python", ["python/python312.zip"] = "stdlib" };
-        var app = new Dictionary<string, string> { ["ArkDPS.Desktop.exe"] = "desktop2", ["README.txt"] = "readme2",
-            ["ArkDPS.Desktop.dll"] = "appdll2", ["collector/desktop_bridge.py"] = "worker2", ["licenses/LICENSE"] = "license2" };
-        var hashes = shared.Concat(app).ToDictionary(file => file.Key,
+        var shared = new Dictionary<string, string>
+        {
+            ["python/python.exe"] = "python",
+            ["python/python312.zip"] = "stdlib",
+            ["python/Lib/site-packages/frida/__init__.py"] = "frida",
+            ["collector/dotnet/host/fxr/10.0.0/hostfxr.dll"] = "hostfxr",
+        };
+        var app = new Dictionary<string, string>
+        {
+            ["ArkDPS.Desktop.exe"] = "desktop2", ["README.txt"] = "readme2",
+            ["collector/desktop_bridge.py"] = "worker2", ["licenses/LICENSE"] = "license2",
+        };
+        var files = shared.Concat(app).ToDictionary(file => file.Key, file => file.Value);
+        var hashes = files.ToDictionary(file => file.Key,
             file => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(file.Value))));
         var manifest = JsonSerializer.Serialize(new Dictionary<string, object>
         {
             ["format"] = 2, ["version"] = version.ToString(), ["protocol"] = BridgeClient.Version,
-            ["update_protocol"] = UpdatePackage.Protocol, ["target_framework"] = "net11.0-windows10.0.19041.0",
+            ["update_protocol"] = UpdatePackage.Protocol, ["target_framework"] = "net10.0-windows",
             ["frida"] = "test", ["collector_sha256"] = hashes["collector/desktop_bridge.py"],
             ["update_executable"] = "ArkDPS.Desktop.exe",
             ["update_shared_paths"] = shared.Keys.ToArray(),
             ["files"] = hashes,
         });
-        using var buffer = new MemoryStream();
-        using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
+        return (Archive(app), Archive(files), shared, files);
+
+        byte[] Archive(Dictionary<string, string> contents)
         {
-            foreach (var file in app)
+            using var buffer = new MemoryStream();
+            using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
             {
-                var entry = archive.CreateEntry("ArkDPS/" + file.Key);
-                using var stream = entry.Open();
-                stream.Write(Encoding.UTF8.GetBytes(file.Value));
+                foreach (var (path, content) in contents.Append(new("metadata/release.json", manifest)))
+                {
+                    using var stream = archive.CreateEntry("ArkDPS/" + path).Open();
+                    stream.Write(Encoding.UTF8.GetBytes(content));
+                }
             }
-            var entryManifest = archive.CreateEntry("ArkDPS/metadata/release.json");
-            using var manifestStream = entryManifest.Open();
-            manifestStream.Write(Encoding.UTF8.GetBytes(manifest));
+            return buffer.ToArray();
         }
-        return (buffer.ToArray(), shared, hashes);
     }
 
     private static async Task VerifyUpdateStaging(string output, ReleaseVersion version)
@@ -2072,7 +2107,7 @@ public partial class MainWindow
             }
         }
 
-        await VerifyLayeredStaging(portable, version);
+        await VerifyLayeredStaging(output, version);
 
         static void RequireNoStage(string root, ReleaseUpdate target)
         {
@@ -2083,99 +2118,101 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Layered staging: a verified donor resolves the shared layer,
-    /// a damaged donor falls back to the full ZIP, and a layered release
-    /// without a usable full asset refuses to stage damage.</summary>
-    private static async Task VerifyLayeredStaging(string portable, ReleaseVersion version)
+    private static async Task VerifyLayeredStaging(string output, ReleaseVersion version)
     {
-        var (layered, shared, _) = LayeredUpdateArchive(version);
-        var app = new Dictionary<string, string> { ["ArkDPS.Desktop.exe"] = "desktop2", ["README.txt"] = "readme2",
-            ["ArkDPS.Desktop.dll"] = "appdll2", ["collector/desktop_bridge.py"] = "worker2", ["licenses/LICENSE"] = "license2" };
-        var expected = shared.Concat(app).ToDictionary(file => file.Key, file => file.Value);
-        ReleaseUpdate update = new(version, 456, layered.LongLength,
-            Convert.ToHexStringLower(SHA256.HashData(layered)));
+        const long layeredId = 456;
+        const long fullId = 123;
+        var (layered, full, shared, expected) = LayeredUpdateArchives(version);
+        var update = new ReleaseUpdate(version, layeredId, layered.LongLength,
+            Convert.ToHexStringLower(SHA256.HashData(layered))) { IsLayered = true };
+        var complete = new ReleaseUpdate(version, fullId, full.LongLength, Convert.ToHexStringLower(SHA256.HashData(full)));
 
-        string layeredRoot = Path.GetFullPath(Path.Combine(portable, "..", "layered-donor"));
-        var previous = new ReleaseUpdate(new(0, 9, 0, 0), 1, 1, new string('a', 64));
-        string donor = UpdatePackage.BundleDirectory(layeredRoot, previous);
-        Directory.CreateDirectory(donor);
-        foreach (var (relative, content) in shared.Concat(new Dictionary<string, string>
-        { ["collector/desktop_bridge.py"] = "old-worker", ["licenses/LICENSE"] = "old-license", ["README.txt"] = "old-readme" }))
-        {
-            string path = Path.Combine(donor, relative);
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, content);
-        }
-        UpdatePackage.CreateVersionsDirectory(layeredRoot);
-        File.WriteAllText(Path.Combine(layeredRoot, ".arkdps-update", "selection.json"),
-            JsonSerializer.Serialize(new { Current = previous }));
-
-        var fixture = new LayeredAssetFixture(layered, assetId: 456);
+        string layeredRoot = CreateDonor("layered-donor", damaged: false);
+        var fixture = new LayeredAssetFixture(layered, layeredId);
         using var client = new HttpClient(fixture);
         var updates = new ReleaseUpdates(client);
         var staged = await updates.StageAsync(update, layeredRoot, null, CancellationToken.None);
-        foreach (var (relative, content) in expected)
-            Require(File.ReadAllText(Path.Combine(staged.Directory, relative)) == content,
-                "layered staging restored " + relative);
-        Require(fixture.Requests == 2, "layered staging touched HTTP more than once");
-        UpdatePackage.VerifyStaged(update, staged.Directory);
+        RequireComplete(staged);
+        Require(fixture.Requests.SequenceEqual([layeredId]), "layered staging did not fetch exactly the incremental asset");
         Require(await updates.StageAsync(update, layeredRoot, null, CancellationToken.None) == staged &&
-            fixture.Requests == 2, "verified layered bundle was not reused");
+            fixture.Requests.SequenceEqual([layeredId]), "verified layered bundle was not reused");
 
-        // A corrupted donor file must fall back to the full ZIP and still
-        // produce the complete bundle.
-        var fullArchive = UpdateArchive(version);
-        var (damaged, _, _) = LayeredUpdateArchive(version);
-        File.WriteAllText(Path.Combine(donor, "python/python312.zip"), "corrupted");
-        var damagedUpdate = new ReleaseUpdate(version, 456, damaged.LongLength,
-            Convert.ToHexStringLower(SHA256.HashData(damaged)));
-        damagedUpdate = damagedUpdate with { Full = new(123, fullArchive.LongLength,
-            Convert.ToHexStringLower(SHA256.HashData(fullArchive))) };
-        var combined = new LayeredAssetFixture(damaged, assetId: 456, fullArchive, fullAssetId: 123);
+        string fallbackRoot = CreateDonor("layered-fallback", damaged: true);
+        var fallback = update with { Full = new(fullId, complete.Size, complete.Sha256!) };
+        var combined = new LayeredAssetFixture(layered, layeredId, full, fullId);
         using var combinedClient = new HttpClient(combined);
-        var repaired = await new ReleaseUpdates(combinedClient).StageAsync(damagedUpdate, layeredRoot, null, CancellationToken.None);
-        Require(File.ReadAllText(Path.Combine(repaired.Directory, "collector/desktop_bridge.py")) == "worker",
-            "full fallback did not produce the complete bundle");
-        Require(File.ReadAllText(Path.Combine(repaired.Directory, "python/python.exe")) == "python" &&
-            File.ReadAllText(Path.Combine(repaired.Directory, "python/python312.zip")) == "stdlib",
-            "full fallback lost the runtime layer");
-        Require(combined.Requests >= 3, "full fallback did not fetch the complete package");
+        var repaired = await new ReleaseUpdates(combinedClient).StageAsync(fallback, fallbackRoot, null, CancellationToken.None);
+        RequireComplete(repaired);
+        Require(combined.Requests.SequenceEqual([layeredId, fullId]), "damaged donor did not fetch both assets in order");
 
-        // Without a full asset and without a usable donor, staging refuses.
-        var (refused, _, _) = LayeredUpdateArchive(version);
-        File.WriteAllText(Path.Combine(donor, "python/python.exe"), "broken-again");
-        var refusedUpdate = new ReleaseUpdate(version, 456, refused.LongLength,
-            Convert.ToHexStringLower(SHA256.HashData(refused)));
-        using var refusedClient = new HttpClient(new LayeredAssetFixture(refused, assetId: 456));
+        string fullRoot = CreateDonor("layered-full-only", damaged: false);
+        var fullFixture = new LayeredAssetFixture(full, fullId);
+        using var fullClient = new HttpClient(fullFixture);
+        RequireComplete(await new ReleaseUpdates(fullClient).StageAsync(complete, fullRoot, null, CancellationToken.None));
+        Require(fullFixture.Requests.SequenceEqual([fullId]), "full-only release did not fetch exactly the complete asset");
+
+        string refusedRoot = CreateDonor("layered-refused", damaged: true);
+        var refusedFixture = new LayeredAssetFixture(layered, layeredId);
+        using var refusedClient = new HttpClient(refusedFixture);
         try
         {
-            await new ReleaseUpdates(refusedClient).StageAsync(refusedUpdate, layeredRoot, null, CancellationToken.None);
+            await new ReleaseUpdates(refusedClient).StageAsync(update, refusedRoot, null, CancellationToken.None);
             throw new InvalidOperationException("layered staging ignored a damaged donor without a full fallback");
         }
-        catch (Exception error) when (error is InvalidDataException or UpdateRequiresManualDownloadException)
+        catch (UpdateRequiresManualDownloadException)
         {
-            string refusedBundle = UpdatePackage.BundleDirectory(layeredRoot, refusedUpdate);
-            Require(!Directory.Exists(refusedBundle) &&
-                !File.Exists(refusedBundle + ".receipt"), "refused layered staging left a candidate or receipt");
+            string refusedBundle = UpdatePackage.BundleDirectory(refusedRoot, update);
+            Require(!Directory.Exists(refusedBundle) && !File.Exists(refusedBundle + ".receipt") &&
+                refusedFixture.Requests.SequenceEqual([layeredId]), "refused staging left a bundle or requested another asset");
+        }
+
+        string CreateDonor(string name, bool damaged)
+        {
+            string root = Path.GetFullPath(Path.Combine(output, name));
+            Directory.CreateDirectory(root);
+            var previous = new ReleaseUpdate(new(0, 9, 0, 0), 1, 1, new string('a', 64));
+            string donor = UpdatePackage.BundleDirectory(root, previous);
+            Directory.CreateDirectory(donor);
+            foreach (var (relative, content) in shared)
+            {
+                string path = Path.Combine(donor, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, damaged && relative == "python/python312.zip" ? "corrupted" : content);
+            }
+            File.WriteAllText(Path.Combine(root, ".arkdps-update", "selection.json"),
+                JsonSerializer.Serialize(new { Current = previous }));
+            return root;
+        }
+
+        void RequireComplete(StagedUpdate bundle)
+        {
+            foreach (var (relative, content) in expected)
+                Require(File.ReadAllText(Path.Combine(bundle.Directory, relative)) == content, "staged update lost " + relative);
+            UpdatePackage.VerifyStaged(bundle.Release, bundle.Directory);
         }
     }
 
     private sealed class LayeredAssetFixture(byte[] bytes, long assetId, byte[]? fullBytes = null, long fullAssetId = 0)
         : HttpMessageHandler
     {
-        public int Requests { get; private set; }
+        public List<long> Requests { get; } = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            Requests++;
             string path = request.RequestUri?.AbsolutePath ?? "";
             if (path == $"/repos/ChildeRolando/ArkDPS/releases/assets/{assetId}")
+            {
+                Requests.Add(assetId);
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                     { Content = new ByteArrayContent(bytes) });
+            }
             if (fullBytes != null && path == $"/repos/ChildeRolando/ArkDPS/releases/assets/{fullAssetId}")
+            {
+                Requests.Add(fullAssetId);
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                     { Content = new ByteArrayContent(fullBytes) });
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            }
+            throw new InvalidOperationException("Unexpected update fixture request: " + path);
         }
     }
 

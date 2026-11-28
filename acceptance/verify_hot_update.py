@@ -1,4 +1,4 @@
-"""Exercise native update and rollback with two actual portable ZIPs and offline state."""
+"""Exercise native Windows updates and rollback with portable archives and offline state."""
 
 import argparse
 import ctypes
@@ -19,9 +19,15 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'tests'), str(ROOT / 'tools')]
 from battle_history import BattleHistory
 from connection import ConnectionConfig, ConnectionConfigStore
 from layout_store import Layout, LayoutStore
-from package_windows import UPDATE_PROTOCOL, archive_name, digest, unpack
+from package_windows import (FRIDA_SERVER_LICENSE_NAME, UPDATE_PROTOCOL, archive_name, digest, unpack,
+                             update_archive_name)
 from test_battle_history import record
 from windows_manifest import require_admin_test_host, verify_executable_manifest
+
+FULL_ASSET_ID = 987654321
+LAYERED_ASSET_ID = 987654322
+LEGACY_VERSION = '1.0.0-rc.48'
+LEGACY_HEAD = '1701cb40f6aa9c25323468d9f7c9d40511ab52c9'
 
 
 def release_manifest(archive):
@@ -64,8 +70,9 @@ def wait_for_exit(pid):
         kernel.CloseHandle(handle)
 
 
-def verify_scenario(source, target, old, new, new_digest, output, scenario):
-    install = Path(tempfile.mkdtemp(prefix=scenario + '-', dir=output))
+def verify_scenario(source, target, old, new, primary_digest, output, case, scenario, *,
+                    layered=None, expected_downloads=None, damaged_donor=None, check_relaunch_recovery=False):
+    install = Path(tempfile.mkdtemp(prefix=case + '-', dir=output))
     unpack(source, install / 'package')
     bundle = install / 'package' / 'ArkDPS'
     state = bundle / 'collector/runtime'
@@ -83,15 +90,12 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
 
     executable = bundle / 'ArkDPS.Desktop.exe'
     verify_executable_manifest(executable)
-    # The updater prefers the layered update ZIP; the staged directory and the
-    # receipt anchor to its digest. When the builder emitted no layered asset
-    # the full archive remains the primary download, as before.
-    layered = target.with_name(target.name[:-len('.zip')] + '-update.zip')
-    if not layered.is_file():
-        layered = None
-        primary_digest = new_digest
-    else:
-        primary_digest = digest(layered)
+    damaged_content = b'Donor file modified by the offline update verifier.\n'
+    if damaged_donor is not None:
+        original = bundle / damaged_donor
+        assert digest(original) == old['files'][damaged_donor] == new['files'][damaged_donor]
+        original.write_bytes(damaged_content)
+
     versions = bundle / '.arkdps-update' / 'versions'
     staged = versions / f"{new['version']}-{primary_digest[:16]}"
     environment = dict(os.environ, PYTHONHOME='Z:/missing-python', PYTHONPATH='Z:/missing-python',
@@ -99,9 +103,10 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
         DOTNET_BUNDLE_EXTRACT_BASE_DIR=str(install / 'dotnet-extraction'),
         DOTNET_MULTILEVEL_LOOKUP='0', PATH=str(Path(os.environ['WINDIR']) / 'System32'))
 
-    def launch(mode):
-        receipt_path = install / f'process-{mode}.json'
-        request = install / f'request-{mode}.json'
+    def launch(mode, *, label=None):
+        label = mode if label is None else label
+        receipt_path = install / f'process-{label}.json'
+        request = install / f'request-{label}.json'
         payload = dict(archive=str(target), version=new['version'],
             receipt=str(receipt_path), scenario=mode)
         if layered is not None:
@@ -111,7 +116,7 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
                                   '--verify-update', str(request)], cwd=install, env=environment,
                                  timeout=180)
         allowed_exit_codes = (0, 1) if mode == 'old_exit_failure' else (0,)
-        assert process.returncode in allowed_exit_codes, (mode, process.returncode, receipt_path)
+        assert process.returncode in allowed_exit_codes, (case, mode, process.returncode, receipt_path)
         return receipt_path
 
     def require_result(receipt_path, outcome, expected):
@@ -125,27 +130,36 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
         return receipt
 
     if scenario == 'interrupted':
-        marker = Path(str(launch(scenario)) + '.interrupted')
+        start_receipt = launch(scenario)
+        marker = Path(str(start_receipt) + '.interrupted')
         interrupted = read_receipt(marker)
         wait_for_exit(interrupted['helper_pid'])
         wait_for_exit(interrupted['candidate_pid'])
         assert not (versions.parent / 'selection.json').exists()
-        receipts = {scenario: interrupted,
-                    'interrupted_relaunch': require_result(launch('relaunch'), 'selected', old)}
+        receipts = {case: interrupted,
+                    case + '_relaunch': require_result(launch('relaunch'), 'selected', old)}
     else:
         outcome = {'success': 'updated', 'failure': 'rolled_back', 'tampered': 'rejected',
                    'old_exit_failure': 'rolled_back'}[scenario]
         expected = new if scenario == 'success' else old
-        receipts = {scenario: require_result(launch(scenario), outcome, expected)}
+        start_receipt = launch(scenario)
+        receipts = {case: require_result(start_receipt, outcome, expected)}
         if scenario == 'success':
-            receipts['relaunch'] = require_result(launch('relaunch'), 'selected', new)
+            receipts[case + '_relaunch'] = require_result(launch('relaunch'), 'selected', new)
+    if expected_downloads is not None:
+        transfers = read_receipt(start_receipt.with_suffix('.downloads.json'))
+        assert transfers == expected_downloads, (case, transfers, expected_downloads)
+        receipts[case]['downloads'] = transfers
     assert LayoutStore(state / 'layout.json').load().layout.theme == 'babel'
     assert ConnectionConfigStore(state / 'connection.json').load().config == connection
     assert {path.name: path.read_bytes() for path in (state / 'history').glob('*.json')} == history
     assert capture.read_bytes() == capture_record
     assert json.loads((bundle / 'metadata/release.json').read_text(encoding='utf-8')) == old
     for name, expected_digest in old['files'].items():
-        assert digest(bundle / name) == expected_digest, name
+        if name == damaged_donor:
+            assert (bundle / name).read_bytes() == damaged_content, name
+        else:
+            assert digest(bundle / name) == expected_digest, name
 
     if scenario == 'success':
         metadata = staged / 'metadata/release.json'
@@ -153,6 +167,16 @@ def verify_scenario(source, target, old, new, new_digest, output, scenario):
         files = {path.relative_to(staged).as_posix(): digest(path)
                  for path in staged.rglob('*') if path.is_file() and path != metadata}
         assert files == new['files'], sorted(files.keys() ^ new['files'].keys())
+        if check_relaunch_recovery:
+            runtime_version = new['dotnet_runtime_version']
+            hostfxr = staged / 'collector/dotnet/host/fxr' / runtime_version / 'hostfxr.dll'
+            original_hostfxr = hostfxr.read_bytes()
+            try:
+                hostfxr.write_bytes(b'Damaged private .NET host for restart recovery test.\n')
+                recovery = launch('relaunch', label='relaunch-damaged-runtime')
+                receipts['relaunch_damaged_runtime'] = require_result(recovery, 'selected', old)
+            finally:
+                hostfxr.write_bytes(original_hostfxr)
     elif scenario == 'tampered':
         assert not any(versions.glob('*/ArkDPS.Desktop.exe'))
     elif scenario == 'old_exit_failure':
@@ -168,6 +192,10 @@ def main():
     parser.add_argument('source', type=Path)
     parser.add_argument('target', type=Path)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--layered-target', type=Path,
+                        help='incremental asset for target, with measured download and fallback checks')
+    parser.add_argument('--legacy-source', type=Path,
+                        help='published rc.48 archive for upgrade and original-entry relaunch')
     args = parser.parse_args()
     require_admin_test_host()
     source, target, output = args.source.resolve(), args.target.resolve(), args.output.resolve()
@@ -175,13 +203,52 @@ def main():
     old, new = release_manifest(source), release_manifest(target)
     assert old['version'] != new['version']
     target_digest = digest(target)
+    full_transfer = dict(asset_id=FULL_ASSET_ID, bytes=target.stat().st_size)
+    layered = args.layered_target.resolve() if args.layered_target else None
+    layered_digest = None
+    if layered is not None:
+        assert layered.name == update_archive_name(target.name)
+        with zipfile.ZipFile(layered) as package:
+            assert json.loads(package.read('ArkDPS/metadata/release.json')) == new
+        layered_digest = digest(layered)
+        assert 0 < layered.stat().st_size < full_transfer['bytes'], 'layered asset is not smaller than the full asset'
+    primary_transfers = [full_transfer]
+    if layered is not None:
+        primary_transfers = [dict(asset_id=LAYERED_ASSET_ID, bytes=layered.stat().st_size)]
+
     scenarios = {}
-    for scenario in ('success', 'failure', 'tampered', 'interrupted', 'old_exit_failure'):
-        print(f'Verifying hot update scenario {scenario}', flush=True)
-        scenarios.update(verify_scenario(source, target, old, new, target_digest, output, scenario))
+
+    def run(case, scenario, *, archive=source, source_manifest=old, use_layered=False, transfers=None,
+            damaged_donor=None, check_relaunch_recovery=False):
+        print(f'Verifying hot update scenario {case}', flush=True)
+        scenarios.update(verify_scenario(
+            archive, target, source_manifest, new, layered_digest if use_layered else target_digest,
+            output, case, scenario, layered=layered if use_layered else None, expected_downloads=transfers,
+            damaged_donor=damaged_donor, check_relaunch_recovery=check_relaunch_recovery,
+        ))
+
+    run('full_only', 'success', transfers=[full_transfer], check_relaunch_recovery=True)
+    if layered is not None:
+        run('layered', 'success', use_layered=True, transfers=primary_transfers)
+        damaged_donor = 'licenses/' + FRIDA_SERVER_LICENSE_NAME
+        assert damaged_donor in new['update_shared_paths']
+        run('layered_fallback', 'success', use_layered=True,
+            transfers=[*primary_transfers, full_transfer], damaged_donor=damaged_donor)
+    for scenario in ('failure', 'tampered', 'interrupted', 'old_exit_failure'):
+        run(scenario, scenario, use_layered=layered is not None, transfers=primary_transfers)
+
+    legacy = args.legacy_source.resolve() if args.legacy_source else None
+    legacy_evidence = None
+    if legacy is not None:
+        manifest = release_manifest(legacy)
+        assert (manifest['version'], manifest['head']) == (LEGACY_VERSION, LEGACY_HEAD), manifest['head']
+        run('legacy_rc48', 'success', archive=legacy, source_manifest=manifest)
+        legacy_evidence = dict(version=manifest['version'], head=manifest['head'], archive_sha256=digest(legacy))
+
     result = dict(status='PASS_OFFLINE_HOT_UPDATE', source_version=old['version'], source_head=old['head'],
         source_archive_sha256=digest(source), target_version=new['version'], target_head=new['head'],
-        target_archive_sha256=target_digest, shared_capture_log_verified=True, scenarios=scenarios,
+        target_archive_sha256=target_digest, layered_archive_sha256=layered_digest, legacy_source=legacy_evidence,
+        shared_capture_log_verified=True, scenarios=scenarios,
         limitations=['Synthetic data and simulated GitHub responses. No game device is contacted.'])
     (output / 'receipt.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
     print('PASS_OFFLINE_HOT_UPDATE', output)

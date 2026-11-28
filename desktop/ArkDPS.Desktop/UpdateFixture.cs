@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -34,7 +36,7 @@ internal sealed record UpdateFixture(string Archive, ReleaseVersion Version, str
         return new(archive, version, receipt, scenario) { LayeredArchive = layered };
     }
 
-    internal HttpClient CreateReleaseClient() => new(new ReleaseHandler(this));
+    internal ReleaseHandler CreateReleaseHandler() => new(this);
 
     internal static void InterruptIfRequested(string[] arguments, int candidateId)
     {
@@ -71,23 +73,24 @@ internal sealed record UpdateFixture(string Archive, ReleaseVersion Version, str
         File.Move(temporary, receipt, overwrite: true);
     }
 
-    private sealed class ReleaseHandler(UpdateFixture fixture) : HttpMessageHandler
+    internal sealed class ReleaseHandler(UpdateFixture fixture) : HttpMessageHandler
     {
         private const int AssetId = 987654321;
         private const int LayeredAssetId = 987654322;
+        private readonly List<AssetTransfer> downloads = [];
+
+        internal void WriteDownloads() => Write(Path.ChangeExtension(fixture.Receipt, ".downloads.json"),
+            downloads.Select(transfer => new { asset_id = transfer.Id, bytes = transfer.Bytes }));
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             if (request.RequestUri is not { Host: "api.github.com" } uri)
                 return new HttpResponseMessage(HttpStatusCode.NotFound);
             if (uri.AbsolutePath == $"/repos/ChildeRolando/ArkDPS/releases/assets/{AssetId}")
-                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(File.OpenRead(fixture.Archive)) };
-            if (uri.AbsolutePath == $"/repos/ChildeRolando/ArkDPS/releases/assets/{LayeredAssetId}")
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StreamContent(File.OpenRead(
-                        fixture.LayeredArchive ?? throw new InvalidOperationException("fixture has no layered asset"))),
-                };
+                return OpenAsset(AssetId, fixture.Archive);
+            if (uri.AbsolutePath == $"/repos/ChildeRolando/ArkDPS/releases/assets/{LayeredAssetId}" &&
+                fixture.LayeredArchive is { } layeredArchive)
+                return OpenAsset(LayeredAssetId, layeredArchive);
             if (uri.AbsolutePath != "/repos/ChildeRolando/ArkDPS/releases")
                 return new HttpResponseMessage(HttpStatusCode.NotFound);
 
@@ -117,6 +120,32 @@ internal sealed record UpdateFixture(string Archive, ReleaseVersion Version, str
                     },
                 })),
             };
+        }
+
+        private HttpResponseMessage OpenAsset(int id, string path)
+        {
+            var transfer = new AssetTransfer(id);
+            downloads.Add(transfer);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new CountedArchive(path, transfer)),
+            };
+        }
+
+        private sealed record AssetTransfer(int Id)
+        {
+            public long Bytes { get; set; }
+        }
+
+        private sealed class CountedArchive(string path, AssetTransfer transfer)
+            : FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous)
+        {
+            public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken token = default)
+            {
+                int count = await base.ReadAsync(buffer, token).ConfigureAwait(false);
+                transfer.Bytes += count;
+                return count;
+            }
         }
 
         private static async Task<object> LayeredAsset(string path, bool tampered, CancellationToken token)
@@ -154,14 +183,16 @@ public partial class MainWindow
             return;
         }
 
-        using var http = fixture.CreateReleaseClient();
+        var handler = fixture.CreateReleaseHandler();
+        using var http = new HttpClient(handler);
         var updates = new ReleaseUpdates(http);
         availableUpdate = await updates.Check(installed);
         if (availableUpdate is not { CanDownload: true } target || target.Version != fixture.Version)
             throw new InvalidOperationException("Offline update fixture did not resolve the requested release.");
         try
         {
-            await DownloadUpdateAsync(updates, host, target);
+            try { await DownloadUpdateAsync(updates, host, target); }
+            finally { handler.WriteDownloads(); }
         }
         catch (InvalidDataException) when (fixture.Scenario == "tampered" && bridge.CanSend)
         {

@@ -20,7 +20,7 @@ sys.path[:0]=[str(ROOT),str(ROOT/'tests'),str(ROOT/'acceptance')]
 from tools.package_windows import (
     FRIDA_SERVER_LICENSE_NAME, FRIDA_SERVER_LICENSE_SHA256, FRIDA_SERVER_PATH,
     FRIDA_SERVER_SHA256, FRIDA_SERVER_URL, UPDATE_PROTOCOL, archive_name,
-    digest, known_package_root_entry,
+    digest, PACKAGE_ROOT,
 )
 from windows_manifest import require_admin_test_host, verify_executable_manifest
 
@@ -39,8 +39,8 @@ def main():
                 raise ValueError('unsafe archive path')
         archive.extractall(install)
     bundle=install/'ArkDPS'
-    unexpected=[entry.name for entry in bundle.iterdir() if not known_package_root_entry(entry.name)]
-    assert not unexpected, unexpected
+    root_names = {entry.name for entry in bundle.iterdir()}
+    assert root_names == PACKAGE_ROOT, sorted(root_names ^ PACKAGE_ROOT)
     manifest_path = bundle / 'metadata/release.json'
     manifest=json.loads(manifest_path.read_text('utf-8'))
     assert manifest['format'] == 2
@@ -106,7 +106,7 @@ def main():
         version=manifest['version'],framework=manifest['target_framework'],sdk=manifest['dotnet_sdk'],
         checks=['clean ZIP extraction, exact root and complete payload hashes',
             'packaged startup rejects a mismatched worker',
-            'self-contained UI with invalid system DOTNET_ROOT, no dotnet/Python on PATH',
+            'bundled UI runtime with invalid system DOTNET_ROOT, no dotnet/Python on PATH',
             'isolated bundled Python 3.12.10 + Frida 17.26.1',
             'Android server payload and upstream license match the pinned hashes when events are bundled',
             'old v1 layout -> native WPF v3 -> WPF restart restores the same layout',

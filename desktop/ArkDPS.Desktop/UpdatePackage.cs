@@ -7,7 +7,6 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace ArkDPS.Desktop;
 
@@ -20,7 +19,9 @@ internal static class UpdatePackage
     private const string Manifest = "metadata/release.json";
     private const string Worker = "collector/desktop_bridge.py";
     private const string Executable = "ArkDPS.Desktop.exe";
+    private const string PrivateRuntime = "collector/dotnet/";
     private static readonly Regex WindowsFramework = new(@"\Anet[0-9]+\.[0-9]+-windows(?:[0-9]+(?:\.[0-9]+){0,3})?\z");
+    private static readonly Regex RuntimeVersion = new(@"\A[0-9]+\.[0-9]+\.[0-9]+\z");
     private static readonly string[] RequiredFiles =
         [Executable, "README.txt", Worker, "python/python.exe", "licenses/LICENSE"];
     private static readonly HashSet<string> Devices = new(StringComparer.OrdinalIgnoreCase)
@@ -81,14 +82,15 @@ internal static class UpdatePackage
 
     private static void RequirePlainDirectoryIfPresent(string path) => RequirePlainPathIfPresent(path, directory: true);
 
-    private static void RequirePlainPathIfPresent(string path, bool directory)
+    private static bool RequirePlainPathIfPresent(string path, bool directory)
     {
         FileAttributes attributes;
         try { attributes = File.GetAttributes(path); }
-        catch (FileNotFoundException) { return; }
-        catch (DirectoryNotFoundException) { return; }
+        catch (FileNotFoundException) { return false; }
+        catch (DirectoryNotFoundException) { return false; }
         if (IsSpecial(attributes) || attributes.HasFlag(FileAttributes.Directory) != directory)
             throw new InvalidDataException("更新目录包含不安全的文件或目录。");
+        return true;
     }
 
     private static bool IsSpecial(FileAttributes attributes) =>
@@ -154,155 +156,64 @@ internal static class UpdatePackage
         return path;
     }
 
-    /// <summary>Resolve a layered update bundle into a complete package by
-    /// sourcing the manifest-declared shared paths from the verified installed
-    /// bundle (copies that share storage where links are allowed). Every
-    /// donated file is re-hashed against the update manifest, so a damaged or
-    /// tampered donor fails here and the caller falls back to the full ZIP.
-    /// The staged result is byte-equivalent to a full-package extract. A
-    /// manifest without a shared-layer declaration is already complete.</summary>
-    internal static void RestoreSharedLayer(string extracted, string? installed, ReleaseUpdate update,
-        string archive, string staging, Func<ReleaseVersion, FullReleaseAsset, string,
-            IProgress<UpdateProgress>?, CancellationToken, Task> downloadFull,
-        IProgress<UpdateProgress>? progress, CancellationToken token)
+    internal static bool TryRestoreSharedLayer(string extracted, string? installed, ReleaseVersion version,
+        CancellationToken token)
     {
-        string manifestPath = Path.Combine(extracted, Manifest);
-        byte[] manifestBytes = File.ReadAllBytes(manifestPath);
-        Dictionary<string, string> hashes;
-        HashSet<string> sharedPaths;
-        string executableName;
-        using (var document = JsonDocument.Parse(manifestBytes))
+        byte[] manifestBytes = ReadManifest(extracted);
+        using var document = JsonDocument.Parse(manifestBytes);
+        JsonElement root = document.RootElement;
+        JsonElement declared = root.Get("update_shared_paths");
+        if (declared.ValueKind != JsonValueKind.Array || declared.GetArrayLength() == 0 ||
+            root.Text("update_executable") != Executable)
+            throw new InvalidDataException("更新包清单缺少共享层声明。");
+        var appFiles = ReadManifestFiles(root, version, token, out _);
+        var sharedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var path in declared.EnumerateArray())
         {
-            JsonElement root = document.RootElement;
-            if (root.Get("update_shared_paths").ValueKind != JsonValueKind.Array)
-                return; // A complete-package manifest needs no restoration.
-            if (root.Text("update_executable") != Executable)
-                throw new InvalidDataException("更新包清单缺少共享层声明。");
-            executableName = Executable;
-            hashes = ManifestFiles(root);
-            sharedPaths = [];
-            foreach (var path in root.Get("update_shared_paths").EnumerateArray())
+            token.ThrowIfCancellationRequested();
+            if (path.ValueKind != JsonValueKind.String || path.GetString() is not { } relative ||
+                !IsSharedPath(relative) || !appFiles.Remove(relative, out string? hash))
+                throw new InvalidDataException("更新包清单包含无效的共享层路径。");
+            sharedFiles.Add(relative, hash);
+        }
+
+        // Validate the downloaded layer before attempting a fallback for the local donation.
+        long expanded = VerifyBundleFiles(extracted, appFiles, manifestBytes.LongLength, token);
+        if (installed == null) return false;
+        try
+        {
+            var donorDirectories = CheckBundleRoot(installed);
+            foreach (var (relative, hash) in sharedFiles)
             {
-                if (path.ValueKind != JsonValueKind.String || sharedPaths.Count >= MaximumFiles ||
-                    !sharedPaths.Add(path.GetString()!))
-                    throw new InvalidDataException("更新包清单包含无效的共享层路径。");
-            }
-        }
-
-        string? donor = installed is { } source &&
-            DonorSupports(source, extracted, sharedPaths, hashes, executableName, token) ? source : null;
-        if (donor == null && update.Full is { IsValid: true } full)
-        {
-            token.ThrowIfCancellationRequested();
-            Directory.Delete(extracted, recursive: true);
-            File.Delete(archive);
-            string fullArchive = Path.Combine(staging, "download-full.zip");
-            downloadFull(update.Version, full, fullArchive, progress, token)
-                .ConfigureAwait(false).GetAwaiter().GetResult();
-            string repaired = Path.Combine(staging, "bundle-full");
-            Extract(fullArchive, repaired, token);
-            VerifyDirectory(repaired, update.Version, token);
-            Directory.Move(repaired, extracted);
-            return;
-        }
-        if (donor == null)
-            throw new UpdateRequiresManualDownloadException(
-                "此更新需要共享运行时层，但本机没有可复用的完整版本。请从发行页手动下载。");
-
-        foreach (string relative in sharedPaths)
-        {
-            token.ThrowIfCancellationRequested();
-            if (!hashes.TryGetValue(relative, out string? expected) || IsUnsafeSharedPath(relative))
-                throw new InvalidDataException("更新包清单声明了不允许共享的路径：" + relative);
-            string target = Path.Combine(extracted, relative);
-            string origin = Path.Combine(donor, relative);
-            RequirePlainDirectoryIfPresent(Path.GetDirectoryName(target)!);
-            RequirePlainFileIfPresent(origin);
-            using (var stream = File.OpenRead(origin))
-                RequireHash(stream, expected);
-            Donate(origin, target);
-        }
-        progress?.Report(new(update.Size, update.Size));
-    }
-
-    private static Dictionary<string, string> ManifestFiles(JsonElement root)
-    {
-        var files = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var file in root.Get("files").EnumerateObject())
-            if (file.Value.ValueKind == JsonValueKind.String) files.Add(file.Name, file.Value.GetString()!);
-        return files;
-    }
-
-    /// <summary>Worker code and event payloads always ship in the update ZIP;
-    /// only the pinned .NET runtime at the bundle root, third-party runtimes
-    /// and content data may be reused from the installed bundle.</summary>
-    private static bool IsUnsafeSharedPath(string relative)
-    {
-        if (relative.Contains("..", StringComparison.Ordinal) ||
-            relative.EndsWith(".py", StringComparison.OrdinalIgnoreCase) ||
-            relative.EndsWith(".js", StringComparison.OrdinalIgnoreCase)) return true;
-        if (!relative.Contains('/'))
-        {
-            // Root entries: the folder publish's runtime files only. The app
-            // layer (host, README, app DLL) is never a shared path.
-            return !(relative.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
-                relative.EndsWith(".deps.json", StringComparison.OrdinalIgnoreCase) ||
-                relative.EndsWith(".runtimeconfig.json", StringComparison.OrdinalIgnoreCase) ||
-                relative is "createdump.exe");
-        }
-        if (relative.StartsWith("collector/", StringComparison.OrdinalIgnoreCase))
-            return !relative.StartsWith("collector/assets/", StringComparison.OrdinalIgnoreCase) &&
-                   !relative.StartsWith("collector/vendor/", StringComparison.OrdinalIgnoreCase) &&
-                   !relative.StartsWith("collector/frida-server/", StringComparison.OrdinalIgnoreCase);
-        return !relative.StartsWith("python/", StringComparison.OrdinalIgnoreCase) &&
-               !relative.StartsWith("licenses/", StringComparison.OrdinalIgnoreCase);
-    }
-
-    /// <summary>A donor must be a plain directory already holding every shared
-    /// file at exactly the hash the update manifest requires. Anything else
-    /// falls back to the full ZIP rather than reusing a damaged install.</summary>
-    private static bool DonorSupports(string donor, string extracted, HashSet<string> sharedPaths,
-        Dictionary<string, string> hashes, string executableName, CancellationToken token)
-    {
-        RequirePlainDirectoryIfPresent(donor);
-        if (!Directory.Exists(donor)) return false;
-        foreach (string relative in sharedPaths)
-        {
-            token.ThrowIfCancellationRequested();
-            if (!hashes.ContainsKey(relative) || IsUnsafeSharedPath(relative)) return false;
-            if (relative == executableName && File.Exists(Path.Combine(extracted, executableName)))
-                return false;
-            string origin = Path.Combine(donor, relative);
-            RequirePlainDirectoryIfPresent(Path.GetDirectoryName(origin)!);
-            RequirePlainFileIfPresent(origin);
-            if (!File.Exists(origin)) return false;
-            try
-            {
+                token.ThrowIfCancellationRequested();
+                string origin = PackagePath(installed, relative);
+                RequirePlainParents(origin, donorDirectories);
+                RequirePlainFileIfPresent(origin);
                 using var stream = File.OpenRead(origin);
-                RequireHash(stream, hashes[relative]);
+                expanded = CheckSize(relative, stream.Length, expanded);
+                RequireHash(stream, hash);
+                string target = PackagePath(extracted, relative);
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(origin, target);
             }
-            catch (Exception error) when (error is InvalidDataException or IOException)
-            {
-                return false;
-            }
+        }
+        catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            token.ThrowIfCancellationRequested();
+            return false;
         }
         return true;
     }
 
-    private static void Donate(string source, string target)
-    {
-        try
-        {
-            // On NTFS this shares storage with the installed bundle until one
-            // side is replaced; any volume without hard-link support still
-            // receives a plain copy through the same call.
-            File.Copy(source, target);
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            throw new InvalidDataException("无法复用本机共享层文件。", error);
-        }
-    }
+    // Match the packager's shared roots. Third-party Python modules in python/
+    // are runtime files; collector worker and probe code stay in the update ZIP.
+    private static bool IsSharedPath(string relative) =>
+        relative.StartsWith("python/", StringComparison.Ordinal) ||
+        relative.StartsWith(PrivateRuntime, StringComparison.Ordinal) ||
+        relative.StartsWith("collector/assets/", StringComparison.Ordinal) ||
+        relative.StartsWith("collector/vendor/frida/", StringComparison.Ordinal) ||
+        relative.StartsWith("collector/frida-server/", StringComparison.Ordinal) ||
+        relative == "licenses/frida-server-COPYING.txt";
 
     private static void CheckPortablePath(string path)
     {
@@ -313,14 +224,6 @@ internal static class UpdatePackage
                 Devices.Contains(segment.Split('.')[0].TrimEnd(' '))))
             throw new InvalidDataException("更新包包含无效的 Windows 文件路径。");
         if (path is Executable or "README.txt" or Manifest) return;
-        if (segments.Length == 1)
-        {
-            // The folder publish roots the pinned .NET runtime next to the host.
-            if (segments[0].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
-                segments[0].EndsWith(".deps.json", StringComparison.OrdinalIgnoreCase) ||
-                segments[0].EndsWith(".runtimeconfig.json", StringComparison.OrdinalIgnoreCase) ||
-                segments[0] is "createdump.exe" or "ArkDPS.Desktop.dll") return;
-        }
         if (segments.Length < 2 || segments[0] is not ("collector" or "python" or "licenses") ||
             segments[0] == "collector" && segments[1].Equals("runtime", StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("更新包包含不属于便携载荷的路径。");
@@ -338,14 +241,41 @@ internal static class UpdatePackage
 
     private static string VerifyDirectory(string bundle, ReleaseVersion version, CancellationToken token, bool verifyPayload)
     {
+        byte[] manifestBytes = ReadManifest(bundle);
+        using var document = JsonDocument.Parse(manifestBytes);
+        var expectedFiles = ReadManifestFiles(document.RootElement, version, token, out var bootstrapFiles);
+        if (verifyPayload)
+        {
+            VerifyBundleFiles(bundle, expectedFiles, manifestBytes.LongLength, token);
+        }
+        else
+        {
+            RequireRuntimeFile(bundle, Worker);
+            RequireRuntimeFile(bundle, "python/python.exe");
+            string executable = Path.Combine(bundle, Executable);
+            RequirePlainFileIfPresent(executable);
+            using var stream = File.OpenRead(executable);
+            CheckSize(Executable, stream.Length, manifestBytes.LongLength);
+            RequireHash(stream, expectedFiles[Executable]);
+            if (bootstrapFiles != null)
+                VerifyPrivateRuntimeLaunch(bundle, expectedFiles, bootstrapFiles);
+        }
+        return Convert.ToHexStringLower(SHA256.HashData(manifestBytes));
+    }
+
+    private static byte[] ReadManifest(string bundle)
+    {
         RequirePlainDirectoryIfPresent(bundle);
         string manifestPath = Path.Combine(bundle, Manifest);
         RequirePlainDirectoryIfPresent(Path.GetDirectoryName(manifestPath)!);
         RequirePlainFileIfPresent(manifestPath);
         CheckSize(Manifest, new FileInfo(manifestPath).Length, 0);
-        byte[] manifestBytes = File.ReadAllBytes(manifestPath);
-        using var document = JsonDocument.Parse(manifestBytes);
-        JsonElement root = document.RootElement;
+        return File.ReadAllBytes(manifestPath);
+    }
+
+    private static Dictionary<string, string> ReadManifestFiles(JsonElement root, ReleaseVersion version,
+        CancellationToken token, out string[]? bootstrapFiles)
+    {
         if (ReadInteger(root, "update_protocol") != Protocol)
             throw new UpdateRequiresManualDownloadException("此版本需要从发行页手动下载。");
         if (ReadInteger(root, "format") != 2 || ReadInteger(root, "protocol") <= 0 ||
@@ -356,7 +286,6 @@ internal static class UpdatePackage
 
         var expectedFiles = new Dictionary<string, string>(StringComparer.Ordinal);
         var fileNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Manifest };
-        var expectedDirectories = new HashSet<string>(StringComparer.Ordinal) { "metadata" };
         foreach (var file in root.Get("files").EnumerateObject())
         {
             token.ThrowIfCancellationRequested();
@@ -365,31 +294,88 @@ internal static class UpdatePackage
                 file.Value.ValueKind != JsonValueKind.String || !ReleaseUpdate.IsSha256(file.Value.GetString()!))
                 throw new InvalidDataException("更新包清单包含重复路径或无效的文件摘要。");
             expectedFiles.Add(file.Name, file.Value.GetString()!);
-            AddParentDirectories(file.Name, expectedDirectories);
         }
         if (RequiredFiles.Any(file => !expectedFiles.ContainsKey(file)) ||
             !string.Equals(expectedFiles[Worker], root.Text("collector_sha256"), StringComparison.OrdinalIgnoreCase))
             throw new InvalidDataException("更新包缺少必需文件或采集器摘要不一致。");
 
-        if (verifyPayload)
+        bootstrapFiles = PrivateRuntimeBootstrapFiles(root);
+        if (bootstrapFiles != null && bootstrapFiles.Any(file => !expectedFiles.ContainsKey(file)))
+            throw new InvalidDataException("更新包缺少内置 .NET 运行时的启动文件。");
+        return expectedFiles;
+    }
+
+    private static string[]? PrivateRuntimeBootstrapFiles(JsonElement root)
+    {
+        JsonElement runtime = root.Get("dotnet_runtime_version");
+        if (runtime.ValueKind == JsonValueKind.Undefined) return null;
+        if (runtime.ValueKind != JsonValueKind.String || runtime.GetString() is not { } version ||
+            !RuntimeVersion.IsMatch(version))
+            throw new InvalidDataException("更新包的内置 .NET 运行时版本无效。");
+
+        string core = PrivateRuntime + $"shared/Microsoft.NETCore.App/{version}/";
+        string wpf = PrivateRuntime + $"shared/Microsoft.WindowsDesktop.App/{version}/";
+        return
+        [
+            PrivateRuntime + $"host/fxr/{version}/hostfxr.dll",
+            core + "hostpolicy.dll",
+            core + "coreclr.dll",
+            core + "System.Private.CoreLib.dll",
+            core + "Microsoft.NETCore.App.deps.json",
+            core + "Microsoft.NETCore.App.runtimeconfig.json",
+            wpf + "PresentationFramework.dll",
+            wpf + "Microsoft.WindowsDesktop.App.deps.json",
+            wpf + "Microsoft.WindowsDesktop.App.runtimeconfig.json",
+        ];
+    }
+
+    private static void VerifyPrivateRuntimeLaunch(string bundle, Dictionary<string, string> expectedFiles,
+        string[] bootstrapFiles)
+    {
+        var bootstrap = bootstrapFiles.ToHashSet(StringComparer.Ordinal);
+        var directories = CheckBundleRoot(bundle);
+        foreach (var (relative, hash) in expectedFiles)
         {
-            long expanded = manifestBytes.LongLength;
-            VerifyFiles(bundle, bundle, expectedFiles, expectedDirectories, ref expanded, token);
-            if (expectedFiles.Count != 0 || expectedDirectories.Count != 0)
-                throw new InvalidDataException("更新包缺少清单中列出的文件。");
+            if (!relative.StartsWith(PrivateRuntime, StringComparison.Ordinal)) continue;
+            string path = PackagePath(bundle, relative);
+            RequirePlainParents(path, directories);
+            if (!RequirePlainPathIfPresent(path, directory: false))
+                throw new FileNotFoundException("更新包缺少内置 .NET 运行时文件。", path);
+            if (bootstrap.Contains(relative))
+            {
+                using var stream = File.OpenRead(path);
+                CheckSize(relative, stream.Length, 0);
+                RequireHash(stream, hash);
+            }
         }
-        else
-        {
-            // Regular launches check the receipt and executable without rehashing both runtimes.
-            RequireRuntimeFile(bundle, Worker);
-            RequireRuntimeFile(bundle, "python/python.exe");
-            string executable = Path.Combine(bundle, Executable);
-            RequirePlainFileIfPresent(executable);
-            using var stream = File.OpenRead(executable);
-            CheckSize(Executable, stream.Length, manifestBytes.LongLength);
-            RequireHash(stream, expectedFiles[Executable]);
-        }
-        return Convert.ToHexStringLower(SHA256.HashData(manifestBytes));
+    }
+
+    private static string PackagePath(string bundle, string relative) =>
+        Path.Combine(bundle, relative.Replace('/', Path.DirectorySeparatorChar));
+
+    private static HashSet<string> CheckBundleRoot(string bundle)
+    {
+        RequirePlainDirectoryIfPresent(bundle);
+        return new HashSet<string>(StringComparer.OrdinalIgnoreCase) { bundle };
+    }
+
+    private static void RequirePlainParents(string path, HashSet<string> checkedDirectories)
+    {
+        for (string? parent = Path.GetDirectoryName(path);
+             parent != null && checkedDirectories.Add(parent); parent = Path.GetDirectoryName(parent))
+            RequirePlainDirectoryIfPresent(parent);
+    }
+
+    private static long VerifyBundleFiles(string bundle, Dictionary<string, string> expectedFiles, long expanded,
+        CancellationToken token)
+    {
+        var expectedDirectories = new HashSet<string>(StringComparer.Ordinal) { "metadata" };
+        foreach (string relative in expectedFiles.Keys)
+            AddParentDirectories(relative, expectedDirectories);
+        VerifyFiles(bundle, bundle, expectedFiles, expectedDirectories, ref expanded, token);
+        if (expectedFiles.Count != 0 || expectedDirectories.Count != 0)
+            throw new InvalidDataException("更新包缺少清单中列出的文件。");
+        return expanded;
     }
 
     private static int ReadInteger(JsonElement root, string property) =>

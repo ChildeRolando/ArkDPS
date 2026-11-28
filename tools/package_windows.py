@@ -32,26 +32,12 @@ UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_DIRECTORIES = {'collector', 'python', 'metadata', 'licenses'}
 ExecutableName = 'ArkDPS.Desktop.exe'
-# Stub dotnet builds (tests) emit only the host, so the exact root stays small;
-# real publishes add the self-contained runtime files captured during build().
 PACKAGE_ROOT = {ExecutableName, 'README.txt', *PACKAGE_DIRECTORIES}
-# Self-contained publish roots hold runtime payloads next to the host: the
-# exactly known app files plus anything dotnet emits (.dll, createdump.exe).
-RUNTIME_ROOT_SUFFIXES = ('.deps.json', '.runtimeconfig.json')
-RUNTIME_ROOT_NAMES = {'createdump.exe'}
-
-
-def known_package_root_entry(name):
-    return (name == ExecutableName or name == 'README.txt' or name in PACKAGE_DIRECTORIES or
-            name.endswith('.dll') or name in RUNTIME_ROOT_NAMES or
-            name.startswith('ArkDPS.Desktop.') and name.endswith(RUNTIME_ROOT_SUFFIXES))
+DOTNET_BUNDLE_PATH = 'collector/dotnet'
+DOTNET_FRAMEWORKS = ('Microsoft.NETCore.App', 'Microsoft.WindowsDesktop.App')
 SHARED_PREFIXES = ('python/', 'collector/vendor/frida/', 'collector/frida-server/',
-                   'collector/assets/')
+                   'collector/assets/', DOTNET_BUNDLE_PATH + '/')
 UPDATE_ARCHIVE_SUFFIX = '-update.zip'
-# Root-level files that change with every release; every other root entry is
-# the pinned .NET runtime layer (byte-identical while global.json pins the SDK).
-APP_ROOT_FILES = {ExecutableName, 'README.txt', 'ArkDPS.Desktop.dll',
-                  'ArkDPS.Desktop.deps.json', 'ArkDPS.Desktop.runtimeconfig.json'}
 PYTHON_URL = 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip'
 PYTHON_SHA256 = '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3'
 FRIDA_VERSION = '17.26.1'
@@ -140,10 +126,8 @@ def update_archive_name(full_archive_name):
 def shared_update_path(name):
     """Whether a manifest path may be sourced from the installed bundle instead
     of the update ZIP: the pinned Python runtime, Frida client payloads, the
-    Android server license, and root-level .NET runtime files. Worker code and
+    Android server license, and the private .NET runtime. Worker code and
     the WPF app layer always ship in the ZIP."""
-    if '/' not in name:
-        return name not in APP_ROOT_FILES
     return name.startswith(SHARED_PREFIXES) or name in SHARED_EXTRA
 
 
@@ -152,20 +136,26 @@ def layered_manifest_paths(manifest, update_members):
 
     `update_members` are the payload paths present in the update ZIP (without
     the ArkDPS/ prefix). Returns every manifest path with its source layer.
-    Raises ValueError when a path is missing from both layers or ships in
-    both - the updater refuses such a package before downloading anything.
+    Raises ValueError if the archive and shared paths do not partition the full
+    manifest according to the package policy.
     """
-    shared = set(manifest.get('update_shared_paths') or ())
-    if update_members - set(manifest['files']) - {'metadata/release.json'}:
+    declared = manifest['update_shared_paths']
+    shared = set(declared)
+    if len(shared) != len(declared):
+        raise ValueError('Duplicate path in update_shared_paths')
+    files = set(manifest['files'])
+    unexpected_shared = shared - {name for name in files if shared_update_path(name)}
+    if unexpected_shared:
+        raise ValueError('Unexpected path in update_shared_paths: ' + ', '.join(sorted(unexpected_shared)))
+    if update_members - files:
         raise ValueError('Update ZIP contains paths outside the manifest: '
-                         + ', '.join(sorted(update_members - set(manifest['files']))))
+                         + ', '.join(sorted(update_members - files)))
     resolved = {}
     for name in manifest['files']:
-        in_update = name in update_members or name == 'metadata/release.json'
         if shared_update_path(name):
             if name not in shared:
                 raise ValueError('Shared path is missing from update_shared_paths: ' + name)
-            if in_update:
+            if name in update_members:
                 raise ValueError('Shared path also shipped in the update ZIP: ' + name)
             resolved[name] = 'installed'
         else:
@@ -175,10 +165,39 @@ def layered_manifest_paths(manifest, update_members):
     return resolved
 
 
-def update_archive_name(full_archive_name):
-    """Name of the layered update ZIP derived from the full package name."""
-    assert full_archive_name.endswith('.zip')
-    return full_archive_name[:-len('.zip')] + UPDATE_ARCHIVE_SUFFIX
+def sdk_runtime_version(dotnet_root, sdk_version):
+    """Use the runtime that ships with the SDK selected by global.json."""
+    config = dotnet_root / 'sdk' / sdk_version / 'dotnet.runtimeconfig.json'
+    framework = json.loads(config.read_text('utf-8'))['runtimeOptions']['framework']
+    version = framework['version']
+    if framework['name'] != DOTNET_FRAMEWORKS[0] or not re.fullmatch(r'10\.0\.[0-9]+', version):
+        raise ValueError('Selected SDK does not use a released .NET 10 runtime: ' + str(config))
+    return version
+
+
+def stage_dotnet_runtime(dotnet_root, destination, version):
+    paths = (Path('host/fxr') / version,
+             *(Path('shared') / name / version for name in DOTNET_FRAMEWORKS))
+    for path in paths:
+        shutil.copytree(dotnet_root / path, destination / path)
+
+
+def build_update_archive(path, bundle, manifest):
+    metadata_path = 'metadata/release.json'
+    prefix = 'ArkDPS/'
+    shared = set(manifest['update_shared_paths'])
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as stream:
+        stream.write(bundle / metadata_path, prefix + metadata_path)
+        for name in sorted(manifest['files']):
+            if name not in shared:
+                stream.write(bundle / name, prefix + name)
+    with zipfile.ZipFile(path) as stream:
+        names = stream.namelist()
+        metadata_name = prefix + metadata_path
+        if len(names) != len(set(names)) or metadata_name not in names or any(
+                not name.startswith(prefix) for name in names):
+            raise ValueError('Update ZIP contains duplicate or invalid entries')
+        layered_manifest_paths(manifest, {name[len(prefix):] for name in names if name != metadata_name})
 
 
 def assert_no_frida_payload(names):
@@ -524,6 +543,9 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     dotnet_executable = os.environ.get('ARKDPS_DOTNET') or shutil.which('dotnet')
     if not dotnet_executable:
         raise RuntimeError('.NET 10 SDK required; set ARKDPS_DOTNET for a task-local SDK')
+    dotnet_root = Path(dotnet_executable).resolve().parent
+    dotnet_sdk = subprocess.check_output([dotnet_executable, '--version'], cwd=ROOT, text=True).strip()
+    dotnet_version = sdk_runtime_version(dotnet_root, dotnet_sdk)
     desktop_variant = []
     if internal_backend:
         desktop_variant.append('-p:ArkDpsInternalEventCandidate=true')
@@ -532,11 +554,11 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     elif with_native_hooks:
         desktop_variant.append('-p:ArkDpsNativeHookCandidate=true')
     subprocess.run([dotnet_executable, 'publish', str(ROOT / 'desktop/ArkDPS.Desktop/ArkDPS.Desktop.csproj'),
-        '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--nologo',
-        '-p:ContinuousIntegrationBuild=true', '-p:PublishSingleFile=false',
+        '-c', 'Release', '-r', 'win-x64', '--self-contained', 'false', '--nologo',
+        '-p:ContinuousIntegrationBuild=true', '-p:PublishSingleFile=true',
         '-p:PublishTrimmed=false', '-p:DebugType=none',
-        # English-only: drop satellite language folders no user surface reads.
-        '-p:SatelliteResourceLanguages=en', *desktop_variant,
+        '-p:AppHostDotNetSearch=AppRelative', '-p:AppHostRelativeDotNet=' + DOTNET_BUNDLE_PATH,
+        '-p:RuntimeFrameworkVersion=' + dotnet_version, '-p:RollForward=Disable', *desktop_variant,
         '--artifacts-path', str(build_artifacts), '-o', str(bundle)],
         cwd=ROOT, check=True)
     verify_executable_manifest(bundle / 'ArkDPS.Desktop.exe', internal_backend=internal_backend)
@@ -548,6 +570,7 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         unpack(frida_wheel, bundle / 'python/Lib/site-packages')
     collector = bundle / 'collector'
     collector.mkdir()
+    stage_dotnet_runtime(dotnet_root, bundle / DOTNET_BUNDLE_PATH, dotnet_version)
     for name in BACKEND:
         shutil.copy2(ROOT / name, collector / name)
     for name in ('assets', 'vendor', 'native_pc'):
@@ -600,11 +623,10 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
         shutil.copy2(frida_server_license, notices / FRIDA_SERVER_LICENSE_NAME)
     if (bundle / 'Assets').is_dir():
         (bundle / 'Assets').rename(notices / 'Assets')
-    dotnet = Path(dotnet_executable).parent
     for name in ('LICENSE.txt', 'ThirdPartyNotices.txt'):
-        if not (dotnet/name).is_file():
+        if not (dotnet_root/name).is_file():
             raise FileNotFoundError('Required .NET redistribution notice missing: '+name)
-        shutil.copy2(dotnet/name, notices/('dotnet-'+name))
+        shutil.copy2(dotnet_root/name, notices/('dotnet-'+name))
     # Python LICENSE.txt and the Frida client's dist-info/licenses/COPYING stay in their archives.
     metadata = bundle / 'metadata'
     metadata.mkdir()
@@ -659,13 +681,12 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
     if with_native_hooks:
         readme = native_hooks_readme(version)
     (bundle / 'README.txt').write_text(readme, encoding='utf-8-sig')
-    if {entry.name for entry in bundle.iterdir()} != PACKAGE_ROOT:
-        unexpected = sorted(entry.name for entry in bundle.iterdir()
-                            if not known_package_root_entry(entry.name))
-        if unexpected:
-            raise RuntimeError('Unexpected files in portable package root: ' + ', '.join(unexpected))
+    root_names = {entry.name for entry in bundle.iterdir()}
+    if root_names != PACKAGE_ROOT:
+        raise RuntimeError('Portable package root differs from the update protocol layout: '
+                           + ', '.join(sorted(root_names ^ PACKAGE_ROOT)))
     manifest = dict(format=2, version=version, protocol=1, target_framework='net10.0-windows',
-        dotnet_sdk=subprocess.check_output([dotnet_executable,'--version'],cwd=ROOT,text=True).strip(),
+        dotnet_sdk=dotnet_sdk, dotnet_runtime_version=dotnet_version,
         dotnet_runtime=json.loads(runtime_config.read_text('utf-8')), head=head,
         collector_sha256=digest(collector/'desktop_bridge.py'), python='3.12.10',
         python_source=PYTHON_URL, python_archive_sha256=PYTHON_SHA256,
@@ -690,10 +711,8 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
             assert_no_frida_payload(manifest['files'])
     assert_no_tk_files(manifest['files'])
     if with_events and not with_native_events:
-        # Layered updates: paths the update ZIP omits because the updater
-        # sources them from the verified installed bundle. Every listed file
-        # must exist in the full manifest; the split is proven by rebuilding
-        # the full file map from update ZIP + shared paths in verify_layered.
+        # The update ZIP omits these paths. The updater verifies them against
+        # the complete manifest before copying them from the installation.
         manifest['update_shared_paths'] = sorted(
             name for name in manifest['files'] if shared_update_path(name))
         manifest['update_executable'] = ExecutableName
@@ -743,25 +762,19 @@ def build(output, *, version=DEFAULT_VERSION, python_zip=None, frida_wheel=None,
                         raw_evidence_directory=inputs.name)
         (output / (archive.name + '.acceptance.json')).write_text(
             json.dumps(evidence, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    staged_archive.replace(archive)
-    (output/(archive.name+'.sha256')).write_text(sha256+'  '+archive.name+'\n',encoding='ascii')
     result = dict(bundle=str(bundle), archive=str(archive), sha256=sha256)
     if 'update_shared_paths' in manifest:
         update_archive = output / update_archive_name(archive.name)
-        with zipfile.ZipFile(update_archive,'w',zipfile.ZIP_DEFLATED,compresslevel=6) as stream:
-            # metadata/release.json lets the updater verify the exact target and
-            # run the complete file manifest after restoring the shared layer.
-            stream.write(metadata/'release.json', 'ArkDPS/metadata/release.json')
-            for name in sorted(manifest['files']):
-                if shared_update_path(name):
-                    continue
-                path = bundle / name
-                if not path.is_file():
-                    raise RuntimeError('Update payload missing from build: ' + name)
-                stream.write(path, 'ArkDPS/' + name)
-        update_sha256 = digest(update_archive)
+        staged_update = inputs / update_archive.name
+        build_update_archive(staged_update, bundle, manifest)
+        update_sha256 = digest(staged_update)
+        staged_update.replace(update_archive)
+        (output / (update_archive.name + '.sha256')).write_text(
+            update_sha256 + '  ' + update_archive.name + '\n', encoding='ascii')
         result['update_archive'] = str(update_archive)
         result['update_sha256'] = update_sha256
+    staged_archive.replace(archive)
+    (output/(archive.name+'.sha256')).write_text(sha256+'  '+archive.name+'\n',encoding='ascii')
     print(json.dumps(result,ensure_ascii=False))
     return bundle
 

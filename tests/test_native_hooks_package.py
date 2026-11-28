@@ -34,7 +34,8 @@ def test_archive_variant_preserves_existing_names():
 
 def layered_files():
     return {
-        'ArkDPS.Desktop.exe': 'a' * 64, 'ArkDPS.Desktop.dll': 'b' * 64,
+        'ArkDPS.Desktop.exe': 'a' * 64,
+        'collector/dotnet/host/fxr/10.0.0/hostfxr.dll': 'b' * 64,
         'README.txt': 'c' * 64, 'collector/desktop_bridge.py': 'd' * 64,
         'python/python.exe': 'e' * 64, 'python/python312.zip': 'f' * 64,
         'collector/vendor/frida/17/FridaGadget.dll': '0' * 64,
@@ -69,6 +70,9 @@ def test_layered_paths_reject_membership_drift():
     double = dict(manifest, update_shared_paths=manifest['update_shared_paths'])
     with pytest.raises(ValueError, match='also shipped'):
         package.layered_manifest_paths(double, members | {'python/python.exe'})
+    repeated = dict(manifest, update_shared_paths=manifest['update_shared_paths'] + ['python/python.exe'])
+    with pytest.raises(ValueError, match='Duplicate path'):
+        package.layered_manifest_paths(repeated, members)
 
 
 @pytest.mark.parametrize('options', [
@@ -292,6 +296,17 @@ def fake_build_environment(tmp_path, monkeypatch):
     dotnet.mkdir()
     for name in ('dotnet.exe', 'LICENSE.txt', 'ThirdPartyNotices.txt'):
         (dotnet / name).write_text('owned dotnet ' + name)
+    config = dotnet / 'sdk/10.0.100/dotnet.runtimeconfig.json'
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({'runtimeOptions': {'framework': {
+        'name': 'Microsoft.NETCore.App', 'version': '10.0.0',
+    }}}))
+    for name in ('host/fxr/10.0.0/hostfxr.dll',
+                 'shared/Microsoft.NETCore.App/10.0.0/coreclr.dll',
+                 'shared/Microsoft.WindowsDesktop.App/10.0.0/PresentationFramework.dll'):
+        runtime_file = dotnet / name
+        runtime_file.parent.mkdir(parents=True)
+        runtime_file.write_text('owned dotnet ' + name)
     monkeypatch.setenv('ARKDPS_DOTNET', str(dotnet / 'dotnet.exe'))
     gates, inputs, runs, verifications = [], [], [], []
     monkeypatch.setattr(package, 'candidate_head', lambda source: gates.append(source) or HEAD)
@@ -405,9 +420,29 @@ def test_standard_release_ships_both_backends_and_update_protocol(tmp_path, monk
     assert component['scope'] == 'official-pc' and component['experimental'] is False
     assert component['performance_verified'] is False and component['autochess_handoff_verified'] is False
     assert release['update_protocol'] == 1 and release['frida'] == package.FRIDA_VERSION
+    assert release['dotnet_runtime_version'] == '10.0.0'
+    command = env.runs[0][0]
+    assert '-p:PublishSingleFile=true' in command
+    assert '-p:AppHostDotNetSearch=AppRelative' in command
+    assert '-p:AppHostRelativeDotNet=collector/dotnet' in command
+    assert '-p:RuntimeFrameworkVersion=10.0.0' in command
+    assert '-p:RollForward=Disable' in command
     for name in ('frida_runtime.py', 'native_hook_runtime.py', 'native_hook_source.py', 'internal_event_source.py'):
         assert 'collector/native_pc/' + name in release['files']
     assert 'python/Lib/site-packages/frida/__init__.py' in release['files']
+    full_zip = output / package.archive_name(release['version'], True)
+    update_zip = output / package.update_archive_name(full_zip.name)
+    metadata = 'ArkDPS/metadata/release.json'
+    with zipfile.ZipFile(full_zip) as full, zipfile.ZipFile(update_zip) as layered:
+        assert full.read(metadata) == layered.read(metadata)
+        full_members = set(full.namelist())
+        update_members = set(layered.namelist())
+        shared_members = {'ArkDPS/' + path for path in release['update_shared_paths']}
+        assert full_members == update_members | shared_members
+        assert not update_members & shared_members
+        assert 'ArkDPS/python/Lib/site-packages/frida/__init__.py' in shared_members
+        assert 'ArkDPS/collector/dotnet/host/fxr/10.0.0/hostfxr.dll' in shared_members
+        assert 'ArkDPS/ArkDPS.Desktop.exe' in update_members
     assert not any('ArkDpsNativeHookCandidate' in part for part in env.runs[0][0])
     readme = (bundle / 'README.txt').read_text('utf-8-sig')
     assert '检测到环境存在异常' in readme

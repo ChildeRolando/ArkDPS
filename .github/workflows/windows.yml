@@ -42,20 +42,32 @@ jobs:
       - name: Verify WPF portable package
         shell: pwsh
         run: |
-          $zip = (Get-ChildItem runtime/ci-build/ArkDPS-*-win-x64.zip | Where-Object { $_.Name -notlike '*-update.zip' } | Select-Object -First 1).FullName
+          $zip = (Get-ChildItem runtime/ci-build/ArkDPS-*-win-x64.zip).FullName
           python acceptance/verify_wpf_package.py $zip --output runtime/package-validation
+      - name: Fetch and verify the released rc.48 upgrade source
+        shell: pwsh
+        run: |
+          $legacyDir = New-Item -ItemType Directory -Path runtime/ci-update-inputs -Force
+          $legacy = Join-Path $legacyDir.FullName 'ArkDPS-1.0.0-rc.48-win-x64.zip'
+          Invoke-WebRequest -Uri 'https://github.com/ChildeRolando/ArkDPS/releases/download/v1.0.0-rc.48/ArkDPS-1.0.0-rc.48-win-x64.zip' -OutFile $legacy -MaximumRetryCount 2
+          $expected = '4c3c05d9fbbe5b3c787b28ce53724316f573cb562ed1af4d4fa2ff905c6f0bb3'
+          if ((Get-FileHash -LiteralPath $legacy -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'Published rc.48 ZIP does not match the pinned SHA-256.'
+          }
       - name: Verify native hot update and rollback between portable packages
         shell: pwsh
         run: |
-          $base = Get-ChildItem runtime/ci-build/ArkDPS-*-win-x64.zip | Where-Object { $_.Name -notlike '*-update.zip' } | Select-Object -First 1
+          $base = Get-ChildItem runtime/ci-build/ArkDPS-*-win-x64.zip
+          $legacy = Get-Item runtime/ci-update-inputs/ArkDPS-1.0.0-rc.48-win-x64.zip
           $pythonZip = (Get-ChildItem runtime/ci-build/inputs-*/python.zip).FullName
           $fridaWheel = (Get-ChildItem runtime/ci-build/inputs-*/frida-*.whl).FullName
           $fridaServer = (Get-ChildItem runtime/ci-build/inputs-*/frida-server-*.xz).FullName
           $fridaServerLicense = (Get-ChildItem runtime/ci-build/inputs-*/frida-server-COPYING.txt).FullName
           python tools/package_windows.py --output runtime/ci-update-target --version 999.0.0 --python-zip $pythonZip --frida-wheel $fridaWheel --frida-server $fridaServer --frida-server-license $fridaServerLicense --native-hook-cache runtime/native-hook-cache
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $target = Get-ChildItem runtime/ci-update-target/ArkDPS-*-win-x64.zip | Where-Object { $_.Name -notlike '*-update.zip' } | Select-Object -First 1
-          python acceptance/verify_hot_update.py $base.FullName $target.FullName --output runtime/update-validation
+          $target = Get-ChildItem runtime/ci-update-target/ArkDPS-*-win-x64.zip
+          $layered = Get-ChildItem runtime/ci-update-target/ArkDPS-*-win-x64-update.zip
+          python acceptance/verify_hot_update.py $base.FullName $target.FullName --layered-target $layered.FullName --legacy-source $legacy.FullName --output runtime/update-validation
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -64,7 +76,8 @@ jobs:
             runtime/ci-build/*.zip
             runtime/ci-build/*.sha256
             runtime/ci-build/*.acceptance.json
-            runtime/ci-build/ArkDPS-win-x64-*/metadata/release.json            runtime/wpf-source/
+            runtime/ci-build/ArkDPS-win-x64-*/metadata/release.json
+            runtime/wpf-source/
             runtime/package-validation/
             runtime/update-validation/receipt.json
             runtime/update-validation/*/process-*.json

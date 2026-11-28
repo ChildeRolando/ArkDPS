@@ -56,10 +56,8 @@ internal sealed record ReleaseUpdate(ReleaseVersion Version, long AssetId, long 
     internal static string LayeredAssetName(ReleaseVersion version) =>
         AssetName(version)[..^4] + LayeredAssetSuffix;
 
-    /// <summary>Complete-package asset for the same release, used when the
-    /// installed bundle cannot supply the shared layer. Null when GitHub only
-    /// offers the full ZIP.</summary>
-    internal FullReleaseAsset? Full { get; init; }
+    internal bool IsLayered { get; init; }
+    internal ReleaseAsset? Full { get; init; }
 
     internal static bool IsSha256(string text)
     {
@@ -70,10 +68,10 @@ internal sealed record ReleaseUpdate(ReleaseVersion Version, long AssetId, long 
     }
 }
 
-internal sealed record FullReleaseAsset(long AssetId, long Size, string Sha256)
+internal sealed record ReleaseAsset(long AssetId, long Size, string? Sha256)
 {
     public bool IsValid => AssetId > 0 && Size is > 0 and <= ReleaseUpdate.MaximumDownloadSize &&
-        ReleaseUpdate.IsSha256(Sha256);
+        Sha256 is { } sha256 && ReleaseUpdate.IsSha256(sha256);
 }
 
 internal sealed record StagedUpdate(ReleaseUpdate Release, string Directory);
@@ -126,37 +124,31 @@ internal sealed class ReleaseUpdates(HttpClient http)
                     continue;
                 var assets = release.Get("assets");
                 if (assets.ValueKind != JsonValueKind.Array) continue;
-                ReleaseUpdate? candidate = null;
-                FullReleaseAsset? full = null;
+                ReleaseAsset? full = null;
+                ReleaseAsset? layered = null;
                 foreach (var asset in assets.EnumerateArray())
                 {
                     if (asset.Text("state") != "uploaded") continue;
                     string name = asset.Text("name");
                     if (name == ReleaseUpdate.AssetName(version))
-                    {
-                        full = ReadAsset(asset);
-                        if (candidate != null) candidate = candidate with { Full = full };
-                    }
+                        full ??= ReadAsset(asset);
                     else if (name == ReleaseUpdate.LayeredAssetName(version))
-                    {
-                        var layered = ReadAsset(asset);
-                        candidate = new ReleaseUpdate(version, layered.AssetId, layered.Size, layered.Sha256);
-                        if (full != null) candidate = candidate with { Full = full };
-                    }
+                        layered ??= ReadAsset(asset);
                 }
-                if (candidate != null) best = candidate;
-                else if (full is { IsValid: true } asset)
-                    best = new(version, asset.AssetId, asset.Size, asset.Sha256);
+                if (layered is { IsValid: true })
+                    best = new(version, layered.AssetId, layered.Size, layered.Sha256) { IsLayered = true, Full = full };
+                else if ((full ?? layered) is { } primary)
+                    best = new(version, primary.AssetId, primary.Size, primary.Sha256) { IsLayered = full == null };
             }
             if (document.RootElement.GetArrayLength() < 100) return best;
         }
     }
 
-    private static FullReleaseAsset ReadAsset(JsonElement asset)
+    private static ReleaseAsset ReadAsset(JsonElement asset)
     {
         string digest = asset.Text("digest");
-        string sha256 = digest.StartsWith("sha256:", StringComparison.Ordinal) &&
-            ReleaseUpdate.IsSha256(digest[7..]) ? digest[7..].ToLowerInvariant() : "";
+        string? sha256 = digest.StartsWith("sha256:", StringComparison.Ordinal) &&
+            ReleaseUpdate.IsSha256(digest[7..]) ? digest[7..].ToLowerInvariant() : null;
         return new(ReadLong(asset.Get("id")), ReadLong(asset.Get("size")), sha256);
     }
 
@@ -179,7 +171,7 @@ internal sealed class ReleaseUpdates(HttpClient http)
         string versions = Path.GetDirectoryName(bundle)!;
         UpdatePackage.CreateVersionsDirectory(portableRoot);
         string updateRoot = Path.GetDirectoryName(versions)!;
-        string? installed = InstalledBundle(portableRoot, bundle);
+        string? installed = update.IsLayered ? InstalledBundle(portableRoot, bundle) : null;
 
         try
         {
@@ -207,23 +199,21 @@ internal sealed class ReleaseUpdates(HttpClient http)
         return await StageWithLease(update, bundle, versions, installed, progress, token).ConfigureAwait(false);
     }
 
-    /// <summary>An installed bundle that can donate the shared update layer:
-    /// the running installation when it is itself a complete bundle, or the
-    /// recorded current/previous version. A damaged donor fails the later
-    /// per-file hash checks and the stage falls back to the full ZIP.</summary>
-    private static string? InstalledBundle(string portableRoot, string target)
+    private static string InstalledBundle(string portableRoot, string target)
     {
         string running = Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
-        if (!string.Equals(running, Path.TrimEndingDirectorySeparator(Path.GetFullPath(portableRoot)),
-                StringComparison.OrdinalIgnoreCase))
+        string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(portableRoot));
+        if (string.Equals(running, root, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(PortableUpdateHost.Find(running)?.Root, root, StringComparison.OrdinalIgnoreCase))
+            return running;
+        try
         {
-            try
-            {
-                return new PortableUpdateHost(portableRoot).DonorBundle(target) ?? running;
-            }
-            catch (Exception error) when (PortableUpdateHost.IsUpdateError(error)) { }
+            return new PortableUpdateHost(portableRoot).DonorBundle(target) ?? running;
         }
-        return running;
+        catch (Exception error) when (PortableUpdateHost.IsUpdateError(error))
+        {
+            return running;
+        }
     }
 
     private sealed class DamagedStageException(Exception inner) : IOException("更新缓存损坏。", inner);
@@ -272,8 +262,18 @@ internal sealed class ReleaseUpdates(HttpClient http)
             await Download(update, archive, progress, token).ConfigureAwait(false);
             string extracted = Path.Combine(staging, "bundle");
             UpdatePackage.Extract(archive, extracted, token);
-            UpdatePackage.RestoreSharedLayer(extracted, installed, update, archive, staging,
-                DownloadFullAsset, progress, token);
+            if (update.IsLayered && !UpdatePackage.TryRestoreSharedLayer(extracted, installed, update.Version, token))
+            {
+                if (update.Full is not { IsValid: true } full)
+                    throw new UpdateRequiresManualDownloadException(
+                        "此更新需要共享运行时层，但本机没有可复用的完整版本。请从发行页手动下载。");
+                token.ThrowIfCancellationRequested();
+                Directory.Delete(extracted, recursive: true);
+                File.Delete(archive);
+                await Download(new(update.Version, full.AssetId, full.Size, full.Sha256), archive,
+                    progress, token).ConfigureAwait(false);
+                UpdatePackage.Extract(archive, extracted, token);
+            }
             string manifestHash = UpdatePackage.VerifyDirectory(extracted, update.Version, token);
             string pendingReceipt = Path.Combine(staging, "verified.receipt");
             using (var file = new FileStream(pendingReceipt, FileMode.CreateNew, FileAccess.Write, FileShare.None))
@@ -322,13 +322,6 @@ internal sealed class ReleaseUpdates(HttpClient http)
         timeout.CancelAfter(TimeSpan.FromMinutes(15));
         using var response = await OpenAsset(update, timeout.Token).ConfigureAwait(false);
         await Consume(response, update, destination, progress, timeout.Token).ConfigureAwait(false);
-    }
-
-    private Task DownloadFullAsset(ReleaseVersion version, FullReleaseAsset asset, string destination,
-        IProgress<UpdateProgress>? progress, CancellationToken token)
-    {
-        var update = new ReleaseUpdate(version, asset.AssetId, asset.Size, asset.Sha256);
-        return Download(update, destination, progress, token);
     }
 
     private static async Task Consume(HttpResponseMessage response, ReleaseUpdate update,
