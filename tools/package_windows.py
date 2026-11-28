@@ -27,7 +27,7 @@ from native_pc.internal_entry import HOST_NAME, HOST_PATH
 sys.path.insert(0, str(ROOT / 'tools'))
 from frida_gadget_asset import stage_gadget, gadget_metadata
 from windows_manifest import verify_executable_manifest
-DEFAULT_VERSION = '1.0.0-rc.48'
+DEFAULT_VERSION = '1.0.0-rc.49'
 UPDATE_PROTOCOL = 1
 RELEASE_VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-rc\.[1-9][0-9]*)?')
 PACKAGE_ROOT = {'ArkDPS.Desktop.exe', 'README.txt', 'collector', 'python', 'metadata', 'licenses'}
