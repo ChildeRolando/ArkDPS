@@ -1690,6 +1690,25 @@ class CollectionWorker:
                 if request[0] == self._request_revision:
                     return request
 
+    def _can_retry_owned_input(self, config, enabled, source_options):
+        """A same-source rescan retries reads; it does not re-admit old events."""
+        from native_pc.native_hook_source import NativeHookEventProbe
+        session = self.session
+        if (source_options is None or type(config) is not ConnectionConfig
+                or enabled is not True or config.platform != 'native_pc'
+                or config.native_pc_event_backend != 'native' or config.native_pc_event_feed
+                or self.native_pc_observer_factory is not None or self.arkframework_root is not None
+                or source_options != (config.to_dict(), enabled, self.endpoint,
+                                      self.native_pc_observer_factory, self.arkframework_root)
+                or session is None or getattr(session, 'closed', True)):
+            return False
+        observer = getattr(session, 'observer', None)
+        return (type(observer) is NativeHookEventProbe
+                and observer.collector is getattr(session, 'collector', None)
+                and observer.status == ObserverStatus.READY
+                and observer.can_restart_in_process is False
+                and NativeHookEventProbe.has_live_owned_transport(observer) is True)
+
     def release(self):
         if self.session is None:
             return True
@@ -1925,6 +1944,7 @@ class CollectionWorker:
                     retry_allowed = True
                     current_target = None
                     current_revision = None
+                    source_options = None
                     explicit_retry_pending = False
                     session_bootstrap_generation = None
                     last_battle_waiting = None
@@ -1972,6 +1992,20 @@ class CollectionWorker:
                         try:
                             revision, config, enabled = self._next_request()
                         except queue.Empty:
+                            config = None
+                        if (config is not None and revision != current_revision
+                                and self._can_retry_owned_input(config, enabled, source_options)):
+                            # Accept the user's request revision without destroying
+                            # its healthy one-shot transport or pending prefix.
+                            current_revision = revision
+                            usable = retry_allowed = True
+                            last_observer_state = None
+                            clock_burst = None
+                            self.events.put(('connection_source', {
+                                'revision': revision, 'platform': config.platform}))
+                            self.events.put(('connection', '正在重试采集'))
+                            self.events.put(('scanning', False))
+                            self._publish_event_control(source_revision=revision)
                             config = None
                         if config is not None:
                             changed = revision != current_revision
@@ -2047,6 +2081,8 @@ class CollectionWorker:
                                         history=self.history, audit=audit, state_dir=self.directory,
                                         on_history_result=lambda result: self.events.put(('history', result)),
                                         log=lambda x: print(x, file=sys.stderr, flush=True))
+                                    source_options = (config.to_dict(), enabled, self.endpoint,
+                                                      self.native_pc_observer_factory, self.arkframework_root)
                                     if self.stop.is_set():
                                         continue
                                     diag = self.session.collector.diagnostics
