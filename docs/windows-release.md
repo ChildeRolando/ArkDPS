@@ -14,7 +14,7 @@ Windows x64 便携包的已发布版本和各版说明见 [GitHub Releases](http
 
 适配环境、解压与启动步骤见 [README](../README.md#下载与启动)。可用 `Get-FileHash <zip> -Algorithm SHA256` 对比随包发布的 `.zip.sha256` 文件。验证未发布的候选时，从对应提交的 CI 运行下载 `windows-wpf-candidate-<sha>`。
 
-支持应用内更新的标准便携版启动后会在后台检查并下载新版，设置页也提供「检查更新」。下载完成后，用户可点击「重启并更新」确认切换。下载使用 GitHub Release 的完整 Windows x64 ZIP，先按 GitHub API 提供的 SHA-256 校验 ZIP，再按包内清单校验解包后的文件。稳定版只接收稳定版本，预发行版可接收更新的预发行版或稳定版。手动下载入口仍指向对应的 GitHub Release。
+支持应用内更新的标准便携版启动后会在后台检查并下载新版，设置页也提供「检查更新」。下载完成后，用户可点击「重启并更新」确认切换。下载优先使用 GitHub Release 的增量 ZIP（`ArkDPS-<版本>-win-x64-update.zip`）：只含 WPF 应用层与 worker 载荷，Python 运行时、Frida 组件、游戏头像图集与 .NET 运行时从本机已安装版本的对应文件复用（逐文件 SHA-256 校验后才复用，最终仍按包内清单校验完整目录）。增量包失败时自动回退下载完整 ZIP。发行页同时发布两种资产；先卸载全部旧版本或增量清单不可复用时走完整包。先按 GitHub API 提供的 SHA-256 校验 ZIP，再按包内清单校验解包后的文件。稳定版只接收稳定版本，预发行版可接收更新的预发行版或稳定版。手动下载入口仍指向对应的 GitHub Release。
 
 ### 观察者
 
@@ -43,10 +43,11 @@ python -m pytest tests -q --assert=plain
 python tools/package_windows.py --output runtime/packages
 ```
 
-构建器先验证「HEAD 精确 + 工作区干净」，构建并核验 ArkPie DLL，再 `dotnet publish` 自包含 WPF 单文件、解包固定 SHA-256 的
+构建器先验证「HEAD 精确 + 工作区干净」，构建并核验 ArkPie DLL。WPF 发布为根目录下的单文件应用，使用 `collector/dotnet` 中随所选 SDK 分发的同补丁版本 .NET 运行时。应用启动器只搜索该相对路径，发行清单记录运行时版本与文件摘要。根目录布局兼容 rc.48 的更新器。构建器还会解包固定 SHA-256 的
 CPython 3.12.10 embeddable 运行时、下载并核验固定的 Frida 17.26.1 wheel、PC Gadget 与 Android x86_64 服务端，核验生成 EXE 的管理员 manifest，然后按 `BACKEND` 白名单复制
 worker 源码与资源。`BACKEND` 不含任何 Tk 模块，构建结束前还会断言包内 manifest 不存在
 `tkinter` / Tcl / Tk 文件，并用包内 Python 执行 `import desktop_bridge` 且断言 `"tkinter" not in sys.modules`。
+标准事件包同时产出增量 ZIP（`-update.zip`，仅 WPF 应用层、worker 载荷与完整清单）；其 `metadata/release.json` 的 `update_shared_paths` 列出由已安装版本复用的路径（Python 运行时、Frida 组件、头像图集、.NET 运行时与设备端服务许可）。
 
 已发布的便携包使用 `ArkDPS-<版本>-win-x64.zip` 命名，RC 在 GitHub 标为预发行。复现某个发布包时，切到该版本的构建提交，再按该提交的构建器参数与清单格式操作。构建器可用 `--version` 指定包版本。
 
@@ -92,7 +93,7 @@ python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --outpu
 `verify_wpf_package.py` 在新目录验证清洁解压、载荷摘要、使用包内 Python/.NET 运行、v1 → WPF v3 布局迁移和 WPF 重启恢复。
 WPF 验收用模拟 GitHub 响应检查版本、下载入口和网络错误。
 
-`verify_hot_update.py <当前ZIP> <新版ZIP> --output <目录>` 使用两个实际构建的标准便携包。在模拟 GitHub 响应下验证正常更新、经原入口再次启动、新版启动失败或旧版退出失败时回退、切换中断后仍启动旧版，以及拒绝摘要不匹配的 ZIP。检查包括运行版本、worker 握手、设置与战绩、原程序文件和新版载荷摘要。CI 中两份 ZIP 均由打包器从已提交的工作区构建，第二份使用更高的验收版本号。
+`verify_hot_update.py <当前ZIP> <新版ZIP> --layered-target <增量ZIP> --legacy-source <rc.48 ZIP> --output <目录>` 使用真实标准便携包和模拟 GitHub 响应。验收覆盖已发布的 rc.48 下载完整包并经原入口再次启动、仅提供完整资产时更新、同时提供两种资产时只下载增量 ZIP，以及本机共享文件不匹配时下载完整包。主进程回执记录实际请求的资产及读取字节数，验收还会按发行清单比对新版载荷，检查 worker 握手、设置与战绩。新版启动失败、旧版退出失败、切换中断和摘要不匹配也分别验收。
 
 **这些都是明确标注的合成数据。** 私有窗口接收点击不是 MuMu/游戏接收点击；物理托盘图标不可定位时回执明确
 `NOT VERIFIED`。混合 DPI 与实机项仍以独立验收为准，不得把离线回执当作实机通过证据。
@@ -101,7 +102,7 @@ WPF 验收用模拟 GitHub 响应检查版本、下载入口和网络错误。
 
 `.github/workflows/windows.yml` 在 Windows runner 上：安装固定依赖 → `tools/prepare_windows_ci.py` 设定隔离桌面 →
 全量 pytest → 构建 WPF → 生成便携候选 ZIP → `verify_wpf.py` → `verify_wpf_package.py` →
-用第二份仅供验收的 ZIP 运行 `verify_hot_update.py` → 上传私有候选 artifact。第二份 ZIP 留在 CI 工作目录，候选 artifact 只包含正式候选 ZIP 及验收回执。
+下载并校验已发布 rc.48 的 SHA-256 → 构建更高版本号的验收包并运行 `verify_hot_update.py` → 上传私有候选 artifact。rc.48 和更高版本号的验收包留在 CI 工作目录，候选 artifact 包含本次候选的完整包、增量包及验收回执。
 
 ## 许可与分发边界
 

@@ -44,9 +44,20 @@ internal readonly record struct ReleaseVersion(int Major, int Minor, int Patch, 
 internal sealed record ReleaseUpdate(ReleaseVersion Version, long AssetId, long Size, string? Sha256)
 {
     internal const long MaximumDownloadSize = 512L * 1024 * 1024;
+    internal const string AssetNameFormat = "ArkDPS-{0}-win-x64.zip";
+    internal const string LayeredAssetSuffix = "-update.zip";
 
     public bool CanDownload => AssetId > 0 && Size is > 0 and <= MaximumDownloadSize &&
         Sha256 is { } sha256 && IsSha256(sha256);
+
+    internal static string AssetName(ReleaseVersion version) =>
+        string.Format(CultureInfo.InvariantCulture, AssetNameFormat, version);
+
+    internal static string LayeredAssetName(ReleaseVersion version) =>
+        AssetName(version)[..^4] + LayeredAssetSuffix;
+
+    internal bool IsLayered { get; init; }
+    internal ReleaseAsset? Full { get; init; }
 
     internal static bool IsSha256(string text)
     {
@@ -55,6 +66,12 @@ internal sealed record ReleaseUpdate(ReleaseVersion Version, long AssetId, long 
             if (!Uri.IsHexDigit(character)) return false;
         return true;
     }
+}
+
+internal sealed record ReleaseAsset(long AssetId, long Size, string? Sha256)
+{
+    public bool IsValid => AssetId > 0 && Size is > 0 and <= ReleaseUpdate.MaximumDownloadSize &&
+        Sha256 is { } sha256 && ReleaseUpdate.IsSha256(sha256);
 }
 
 internal sealed record StagedUpdate(ReleaseUpdate Release, string Directory);
@@ -107,20 +124,32 @@ internal sealed class ReleaseUpdates(HttpClient http)
                     continue;
                 var assets = release.Get("assets");
                 if (assets.ValueKind != JsonValueKind.Array) continue;
+                ReleaseAsset? full = null;
+                ReleaseAsset? layered = null;
                 foreach (var asset in assets.EnumerateArray())
                 {
-                    if (asset.Text("name") == $"ArkDPS-{version}-win-x64.zip" && asset.Text("state") == "uploaded")
-                    {
-                        string digest = asset.Text("digest");
-                        string? sha256 = digest.StartsWith("sha256:", StringComparison.Ordinal) &&
-                            ReleaseUpdate.IsSha256(digest[7..]) ? digest[7..].ToLowerInvariant() : null;
-                        best = new(version, ReadLong(asset.Get("id")), ReadLong(asset.Get("size")), sha256);
-                        break;
-                    }
+                    if (asset.Text("state") != "uploaded") continue;
+                    string name = asset.Text("name");
+                    if (name == ReleaseUpdate.AssetName(version))
+                        full ??= ReadAsset(asset);
+                    else if (name == ReleaseUpdate.LayeredAssetName(version))
+                        layered ??= ReadAsset(asset);
                 }
+                if (layered is { IsValid: true })
+                    best = new(version, layered.AssetId, layered.Size, layered.Sha256) { IsLayered = true, Full = full };
+                else if ((full ?? layered) is { } primary)
+                    best = new(version, primary.AssetId, primary.Size, primary.Sha256) { IsLayered = full == null };
             }
             if (document.RootElement.GetArrayLength() < 100) return best;
         }
+    }
+
+    private static ReleaseAsset ReadAsset(JsonElement asset)
+    {
+        string digest = asset.Text("digest");
+        string? sha256 = digest.StartsWith("sha256:", StringComparison.Ordinal) &&
+            ReleaseUpdate.IsSha256(digest[7..]) ? digest[7..].ToLowerInvariant() : null;
+        return new(ReadLong(asset.Get("id")), ReadLong(asset.Get("size")), sha256);
     }
 
     private static long ReadLong(JsonElement value) =>
@@ -142,10 +171,11 @@ internal sealed class ReleaseUpdates(HttpClient http)
         string versions = Path.GetDirectoryName(bundle)!;
         UpdatePackage.CreateVersionsDirectory(portableRoot);
         string updateRoot = Path.GetDirectoryName(versions)!;
+        string? installed = update.IsLayered ? InstalledBundle(portableRoot, bundle) : null;
 
         try
         {
-            return await StageWithLease(update, bundle, versions, progress, token).ConfigureAwait(false);
+            return await StageWithLease(update, bundle, versions, installed, progress, token).ConfigureAwait(false);
         }
         catch (DamagedStageException)
         {
@@ -166,7 +196,24 @@ internal sealed class ReleaseUpdates(HttpClient http)
             }
         }
 
-        return await StageWithLease(update, bundle, versions, progress, token).ConfigureAwait(false);
+        return await StageWithLease(update, bundle, versions, installed, progress, token).ConfigureAwait(false);
+    }
+
+    private static string InstalledBundle(string portableRoot, string target)
+    {
+        string running = Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
+        string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(portableRoot));
+        if (string.Equals(running, root, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(PortableUpdateHost.Find(running)?.Root, root, StringComparison.OrdinalIgnoreCase))
+            return running;
+        try
+        {
+            return new PortableUpdateHost(portableRoot).DonorBundle(target) ?? running;
+        }
+        catch (Exception error) when (PortableUpdateHost.IsUpdateError(error))
+        {
+            return running;
+        }
     }
 
     private sealed class DamagedStageException(Exception inner) : IOException("更新缓存损坏。", inner);
@@ -192,7 +239,7 @@ internal sealed class ReleaseUpdates(HttpClient http)
     }
 
     private async Task<StagedUpdate> StageWithLease(ReleaseUpdate update, string bundle, string versions,
-        IProgress<UpdateProgress>? progress, CancellationToken token)
+        string? installed, IProgress<UpdateProgress>? progress, CancellationToken token)
     {
         using var lease = OpenLease(Path.GetDirectoryName(versions)!, "stage.lock");
         RemoveAbandonedStages(versions);
@@ -215,6 +262,18 @@ internal sealed class ReleaseUpdates(HttpClient http)
             await Download(update, archive, progress, token).ConfigureAwait(false);
             string extracted = Path.Combine(staging, "bundle");
             UpdatePackage.Extract(archive, extracted, token);
+            if (update.IsLayered && !UpdatePackage.TryRestoreSharedLayer(extracted, installed, update.Version, token))
+            {
+                if (update.Full is not { IsValid: true } full)
+                    throw new UpdateRequiresManualDownloadException(
+                        "此更新需要共享运行时层，但本机没有可复用的完整版本。请从发行页手动下载。");
+                token.ThrowIfCancellationRequested();
+                Directory.Delete(extracted, recursive: true);
+                File.Delete(archive);
+                await Download(new(update.Version, full.AssetId, full.Size, full.Sha256), archive,
+                    progress, token).ConfigureAwait(false);
+                UpdatePackage.Extract(archive, extracted, token);
+            }
             string manifestHash = UpdatePackage.VerifyDirectory(extracted, update.Version, token);
             string pendingReceipt = Path.Combine(staging, "verified.receipt");
             using (var file = new FileStream(pendingReceipt, FileMode.CreateNew, FileAccess.Write, FileShare.None))
@@ -262,10 +321,15 @@ internal sealed class ReleaseUpdates(HttpClient http)
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
         timeout.CancelAfter(TimeSpan.FromMinutes(15));
         using var response = await OpenAsset(update, timeout.Token).ConfigureAwait(false);
+        await Consume(response, update, destination, progress, timeout.Token).ConfigureAwait(false);
+    }
+
+    private static async Task Consume(HttpResponseMessage response, ReleaseUpdate update,
+        string destination, IProgress<UpdateProgress>? progress, CancellationToken token)
+    {
         if (response.Content.Headers.ContentLength is long length && length != update.Size)
             throw new InvalidDataException("更新包大小与 GitHub 记录不一致。");
-
-        await using var source = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+        await using var source = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false);
         await using var file = new FileStream(destination, FileMode.CreateNew, FileAccess.Write,
             FileShare.None, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -275,13 +339,13 @@ internal sealed class ReleaseUpdates(HttpClient http)
         progress?.Report(new(received, update.Size));
         while (true)
         {
-            int count = await source.ReadAsync(buffer, timeout.Token).ConfigureAwait(false);
+            int count = await source.ReadAsync(buffer, token).ConfigureAwait(false);
             if (count == 0) break;
             received += count;
             if (received > update.Size)
                 throw new InvalidDataException("更新包大小超过 GitHub 记录。");
             hash.AppendData(buffer, 0, count);
-            await file.WriteAsync(buffer.AsMemory(0, count), timeout.Token).ConfigureAwait(false);
+            await file.WriteAsync(buffer.AsMemory(0, count), token).ConfigureAwait(false);
             if (received == update.Size || Environment.TickCount64 - lastReport >= 100)
             {
                 progress?.Report(new(received, update.Size));

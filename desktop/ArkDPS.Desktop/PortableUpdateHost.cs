@@ -90,6 +90,27 @@ internal sealed class PortableUpdateHost(string root)
         return false;
     }
 
+    /// <summary>An installed bundle that can donate the shared update layer:
+    /// the recorded current or previous version, never the update target
+    /// itself. Null when the selection is unreadable or names no directory.</summary>
+    internal string? DonorBundle(string target)
+    {
+        var selection = ReadSelection();
+        foreach (var version in new[] { selection.Current, selection.Previous })
+        {
+            if (version is null || !version.CanDownload) continue;
+            try
+            {
+                string directory = UpdatePackage.BundleDirectory(Root, version);
+                if (!string.Equals(directory, target, StringComparison.OrdinalIgnoreCase) &&
+                    Directory.Exists(directory))
+                    return directory;
+            }
+            catch (Exception error) when (IsUpdateError(error)) { }
+        }
+        return null;
+    }
+
     internal async Task StartHandoffAsync(StagedUpdate update, string[] arguments)
     {
         using var server = NewPipe(out var pipe);
