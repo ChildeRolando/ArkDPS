@@ -257,7 +257,7 @@ public partial class MainWindow
                     sideRanking.BossOnly.IsVisible && sideRanking.BossOnly.IsChecked == true,
                     "side damage did not restore the saved filters and reenable its rate selector");
 
-            await SetSideFilter(sideRanking.EffectiveOnly, false);
+            await SetSideFilter(sideRanking.OverflowDamage, true);
             Require(sideRanking.View.Get("config").Bool("boss_only") &&
                     !sideRanking.View.Get("config").Bool("effective_only"),
                     "side effective filter cleared the boss scope");
@@ -1217,18 +1217,18 @@ public partial class MainWindow
         var toolbarBottom=toolbar.TranslatePoint(new Point(0,toolbar.ActualHeight),panel).Y;
         Require(toolbarBottom<=tableHeader.TranslatePoint(new Point(),panel).Y &&
                 new[] {panel.Category, panel.Ranking, panel.Rate}.All(selector=>
-                    selector.IsVisible && selector.ActualWidth<=80 && selector.ActualHeight==24 &&
+                    selector.IsVisible && selector.ActualWidth<=80 && selector.ActualHeight==28 &&
                     selector.ToolTip is string {Length:>0}) &&
                 panel.CategoryLabel.IsVisible && panel.RankingLabel.IsVisible && panel.RateLabel.IsVisible,
                 "live ranking filters do not fit above the table with their guidance");
         if(panel.View.Get("config").Text("category")=="damage")
-            Require(panel.BossOnly.IsVisible && panel.BossOnly.ActualHeight==24 &&
+            Require(panel.BossOnly.IsVisible && panel.BossOnly.ActualHeight==28 &&
                     panel.BossOnly.TranslatePoint(new Point(panel.BossOnly.ActualWidth,0),toolbar).X<=toolbar.ActualWidth,
                     "boss scope control did not fit in the ranking toolbar");
         if(singleRow)
         {
             double baseline=panel.Category.TranslatePoint(new Point(0,panel.Category.ActualHeight),toolbar).Y;
-            Require(new FrameworkElement[] {panel.Ranking,panel.Rate,panel.OpenHudButton,panel.DuplicateButton,panel.DeleteButton}
+            Require(new FrameworkElement[] {panel.Ranking,panel.Rate,panel.OpenHudButton,panel.PanelMenuButton}
                     .All(control=>Math.Abs(control.TranslatePoint(new Point(0,control.ActualHeight),toolbar).Y-baseline)<2),
                     "live ranking controls do not share a baseline at desktop width");
         }
@@ -1319,6 +1319,42 @@ public partial class MainWindow
             if(HasText(System.Windows.Media.VisualTreeHelper.GetChild(root,i),text)) return true;
         return false;
     }
+    private async Task VerifyLoneTrailShell(StatisticPanel panel, string output, List<string> checks)
+    {
+        Require(CurrentMetric.BorderThickness == new Thickness(1) && CurrentDps.FontSize == 32 &&
+                AverageDps.FontSize == 20 && LiveNav.BorderThickness == new Thickness(3,0,0,0) &&
+                StatusBadge.IsVisible, "Lone Trail KPI, active rail or title-bar status did not render");
+        Require(panel.Filters.IsVisible && panel.Actions.IsVisible && panel.OpenHudButton.IsVisible &&
+                panel.Category.ActualHeight == 28 && panel.OpenHudButton.ActualHeight == 28 &&
+                panel.PanelMenuButton.ContextMenu.Items.Contains(panel.DeleteButton),
+                "ranking toolbar did not separate filters, HUD and secondary actions");
+        if (panel.View.Get("config").Text("category") == "damage")
+            Require(panel.DamageBasis.IsVisible && panel.DamageBasis.ActualHeight == 28 &&
+                    panel.EffectiveOnly.IsChecked != panel.OverflowDamage.IsChecked,
+                    "ranking damage basis did not show a single selected segment");
+        var root = (FrameworkElement)Content;
+        File.WriteAllBytes(Path.Combine(output,"lone-trail-toolbar.png"),Screenshot.CaptureRegion(root,panel.Selectors));
+
+        try
+        {
+            UpdateWaitingTrend("waiting", "观察中·等待进入战斗", hasBattle: false, arkPieListening: true);
+            await Settle();
+            Require(WaitingTrend.IsVisible && !CompactTrend.IsVisible && !MetricCards.IsVisible &&
+                    HasText(WaitingTrend,"ArkPie 监听中") && WaitingTrendSettings.IsVisible,
+                    "waiting overview did not show its recovery entry");
+            File.WriteAllBytes(Path.Combine(output,"lone-trail-empty.png"),Screenshot.CaptureRegion(root,LiveOverviewFrame));
+            UpdateWaitingTrend("waiting", "观察中·等待进入战斗", hasBattle: true, arkPieListening: true);
+            Require(!WaitingTrend.IsVisible && CompactTrend.IsVisible && MetricCards.IsVisible,
+                    "waiting after a battle hid the retained overview");
+        }
+        finally
+        {
+            UpdateLiveStatus(State.Text("status"),State.Text("status_text"));
+            await Settle();
+        }
+        checks.Add("Lone Trail visual hierarchy, grouped ranking controls and waiting overview");
+    }
+
     private async Task RunRateNoticeChecks(string id)
     {
         await Command("panel_update",new(){["config"]=new{panel_id=id,category="damage",ranking="total",rate_basis="engagement"}});
@@ -1346,8 +1382,9 @@ public partial class MainWindow
         {
             Require(HudFooterControls.IsVisible && HudFooterTarget.IsVisible &&
                     Equals(HudFooterTarget.SelectedValue,id) &&
-                    RankingFooter.Children.Contains(AddPanelButton) &&
-                    RankingFooter.Children.Contains(LiveReconnectButton) &&
+                    RankingFooter.Children.Contains(RankingFooterMenuButton) &&
+                    RankingFooterMenuButton.ContextMenu.Items.Contains(AddPanelButton) &&
+                    RankingFooterMenuButton.ContextMenu.Items.Contains(LiveReconnectButton) &&
                     RankingFooter.Children.Contains(HudFooterControls),
                     "HUD controls are not beside the ranking footer actions");
             double sourceOpacity=Huds[sourceId].Opacity;
@@ -2926,6 +2963,7 @@ public partial class MainWindow
             Screenshot.Window(this,Path.Combine(output,theme+"-enemies.png"));
             await Navigate("live");await Settle();
             Screenshot.Window(this,Path.Combine(output,theme+"-main.png"));Screenshot.Window(originalHud,Path.Combine(output,theme+"-hud.png"));
+            if (loneTrail) await VerifyLoneTrailShell(Panels[id], output, checks);
             var selected=State.Get("history_selected");
             if(selected.ValueKind==JsonValueKind.Object)
             {

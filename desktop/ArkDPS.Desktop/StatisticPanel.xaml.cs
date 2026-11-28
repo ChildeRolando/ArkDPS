@@ -534,7 +534,7 @@ public partial class StatisticPanel : UserControl
         combo.Width=compact ? compactWidth : standardWidth;
         if(compact)
         {
-            combo.Height=combo.MinHeight=24;
+            combo.Height=combo.MinHeight=28;
             combo.FontSize=11;
             combo.Margin=new Thickness(0);
             combo.Padding=new Thickness(6,4,22,4);
@@ -582,8 +582,8 @@ public partial class StatisticPanel : UserControl
         if(category=="shield") Select(Ranking,"total");
         ((ComboBoxItem)Ranking.Items[0]).Content=category=="healing" ? healingTotal : category=="shield" ? "总护盾" : "总伤";
         ((ComboBoxItem)Ranking.Items[1]).Content=category switch{"shield"=>"近期","healing"=>"HPS",_=>"DPS"};
-        EffectiveOnly.IsChecked=config.Bool("effective_only");
-        EffectiveOnly.Visibility=!IsHistory&&!IsHud&&config.Text("category")=="damage"
+        SetDamageBasis(config.Bool("effective_only"));
+        DamageBasis.Visibility=!IsHistory&&!IsHud&&category=="damage"
             ? Visibility.Visible : Visibility.Collapsed;
         BossOnly.IsChecked=config.Bool("boss_only");
         BossOnly.Visibility=!IsHud && category=="damage" ? Visibility.Visible : Visibility.Collapsed;
@@ -798,7 +798,7 @@ public partial class StatisticPanel : UserControl
         bool canEdit=available && (!sideRanking || !sideConfigurationPending && PanelId.Length>0);
         Category.IsEnabled=canEdit;
         DuplicateButton.IsEnabled=available;
-        EffectiveOnly.IsEnabled=BossOnly.IsEnabled=canEdit && (!sideRanking || config.Text("category")=="damage");
+        DamageBasis.IsEnabled=BossOnly.IsEnabled=canEdit && (!sideRanking || config.Text("category")=="damage");
         Ranking.IsEnabled=Rate.IsEnabled=canEdit && hasRate;
         DeleteButton.IsEnabled=available && deleteAvailable;
     }
@@ -811,7 +811,7 @@ public partial class StatisticPanel : UserControl
             Select(Category,config.Text("category"));
             Select(Ranking,config.Text("category")=="shield" ? "total" : config.Text("ranking"));
             Select(Rate,config.Text("rate_basis"));
-            EffectiveOnly.IsChecked=config.Bool("effective_only");
+            SetDamageBasis(config.Bool("effective_only"));
             BossOnly.IsChecked=config.Bool("boss_only");
         }
         finally{updating=false;}
@@ -824,8 +824,18 @@ public partial class StatisticPanel : UserControl
         else if(sender==Rate && Rate.SelectedItem is ComboBoxItem rate)
             await CommitSideConfiguration("rate_basis",rate.Tag);
     }
-    private async void EffectiveChanged(object sender,RoutedEventArgs e) =>
-        await CommitDamageFilter("effective_only",EffectiveOnly.IsChecked==true);
+    private async void EffectiveChanged(object sender,RoutedEventArgs e)
+    {
+        bool effective = sender == EffectiveOnly;
+        SetDamageBasis(effective);
+        await CommitDamageFilter("effective_only",effective);
+    }
+
+    private void SetDamageBasis(bool effective)
+    {
+        EffectiveOnly.IsChecked = effective;
+        OverflowDamage.IsChecked = !effective;
+    }
     private async void FilterChanged(object sender,RoutedEventArgs e) =>
         await CommitDamageFilter("boss_only",BossOnly.IsChecked==true);
     private Task CommitDamageFilter(string field,bool enabled) =>
@@ -862,6 +872,11 @@ public partial class StatisticPanel : UserControl
     }
     private async void Duplicate(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_duplicate",new(){["panel_id"]=PanelId});}
     private async void Delete(object sender,RoutedEventArgs e) {if(Command!=null) await Command("panel_delete",new(){["panel_id"]=PanelId});}
+    private void OpenPanelMenu(object sender,RoutedEventArgs e)
+    {
+        PanelMenuButton.ContextMenu.PlacementTarget = PanelMenuButton;
+        PanelMenuButton.ContextMenu.IsOpen = true;
+    }
     private void OpenHud(object sender,RoutedEventArgs e) => HudRequested?.Invoke(PanelId);
     private void CloseHud(object sender,RoutedEventArgs e) => CloseRequested?.Invoke();
     private void RateActionClicked(object sender,RoutedEventArgs e) => RateActionRequested?.Invoke(view.Text("rate_action"));

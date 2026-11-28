@@ -17,6 +17,18 @@ internal static class Native
     [DllImport("user32.dll", EntryPoint="GetWindowLongW", SetLastError=true)] private static extern int GetWindowLong32(IntPtr window, int index);
     [DllImport("user32.dll", EntryPoint="SetWindowLongW", SetLastError=true)] private static extern int SetWindowLong32(IntPtr window, int index, int value);
     [DllImport("kernel32.dll")] private static extern void SetLastError(uint error);
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, in int value, int size);
+
+    internal static bool ApplyMainWindowChrome(Window window)
+    {
+        const int immersiveDarkMode = 20, windowCornerPreference = 33, roundCorners = 2;
+        var handle = Handle(window);
+        // Unsupported attributes return a failing HRESULT on older Windows versions.
+        _ = DwmSetWindowAttribute(handle, immersiveDarkMode, 1, sizeof(int));
+        return DwmSetWindowAttribute(handle, windowCornerPreference, roundCorners, sizeof(int)) >= 0;
+    }
+
     public static IntPtr Handle(Window window) => new WindowInteropHelper(window).Handle;
     public static int[] Bounds(Window window)
     {
