@@ -146,6 +146,18 @@ public partial class MainWindow : Window
         LocationChanged += (_, _) => { if(!sideMode) { QueueWorkAreaLayout(); ScheduleSave(); } };
         SideAttachmentTimer.Tick += (_, _) => UpdateSidePlacement();
     }
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        if (Native.ApplyMainWindowChrome(this) && System.Windows.Shell.WindowChrome.GetWindowChrome(this) is { } chrome)
+        {
+            // A zero glass frame makes WindowChrome assign a window region,
+            // which prevents the compositor from rounding the window.
+            chrome.GlassFrameThickness = new Thickness(1);
+        }
+    }
+
     private async Task Start()
     {
         try
@@ -465,7 +477,7 @@ public partial class MainWindow : Window
         }.Where(text=>text.Length>0));
         EnterSideMode.ToolTip=UsingNativePc ? "将主窗口吸附到已连接的 PC 游戏窗口" : "将主窗口吸附在 MuMu 一侧";
         string reconnectLabel=UsingNativePc ? "重新连接" : "重连观察者";
-        LiveReconnectButton.Content=SubpageReconnectButton.Content=reconnectLabel;
+        LiveReconnectButton.Header=SubpageReconnectButton.Content=reconnectLabel;
         applying=false;
         if (panelLayoutChanged || changed) ArrangePanels();
         bool previousEnemy=previousBattle || (SamplingRejected && DisplayedBattleId.Length>0 &&
@@ -629,6 +641,8 @@ public partial class MainWindow : Window
             State.Get("layout").Get("event_observation").ValueKind==JsonValueKind.False);
         bool observing=!disabled && status is not ("disconnected" or "reconnecting" or "locating")
             && (observer=="ready" || (observer.Length==0 && coverage=="recording"));
+        bool arkPieListening = UsingNativePc && status == "waiting" && observing &&
+            EffectiveConnectionConfig.Text("native_pc_event_backend") == "native";
         UpdateBabelMasthead(status,observing,workerLabel);
         string phase=status switch
         {
@@ -641,6 +655,7 @@ public partial class MainWindow : Window
             "sampling_rejected" => (workerLabel,StatusAmber),
             "stale" or "disconnected" => (workerLabel,StatusRed),
             "reconnecting" or "locating" => (workerLabel,StatusAmber),
+            "waiting" when arkPieListening => ("ArkPie 已就绪 · 等待进入战斗",StatusGreen),
             "waiting" => ("PC 版 · 等待进入战斗",StatusAmber),
             "live" when ShowingCharacterCounters => (workerLabel,StatusAmber),
             "live" when coverage=="recording" && State.Text("native_counter_scope")=="events_only"
@@ -671,6 +686,20 @@ public partial class MainWindow : Window
         StatusLight.Fill=light;
         StatusBadge.ToolTip=string.Join(" · ",new[] { label,Stage.Text,EventStatus.Text,ErrorText.Text }
             .Where(text=>text.Length>0));
+        bool hasBattle = ShowingPreviousBattle || State.Text("battle_id").Length > 0 || trendModel.BattleId.Length > 0;
+        UpdateWaitingTrend(status, label, hasBattle, arkPieListening && !readiness.Active);
+    }
+
+    private void UpdateWaitingTrend(string status, string label, bool hasBattle, bool arkPieListening)
+    {
+        bool waiting = !hasBattle && status is ("waiting" or "locating" or "reconnecting" or "disconnected" or "stale");
+        WaitingTrend.Visibility = waiting ? Visibility.Visible : Visibility.Collapsed;
+        CompactTrend.Visibility = waiting ? Visibility.Collapsed : Visibility.Visible;
+        LiveOverviewFrame.MinHeight = waiting || Theme.IsBabel ? 0 : 304;
+        bool hideEmptyMetrics = waiting && !Theme.IsBabel;
+        CurrentMetric.Visibility = MetricCards.Visibility = hideEmptyMetrics ? Visibility.Collapsed : Visibility.Visible;
+        if (waiting)
+            WaitingTrendStatus.Text = arkPieListening ? "ArkPie 监听中" : label;
     }
     private static void InvalidateVisualTree(DependencyObject obj)
     {
@@ -862,6 +891,7 @@ public partial class MainWindow : Window
 
         EnemySummaryColumn.Width = wide ? new GridLength(22, GridUnitType.Star) : new GridLength(0);
         RankingColumn.Width = new GridLength(41, GridUnitType.Star);
+        RankingColumn.MinWidth = width >= 1380 ? 495 : 0;
         DetailColumn.Width = wide ? new GridLength(37, GridUnitType.Star) : new GridLength(narrow ? 0 : 340);
         LivePage.VerticalScrollBarVisibility = scrollLive ? ScrollBarVisibility.Hidden : ScrollBarVisibility.Disabled;
         LiveBodyFirstRow.Height = wide && !scrollLive ? new GridLength(1, GridUnitType.Star) : GridLength.Auto;
@@ -925,7 +955,8 @@ public partial class MainWindow : Window
         Grid.SetColumnSpan(MetricCards, 1);
         Grid.SetRow(MetricCards, narrowOverview ? 1 : 0);
         CurrentMetric.Margin = new Thickness(4, 0, 4, narrowOverview ? 4 : 0);
-        CurrentDps.FontSize = 39;
+        if (Theme.Key == Theme.LoneTrail) CurrentDps.ClearValue(TextBlock.FontSizeProperty);
+        else CurrentDps.FontSize = 39;
     }
     private void FitLivePanels()
     {
@@ -972,6 +1003,8 @@ public partial class MainWindow : Window
         };
         Resources.MergedDictionaries.Clear();
         Resources.MergedDictionaries.Add(shell);
+        TitleBar.Background = loneTrail ? (Brush)FindResource("ChromeBrandSurface") : Brushes.Transparent;
+        LiveInspector.RefreshTheme();
         ApplyShellLayout();
         PageTitle.SetResourceReference(TextBlock.ForegroundProperty, Theme.IsPeople ? "SubpageHeadingInk" : "HeroInk");
         PageSubtitle.SetResourceReference(TextBlock.ForegroundProperty, Theme.IsPeople ? "SubpageHeadingInk" : "HeroMuted");
@@ -983,9 +1016,9 @@ public partial class MainWindow : Window
         BabelTitlebarSurface.Visibility = BabelSidebarMark.Visibility =
             Theme.IsBabel ? Visibility.Visible : Visibility.Collapsed;
         bool offline = App.BridgeArguments.Contains("--offline");
-        SystemTitle.Visibility = loneTrail || App.NativeHookCandidate ? Visibility.Visible : Visibility.Collapsed;
+        SystemTitle.Visibility = App.NativeHookCandidate ? Visibility.Visible : Visibility.Collapsed;
         SystemTitle.Text = "COMBAT DPS ANALYSIS SYSTEM";
-        ModeLabel.Visibility = offline || loneTrail || App.NativeHookCandidate ? Visibility.Visible : Visibility.Collapsed;
+        ModeLabel.Visibility = offline || App.NativeHookCandidate ? Visibility.Visible : Visibility.Collapsed;
         ModeLabel.Text = offline ? "离线验收 · 合成数据 · 不访问游戏"
             : "ARKDPS / ORBITAL CONSOLE";
         ModeLabel.ToolTip = null;
@@ -995,23 +1028,28 @@ public partial class MainWindow : Window
     private void ApplyShellLayout()
     {
         bool babel = Theme.IsBabel;
+        bool loneTrail = Theme.Key == Theme.LoneTrail;
+        Resources["FrameBodyBorderThickness"] = new Thickness(loneTrail ? 0 : 1);
         foreach (var frame in new[] { LiveOverviewFrame, EnemySummary, RankingFrame, LiveDetail })
             frame.SetResourceReference(StyleProperty, babel ? "BabelResearchFrame" : "ResearchFrame");
         foreach (var button in new[] { LiveNav, EnemyNav, MultiplayerNav, HistoryNav, SettingsNav })
             button.SetResourceReference(StyleProperty, babel ? "BabelResearchNav" : "ResearchNav");
         foreach (Border metric in MetricCards.Children)
-            metric.SetResourceReference(StyleProperty, babel ? "BabelSecondaryMetric" : "ResearchMetric");
-        CurrentMetric.SetResourceReference(StyleProperty, babel ? "BabelCurrentMetric" : "ResearchCurrentMetric");
+            metric.SetResourceReference(StyleProperty, babel ? "BabelSecondaryMetric" : loneTrail ? "LoneTrailMetric" : "ResearchMetric");
+        foreach (var reading in new[] { AverageDps, PeakDps, Clock, TotalDamage })
+            reading.SetResourceReference(StyleProperty, loneTrail ? "LoneTrailReadout" : "ResearchReadout");
+        CurrentMetric.SetResourceReference(StyleProperty, babel ? "BabelCurrentMetric" : loneTrail ? "LoneTrailCurrentMetric" : "ResearchCurrentMetric");
+        CurrentDps.SetResourceReference(StyleProperty, loneTrail ? "ReadoutHero" : "ResearchReadout");
 
         BabelMastheadSurface.Visibility = BabelMastheadHeading.Visibility = BabelMetricStrip.Visibility =
             babel ? Visibility.Visible : Visibility.Collapsed;
         CurrentMetricPulse.Visibility = CurrentMetricUnit.Visibility = babel ? Visibility.Collapsed : Visibility.Visible;
         LiveOverviewFrame.Padding = babel ? new Thickness(8, 2, 8, 5) : new Thickness(22, 7, 14, 5);
         LiveOverviewFrame.MinHeight = babel ? 0 : 304;
-        LiveFrameTitle.Text = babel ? "实时战况" : "实时DPS / LIVE DPS";
-        EnemySummary.Header = sideMode || babel ? "敌方单位" : "敌方单位 / ENEMY UNIT";
-        RankingFrame.Header = babel ? "干员 DPS 排行" : "干员DPS排行 / OPERATOR DPS RANKING";
-        LiveDetail.Header = babel ? "干员详情" : "干员详情 / OPERATOR DETAIL";
+        LiveFrameTitle.Text = babel ? "实时战况" : loneTrail ? "实时 DPS" : "实时DPS / LIVE DPS";
+        EnemySummary.Header = sideMode || babel || loneTrail ? "敌方单位" : "敌方单位 / ENEMY UNIT";
+        RankingFrame.Header = babel || loneTrail ? "干员 DPS 排行" : "干员DPS排行 / OPERATOR DPS RANKING";
+        LiveDetail.Header = babel || loneTrail ? "干员详情" : "干员详情 / OPERATOR DETAIL";
         if (babel)
         {
             CurrentMetricLabel.SetResourceReference(TextBlock.ForegroundProperty, "BabelPaperMuted");
@@ -1034,7 +1072,6 @@ public partial class MainWindow : Window
         PeopleCompactBrandMark.Visibility = Theme.IsPeople && narrow ? Visibility.Visible : Visibility.Collapsed;
         BabelBrandMark.Visibility = Theme.IsBabel && !narrow ? Visibility.Visible : Visibility.Collapsed;
         BabelCompactBrandMark.Visibility = Theme.IsBabel && narrow ? Visibility.Visible : Visibility.Collapsed;
-        ChromeLab.Visibility = loneTrail && ContentRoot.ActualWidth >= 940 ? Visibility.Visible : Visibility.Collapsed;
         SideLab.Visibility = SideLabName.Visibility = loneTrail && !narrow ? Visibility.Visible : Visibility.Collapsed;
     }
     private void ResetLiveInspector()
@@ -1213,10 +1250,10 @@ public partial class MainWindow : Window
         SettingsPage.Visibility=page=="settings" ? Visibility.Visible : Visibility.Collapsed;
         bool live=page=="live";
         SubpageHeader.Visibility = live ? Visibility.Collapsed : Visibility.Visible;
+        SubpageReconnectButton.Visibility = page == "settings" ? Visibility.Visible : Visibility.Collapsed;
         PageTitle.Text=page switch{"history"=>"历史战绩","enemies"=>"敌情","multiplayer"=>"卫戍队友DPS","settings"=>"设置",_=>"实时战况"};
         PageSubtitle.Text=page switch{"history"=>"本地战绩 · 搜索与导出","enemies"=>"已入场敌人 · 属性与血量走势","multiplayer"=>"本小局队友输出 · 分玩家查看干员","settings"=>"显示与采集连接",_=>"团队输出与干员详情"};
         SetNavState(page);
-        AddPanelButton.Visibility=live ? Visibility.Visible : Visibility.Collapsed;
         ArrangePanels();
         // The list is a pull cache owned by Python: re-read it on every entry so a
         // battle finished a moment ago is visible without pressing 刷新.
@@ -1235,10 +1272,15 @@ public partial class MainWindow : Window
                 else button.BorderBrush = Brushes.Transparent;
                 button.BorderThickness = new Thickness(2, 0, 0, 0);
             }
-            else
+            else if (Theme.IsPeople)
             {
                 button.SetResourceReference(Control.BorderBrushProperty, active ? "ShellNavSelectedEdge" : "SidebarLine");
                 button.BorderThickness = new Thickness(active ? 2 : 1);
+            }
+            else
+            {
+                button.SetResourceReference(Control.BorderBrushProperty, "ShellNavSelectedEdge");
+                button.BorderThickness = active ? new Thickness(3, 0, 0, 0) : new Thickness(0);
             }
         }
     }
@@ -1253,6 +1295,12 @@ public partial class MainWindow : Window
         value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out double number) && double.IsFinite(number)
             ? Math.Round(number, MidpointRounding.AwayFromZero).ToString("N0", System.Globalization.CultureInfo.InvariantCulture) : "—";
     private async void AddPanel(object sender,RoutedEventArgs e)=>await Command("panel_add");
+    private async void OpenConnectionSettings(object sender, RoutedEventArgs e) => await Navigate("settings");
+    private void OpenRankingFooterMenu(object sender, RoutedEventArgs e)
+    {
+        RankingFooterMenuButton.ContextMenu.PlacementTarget = RankingFooterMenuButton;
+        RankingFooterMenuButton.ContextMenu.IsOpen = true;
+    }
     private void MinimizeWindow(object sender, RoutedEventArgs e)
     {
         sideMinimizedWithPlayer = false;

@@ -56,6 +56,7 @@ public sealed class Inspector : Border
         primaryDataOnly=true;
         CompactReference=true;
     }
+    internal void RefreshTheme() => CompactReference=compactReference;
     internal void Empty()
     {
         displayed=null;

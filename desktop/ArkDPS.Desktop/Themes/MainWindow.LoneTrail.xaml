@@ -1,45 +1,147 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
- <LinearGradientBrush x:Key="FrameSurface" StartPoint="0,0" EndPoint="0,1">
-  <GradientStop Color="#F4F5F6" Offset="0"/><GradientStop Color="#D6DADE" Offset=".19"/>
-  <GradientStop Color="#F2F4F6" Offset=".65"/><GradientStop Color="#ADB6C0" Offset="1"/>
- </LinearGradientBrush>
- <SolidColorBrush x:Key="FrameEdge" Color="#83909B"/>
- <SolidColorBrush x:Key="FrameInnerEdge" Color="#667480"/>
- <SolidColorBrush x:Key="FrameInk" Color="#0E1A27"/>
- <SolidColorBrush x:Key="FrameMuted" Color="#40505F"/>
- <SolidColorBrush x:Key="FrameAccent" Color="#F47F19"/>
- <DrawingImage x:Key="FrameSlashes">
-  <DrawingImage.Drawing>
-   <GeometryDrawing Brush="#283540" Geometry="M 8 0 L 14 0 L 6 14 L 0 14 Z M 17 0 L 23 0 L 15 14 L 9 14 Z M 26 0 L 32 0 L 24 14 L 18 14 Z"/>
-  </DrawingImage.Drawing>
- </DrawingImage>
- <SolidColorBrush x:Key="MetricSurface" Color="#202932"/>
- <SolidColorBrush x:Key="MetricEdge" Color="#4C5966"/>
- <SolidColorBrush x:Key="MetricInk" Color="#F6F8FA"/>
- <SolidColorBrush x:Key="MetricMuted" Color="#D4DFE8"/>
- <SolidColorBrush x:Key="MetricHighlight" Color="#FF861D"/>
- <SolidColorBrush x:Key="MetricSignal" Color="#6BD8EB"/>
- <SolidColorBrush x:Key="ChromeBrandSurface" Color="#EA1A242C"/>
- <SolidColorBrush x:Key="ChromeDescriptionSurface" Color="#CF202930"/>
- <SolidColorBrush x:Key="ChromeControlsSurface" Color="#DF202930"/>
- <SolidColorBrush x:Key="ChromeButtonSurface" Color="#222C35"/>
- <SolidColorBrush x:Key="ChromeButtonHover" Color="#31414F"/>
- <SolidColorBrush x:Key="ChromeButtonEdge" Color="#576571"/>
- <SolidColorBrush x:Key="ChromeInk" Color="#F2F6FA"/>
- <SolidColorBrush x:Key="ChromeMuted" Color="#BFC9D1"/>
- <SolidColorBrush x:Key="ShellBackdrop" Color="Transparent"/>
- <SolidColorBrush x:Key="SubpageHeadingSurface" Color="Transparent"/>
- <Thickness x:Key="SubpageHeadingPadding">0</Thickness>
- <SolidColorBrush x:Key="ShellSidebarEdge" Color="#586775"/>
- <ImageBrush x:Key="ShellSidebarArtwork" ImageSource="/Assets/LoneTrail/sidebar-orbital-detail.png" Stretch="UniformToFill" Opacity=".94"/>
- <SolidColorBrush x:Key="ShellSidebarShade" Color="#4516202B"/>
- <LinearGradientBrush x:Key="ShellNavActive" StartPoint="0,0" EndPoint="0,1">
-  <GradientStop Color="#5F371B" Offset="0"/><GradientStop Color="#AA571B" Offset="1"/>
- </LinearGradientBrush>
- <SolidColorBrush x:Key="ShellNavSelectedEdge" Color="#FF982F"/>
- <BitmapImage x:Key="ShellLiveNavIcon" UriSource="/Assets/LoneTrail/realtime.png"/>
- <BitmapImage x:Key="ShellEnemyNavIcon" UriSource="/Assets/LoneTrail/enemy.png"/>
- <BitmapImage x:Key="ShellHistoryNavIcon" UriSource="/Assets/LoneTrail/history.png"/>
- <BitmapImage x:Key="ShellSettingsNavIcon" UriSource="/Assets/LoneTrail/connection.png"/>
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+    ============================================================================
+    ArkDPS · Lone Trail (孤星) 现代化重构主题字典
+    目标路径: desktop/ArkDPS.Desktop/Themes/MainWindow.LoneTrail.xaml
+    设计原则:
+      1. 以五级哑光深色表面明度 (L0–L4) + 1px 极细半透明描边取代刺眼纯白顶栏与粗白外框
+      2. 保留原有全部 x:Key 键名，确保 MainWindow.xaml / StatisticPanel.xaml / HudWindow.cs 零破坏兼容
+      3. 新增语义化 Design Token (Brush.Surface.* / Brush.Border.* / Brush.Text.* / Brush.Accent.*)
+         供 Themes/Controls.Modern.xaml 及后续「人们，我们。」「巴别塔」皮肤统一消费
+    ============================================================================
+    -->
+
+    <!-- ==================================================================== -->
+    <!-- 1. 现代语义化 Design Token (供新控件模板与后续多皮肤对齐使用)        -->
+    <!-- ==================================================================== -->
+
+    <!-- 1.1 五级表面明度阶梯 (Elevation Surfaces) -->
+    <SolidColorBrush x:Key="Brush.Surface.Canvas"      Color="#0B0F14"/>
+    <SolidColorBrush x:Key="Brush.Surface.Sidebar"     Color="#0E131B"/>
+    <SolidColorBrush x:Key="Brush.Surface.Panel"       Color="#111720"/>
+    <SolidColorBrush x:Key="Brush.Surface.Elevated"    Color="#171F2B"/>
+    <SolidColorBrush x:Key="Brush.Surface.Hover"       Color="#1E2836"/>
+    <SolidColorBrush x:Key="Brush.Surface.Pressed"     Color="#253142"/>
+    <SolidColorBrush x:Key="Brush.Surface.Popup"       Color="#151D28"/>
+
+    <!-- 1.2 极细半透明结构描边 (Hairline Borders) -->
+    <SolidColorBrush x:Key="Brush.Border.Hairline"     Color="#14FFFFFF"/> <!-- 8% 白 -->
+    <SolidColorBrush x:Key="Brush.Border.Subtle"       Color="#1FFFFFFF"/> <!-- 12% 白 -->
+    <SolidColorBrush x:Key="Brush.Border.Strong"       Color="#33FFFFFF"/> <!-- 20% 白 -->
+    <SolidColorBrush x:Key="Brush.Border.Active"       Color="#80F97316"/> <!-- 50% 孤星橙 -->
+
+    <!-- 1.3 文本对比度层级 (AAA / AA+ Dark Contrast) -->
+    <SolidColorBrush x:Key="Brush.Text.Primary"        Color="#F1F5F9"/>
+    <SolidColorBrush x:Key="Brush.Text.Secondary"      Color="#CBD5E1"/>
+    <SolidColorBrush x:Key="Brush.Text.Muted"          Color="#8B9BB0"/>
+    <SolidColorBrush x:Key="Brush.Text.Disabled"       Color="#526277"/>
+
+    <!-- 1.4 孤星语义强调色 (Restrained Lone Trail DNA) -->
+    <SolidColorBrush x:Key="Brush.Accent.Primary"      Color="#F97316"/> <!-- 孤星橙 -->
+    <SolidColorBrush x:Key="Brush.Accent.PrimaryHover" Color="#FB923C"/>
+    <SolidColorBrush x:Key="Brush.Accent.PrimarySoft"  Color="#22F97316"/> <!-- 13% 橙底 -->
+    <SolidColorBrush x:Key="Brush.Accent.PrimaryInk"   Color="#FFF8F1"/>
+
+    <SolidColorBrush x:Key="Brush.Accent.Telemetry"    Color="#2DD4BF"/> <!-- 遥测青 -->
+    <SolidColorBrush x:Key="Brush.Accent.TelemetrySoft" Color="#1F2DD4BF"/>
+
+    <!-- 1.5 状态与危险操作语义色 -->
+    <SolidColorBrush x:Key="Brush.Status.Good"         Color="#34D399"/>
+    <SolidColorBrush x:Key="Brush.Status.Warn"         Color="#FBBF24"/>
+    <SolidColorBrush x:Key="Brush.Status.Danger"       Color="#F87171"/>
+    <SolidColorBrush x:Key="Brush.Status.DangerSoft"   Color="#24EF4444"/>
+    <SolidColorBrush x:Key="Brush.Status.DangerBorder" Color="#66EF4444"/>
+
+    <!-- 1.6 控件圆角与背景暗化蒙版 -->
+    <CornerRadius x:Key="Radius.Panel">8</CornerRadius>
+    <CornerRadius x:Key="Radius.Card">6</CornerRadius>
+    <CornerRadius x:Key="Radius.Control">6</CornerRadius>
+    <CornerRadius x:Key="Radius.Pill">999</CornerRadius>
+
+    <LinearGradientBrush x:Key="Brush.Backdrop.Scrim" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0"   Color="#E60B0F14"/>
+        <GradientStop Offset="0.5" Color="#F00B0F14"/>
+        <GradientStop Offset="1"   Color="#F70B0F14"/>
+    </LinearGradientBrush>
+
+    <!-- ==================================================================== -->
+    <!-- 2. 原有 MainWindow.LoneTrail.xaml 键名兼容映射 (Drop-In 止血核心)     -->
+    <!--    将原本刺眼的纯白渐变顶栏与粗白外框平滑替换为哑光深色面板体系       -->
+    <!-- ==================================================================== -->
+
+    <!-- 面板主体与标题条：彻底移除 #F4F5F6 亮白金属渐变，改为 L1 哑光深色 -->
+    <LinearGradientBrush x:Key="FrameSurface" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0" Color="#141B26"/>
+        <GradientStop Offset="1" Color="#111720"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="FrameEdge"                 Color="#17FFFFFF"/> <!-- 9% 细描边替代 #83909B 粗灰白框 -->
+    <SolidColorBrush x:Key="FrameInnerEdge"            Color="#12FFFFFF"/> <!-- 7% 内分隔线 -->
+    <SolidColorBrush x:Key="FrameInk"                  Color="#F1F5F9"/>   <!-- 浅色主字（配合深色 FrameSurface） -->
+    <SolidColorBrush x:Key="FrameMuted"                Color="#8B9BB0"/>   <!-- 克制副标题灰 -->
+    <SolidColorBrush x:Key="FrameAccent"               Color="#F97316"/>   <!-- 2-3px 孤星橙指示点 -->
+
+    <!-- KPI 指标卡：去粗灰框，改用 L2 表面明度分层 -->
+    <SolidColorBrush x:Key="MetricSurface"             Color="#171F2B"/>
+    <SolidColorBrush x:Key="MetricEdge"                Color="#12FFFFFF"/> <!-- 极细 7% 描边替代 #4C5966 -->
+    <SolidColorBrush x:Key="MetricInk"                 Color="#F8FAFC"/>
+    <SolidColorBrush x:Key="MetricMuted"               Color="#94A3B8"/>
+    <SolidColorBrush x:Key="MetricHighlight"           Color="#F97316"/>
+    <SolidColorBrush x:Key="MetricSignal"              Color="#2DD4BF"/>
+
+    <!-- 顶部无边框 Chrome 标题栏：高不透明度深色统一，不再透出凌乱壁纸 -->
+    <SolidColorBrush x:Key="ChromeBrandSurface"        Color="#F20B0F14"/>
+    <SolidColorBrush x:Key="ChromeDescriptionSurface"  Color="#EB0E131B"/>
+    <SolidColorBrush x:Key="ChromeControlsSurface"     Color="#F20B0F14"/>
+    <SolidColorBrush x:Key="ChromeButtonSurface"       Color="#171F2B"/>
+    <SolidColorBrush x:Key="ChromeButtonHover"         Color="#232F40"/>
+    <SolidColorBrush x:Key="ChromeButtonEdge"          Color="#1AFFFFFF"/>
+    <SolidColorBrush x:Key="ChromeInk"                 Color="#F1F5F9"/>
+    <SolidColorBrush x:Key="ChromeMuted"               Color="#8B9BB0"/>
+
+    <!-- 窗口底层与侧边导航栏：压暗插画，取消厚重橙色渐变块 -->
+    <SolidColorBrush x:Key="ShellBackdrop"             Color="#0B0F14"/>
+    <SolidColorBrush x:Key="SubpageHeadingSurface"     Color="Transparent"/>
+    <SolidColorBrush x:Key="ShellSidebarEdge"          Color="#14FFFFFF"/>
+    <LinearGradientBrush x:Key="ShellSidebarShade" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Offset="0"    Color="#EB0E131B"/>
+        <GradientStop Offset="0.62" Color="#E00E131B"/>
+        <GradientStop Offset="1"    Color="#D40B0F14"/>
+    </LinearGradientBrush>
+
+    <!-- 侧边栏选中态：轻盈半透明孤星橙底 + 锐利亮橙指示 -->
+    <LinearGradientBrush x:Key="ShellNavActive" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Offset="0" Color="#2CF97316"/>
+        <GradientStop Offset="1" Color="#0CF97316"/>
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="ShellNavSelectedEdge"      Color="#F97316"/>
+
+    <!-- ==================================================================== -->
+    <!-- 3. 间距、弱化版装饰矢量与原有图片资源                                 -->
+    <!-- ==================================================================== -->
+    <Thickness x:Key="SubpageHeadingPadding">0</Thickness>
+
+    <!-- 原本刺眼的黑斜杠 /// 弱化为 12% 不透明度的极细工业暗纹 -->
+    <DrawingImage x:Key="FrameSlashes">
+        <DrawingImage.Drawing>
+            <GeometryDrawing Brush="#1FFFFFFF"
+                             Geometry="M 4,14 L 10,2 L 12,2 L 6,14 Z M 12,14 L 18,2 L 20,2 L 14,14 Z M 20,14 L 26,2 L 28,2 L 22,14 Z"/>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <!-- 侧边栏星轨插画：降低不透明度至 0.24，作为氛围暗纹而非前景干扰 -->
+    <ImageBrush x:Key="ShellSidebarArtwork"
+                ImageSource="/Assets/LoneTrail/sidebar-orbital-detail.png"
+                Stretch="UniformToFill"
+                AlignmentY="Bottom"
+                Opacity="0.24"/>
+
+    <!-- 原有导航图标路径保持不变 -->
+    <BitmapImage x:Key="ShellLiveNavIcon"     UriSource="/Assets/LoneTrail/realtime.png"/>
+    <BitmapImage x:Key="ShellEnemyNavIcon"    UriSource="/Assets/LoneTrail/enemy.png"/>
+    <BitmapImage x:Key="ShellHistoryNavIcon"  UriSource="/Assets/LoneTrail/history.png"/>
+    <BitmapImage x:Key="ShellSettingsNavIcon" UriSource="/Assets/LoneTrail/connection.png"/>
+
 </ResourceDictionary>

@@ -12,15 +12,31 @@ namespace ArkDPS.Desktop;
 internal static class Screenshot
 {
     public static byte[] Capture(FrameworkElement element, double dpi=96)
+        => Encode(Render(element,dpi));
+    private static RenderTargetBitmap Render(FrameworkElement element, double dpi)
     {
         element.UpdateLayout();
         double scale=dpi/96;
         int width=Math.Max(1,(int)Math.Ceiling(element.ActualWidth*scale)),height=Math.Max(1,(int)Math.Ceiling(element.ActualHeight*scale));
         var target=new RenderTargetBitmap(width,height,dpi,dpi,PixelFormats.Pbgra32);target.Render(element);
-        var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(target));
+        return target;
+    }
+    private static byte[] Encode(BitmapSource bitmap)
+    {
+        var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));
         using var stream=new MemoryStream();encoder.Save(stream);return stream.ToArray();
     }
     public static void Window(Window window,string path,double dpi=96)=>File.WriteAllBytes(path,Capture((FrameworkElement)window.Content,dpi));
+    internal static byte[] CaptureRegion(FrameworkElement root, FrameworkElement region)
+    {
+        var bitmap = Render(root, 96);
+        var origin = region.TranslatePoint(new Point(), root);
+        var bounds = new Rect(origin, region.RenderSize);
+        bounds.Intersect(new Rect(0, 0, bitmap.PixelWidth, bitmap.PixelHeight));
+        int x = (int)Math.Floor(bounds.Left), y = (int)Math.Floor(bounds.Top);
+        var pixels = new Int32Rect(x, y, (int)Math.Ceiling(bounds.Right)-x, (int)Math.Ceiling(bounds.Bottom)-y);
+        return Encode(new CroppedBitmap(bitmap, pixels));
+    }
     private static string OverkillText(JsonElement detail)
     {
         var value=detail.Get("overkill_damage");

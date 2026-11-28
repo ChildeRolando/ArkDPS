@@ -88,7 +88,7 @@ python acceptance/verify_wpf.py --bundle runtime/packages/<解压目录> --outpu
 python acceptance/verify_wpf_package.py runtime/packages/<构建包>.zip --output runtime/package-validation
 ```
 
-`verify_wpf.py` 驱动真实 WPF 与真实 stdio 握手，覆盖合成历史、双主题、HUD 几何/锁定/透明度恢复、
+`verify_wpf.py` 驱动真实 WPF 与真实 stdio 握手，覆盖合成历史、三套皮肤热切换后的历史搜索与连接设置输入框选区、HUD 几何/锁定/透明度恢复、
 历史页进入自动刷新与归档后自动更新、事件不可用原因与恢复入口、PNG 导出和新进程重启恢复。
 `verify_wpf_package.py` 在新目录验证清洁解压、载荷摘要、使用包内 Python/.NET 运行、v1 → WPF v3 布局迁移和 WPF 重启恢复。
 WPF 验收用模拟 GitHub 响应检查版本、下载入口和网络错误。

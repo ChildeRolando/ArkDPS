@@ -10,6 +10,12 @@ namespace ArkDPS.Desktop;
 
 public partial class App : System.Windows.Application
 {
+    static App()
+    {
+        // WPF honors SelectionTextBrush when it draws the highlight behind the text.
+        AppContext.SetSwitch("Switch.System.Windows.Controls.Text.UseAdornerForTextboxSelectionRendering", false);
+    }
+
     internal static string Root = "";
     internal static string Python = "python.exe";
     internal static string StateDirectory = "";
@@ -356,18 +362,18 @@ internal static class Theme
     {
         [LoneTrail]=new()
         {
-            ["Bg"]="#0E141B",
-            ["Card"]="#151F29",
-            ["Inset"]="#1C2935",
+            ["Bg"]="#0B0F14",
+            ["Card"]="#111720",
+            ["Inset"]="#171F2B",
             ["Ink"]="#F1F5F9",
-            ["Muted"]="#AFBECF",
-            ["Line"]="#516476",
-            ["Edge"]="#708497",
-            ["Accent"]="#FF982F",
-            ["AccentInk"]="#201509",
-            ["AccentText"]="#FFAD5A",
-            ["Focus"]="#FFBE7D",
-            ["FocusOnDark"]="#FFBE7D",
+            ["Muted"]="#8B9BB0",
+            ["Line"]="#17FFFFFF",
+            ["Edge"]="#33FFFFFF",
+            ["Accent"]="#F97316",
+            ["AccentInk"]="#1A0D04",
+            ["AccentText"]="#FB923C",
+            ["Focus"]="#F97316",
+            ["FocusOnDark"]="#FB923C",
             ["Good"]="#78DCAE",
             ["Warn"]="#FFD275",
             ["Danger"]="#FF9597",
@@ -377,20 +383,20 @@ internal static class Theme
             ["True"]="#FFFFFF",
             ["Heal"]="#7CD9A8",
             ["Shield"]="#A1CBEC",
-            ["Away"]="#202D38",
-            ["Track"]="#293B4A",
-            ["Console"]="#0F1B25",
-            ["ConsoleCard"]="#182833",
+            ["Away"]="#141B26",
+            ["Track"]="#1E2836",
+            ["Console"]="#111720",
+            ["ConsoleCard"]="#171F2B",
             ["ConsoleInk"]="#F1F5F9",
             ["ConsoleMuted"]="#B8CCDB",
-            ["ConsoleLine"]="#566E82",
-            ["Signal"]="#FF9B44",
-            ["Sidebar"]="#0D1721",
-            ["SidebarCard"]="#172636",
+            ["ConsoleLine"]="#1FFFFFFF",
+            ["Signal"]="#2DD4BF",
+            ["Sidebar"]="#0E131B",
+            ["SidebarCard"]="#171F2B",
             ["SidebarInk"]="#F1F5F9",
             ["SidebarMuted"]="#B9CBDA",
-            ["SidebarLine"]="#495F72",
-            ["SidebarActive"]="#223549",
+            ["SidebarLine"]="#1FFFFFFF",
+            ["SidebarActive"]="#1E2836",
             ["Hero"]="#111C27",
             ["HeroInk"]="#F1F5F9",
             ["HeroMuted"]="#B9CBDA",
@@ -399,7 +405,7 @@ internal static class Theme
             ["HeroStatusInk"]="#FFAD5A",
             ["HeroCardInk"]="#F1F5F9",
             ["HeroCardMuted"]="#B9CBDA",
-            ["Radius"]="3",
+            ["Radius"]="8",
         },
         [People]=new()
         {
@@ -516,6 +522,14 @@ internal static class Theme
         foreach (var pair in colors)
             if (pair.Key != "Radius") resources[pair.Key] = Brush(pair.Value);
 
+        resources["Brush.Surface.Popup"] = IsPeople ? resources["Card"] : resources["Inset"];
+        resources["Brush.Surface.Hover"] = Key == LoneTrail ? Brush("#1E2836") : resources["Card"];
+        resources["Brush.Border.Active"] = resources["Accent"];
+        resources["ControlSelection"] = resources[IsPeople ? "Inset" : "Track"];
+        var danger = (SolidColorBrush)resources["Danger"];
+        resources["Brush.Status.DangerSoft"] = Brush(Color.FromArgb(0x24, danger.Color.R, danger.Color.G, danger.Color.B).ToString());
+        resources["Brush.Status.DangerBorder"] = Brush(Color.FromArgb(0x66, danger.Color.R, danger.Color.G, danger.Color.B).ToString());
+
         resources["InterfaceFont"] = Key == LoneTrail ? LoneTrailInterface : StandardInterface;
         resources["HeadingFont"] = IsPeople ? PeopleDisplay : LoneTrailInterface;
         resources["DisplayFont"] = Key switch
@@ -542,7 +556,7 @@ internal static class Theme
         resources["ReferenceRankLeader"] = IsPeople ? PeopleRankLeader : Brushes.Transparent;
         int radius = int.Parse(colors["Radius"]);
         resources["CardRadius"] = new CornerRadius(radius);
-        resources["ControlRadius"] = new CornerRadius(IsBabel ? 0 : Math.Max(2, radius - 1));
+        resources["ControlRadius"] = new CornerRadius(Key == LoneTrail ? 6 : IsBabel ? 0 : 2);
         resources["BgGrid"] = Grid(colors["Bg"], colors["Line"]);
     }
 
