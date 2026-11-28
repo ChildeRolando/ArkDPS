@@ -5,6 +5,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from collection_presentation_events import presentation_events
 
 import collection_session as session_module
 from collection_session import CollectionSession
@@ -234,7 +235,7 @@ def test_actual_worker_keeps_one_shot_source_after_optional_projection_fault(tmp
     assert fired[0]
     assert trace.count('connect') == 1
     assert trace.index('read:3') < trace.index('observer_stop')
-    notices = list(worker.events.queue)
+    notices = list(presentation_events(worker.events.queue))
     assert len([value for kind, value in notices if kind == 'sample']) == 3
     assert not any(kind in ('error', 'worker_error') for kind, _ in notices)
     assert source.runtime.sessions.multiplayer.result()['players'][2]['observed_damage'] == 75

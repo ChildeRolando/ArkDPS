@@ -4,6 +4,7 @@ from threading import Event, Thread
 from queue import Queue
 
 import pytest
+from collection_presentation_events import presentation_events
 
 from native_pc import event_source
 import desktop_bridge
@@ -178,7 +179,7 @@ def test_rescan_during_startup_preserves_original_owner_and_arming_boundary(tmp_
 
 def test_explicit_rescan_republishes_unchanged_owner_watch_after_source_marker(tmp_path, monkeypatch):
     trace, worker = run_sequence(tmp_path, monkeypatch, 'armed_rescan')
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     marker = events.index(('connection_source', {'revision': 2, 'platform': 'native_pc'}))
     fresh = next(value for kind, value in events[marker + 1:] if kind == 'native_pc_bootstrap')
     assert fresh['status'] == 'waiting_for_process' and fresh['armed_filetime'] == 123
@@ -223,7 +224,7 @@ def test_failed_old_session_release_cannot_publish_retired_owner_as_new_source(t
     # The outstanding request is newer than the retired owner's bound revision.
     worker._pc_bootstrap_revision = 0
     worker.run()
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     assert any(kind == 'connection_source' for kind, _ in events)
     assert not any(kind == 'native_pc_bootstrap' and value is not None for kind, value in events)
     assert not any(kind == 'worker_error' for kind, _ in events)

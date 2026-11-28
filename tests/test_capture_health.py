@@ -2,6 +2,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from collection_presentation_events import presentation_events
 
 import desktop_bridge
 from collector import NativeClockBusy
@@ -128,4 +129,5 @@ def test_worker_logs_typed_stale_and_recovery_without_debug(tmp_path, monkeypatc
                    event_backend='disabled', observer_status='disabled', lifecycle='playing', generation=1)
                for event in events)
     assert events[1]['gap_ms'] == 2600
-    assert [value['captured_monotonic'] for kind, value in worker.events.queue if kind == 'sample'] == pytest.approx([0., 2.6])
+    assert [value['captured_monotonic'] for kind, value in presentation_events(worker.events.queue)
+            if kind == 'sample'] == pytest.approx([0., 2.6])

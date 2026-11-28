@@ -5,6 +5,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from collection_presentation_events import presentation_events
 
 import desktop_bridge as bridge
 from autochess_context import NATIVE_AUTOCHESS_CHARACTER_COUNTERS, NATIVE_AUTOCHESS_CHARACTER_LABEL
@@ -208,7 +209,7 @@ def run_worker(tmp_path, monkeypatch, actions, *, platform='mumu'):
         adb_path='owned-fixture', serial='owned-fixture', diagnostics=diagnostic))
     worker.request(config, False)
     worker.run()
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     assert not any(kind in ('error', 'worker_error') for kind, _ in events)
     assert worker.requests.empty()
     return state, worker, events, calls

@@ -11,6 +11,7 @@ import time
 from unittest.mock import patch
 
 import pytest
+from collection_presentation_events import presentation_events
 
 from battle_history import BattleHistory, BattleRecord
 from damage_settlement import DamageSettlement
@@ -1307,7 +1308,7 @@ def test_unwritable_capture_directory_does_not_stop_live_worker(tmp_path, monkey
     monkeypatch.setattr(desktop_bridge, 'CollectionSession', Session)
     worker.request(state.connection, False)
     worker.run()
-    events = dict(worker.events.queue)
+    events = dict(presentation_events(worker.events.queue))
     assert '采集日志暂不可写' in events['warning']
     assert events['sample']['frame'] == 1
     assert 'error' not in events and 'worker_error' not in events
@@ -1376,7 +1377,7 @@ def test_worker_paces_advancing_samples_and_preserves_retry_backoff(tmp_path, mo
 
     assert delays == pytest.approx([.12, .05, .2, .2, .2, .2])
     assert starts == pytest.approx([0, .20, .52, .80, 1.08, 1.36])
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     assert not any(kind == 'error' for kind, _ in events)
     assert [sample['frame'] for kind, sample in events if kind == 'sample'] == [10, 20, 20, 30]
 
@@ -1440,7 +1441,8 @@ def test_worker_publishes_game_initialization_without_observer_or_battle(tmp_pat
     observer_states = []
     while not worker.events.empty():
         kind, value = worker.events.get_nowait()
-        assert kind not in ('sample', 'error')
+        assert not any(item_kind in ('sample', 'error')
+                       for item_kind, _ in presentation_events(((kind, value),)))
         state.accept(kind, value)
         if kind == 'observer':
             snapshot = state.snapshot()
@@ -2107,7 +2109,7 @@ def test_native_worker_uses_fake_collector_without_adb_frida_and_publishes_typed
     monkeypatch.setattr(desktop_bridge, 'keep_frida_endpoint', forbidden)
     worker.request(ConnectionConfig(platform='native_pc', native_game_root='game'), False)
     worker.run()
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     assert calls == [('collector', 'game'), ('session',), ('close',)]
     assert next(value for kind, value in events if kind == 'diagnostic') == diagnostic.as_dict()
     if denied:

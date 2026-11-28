@@ -5,6 +5,7 @@ from io import StringIO
 from types import SimpleNamespace
 
 import pytest
+from collection_presentation_events import presentation_events
 
 import desktop_bridge
 from connection import ConnectionConfig, ConnectionDiagnostics, DetectionStatus
@@ -145,7 +146,7 @@ def run_worker(tmp_path, monkeypatch, *, factory=None, enabled=True, platform='n
     finally:
         watchdog.cancel()
     assert not timed_out.is_set(), 'In-memory worker did not reach its scripted stop condition'
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     assert not any(kind in ('error', 'worker_error') for kind, _ in events)
     state.effective_connection = worker.effective[0]
     for kind, value in events:

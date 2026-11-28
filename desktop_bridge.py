@@ -7,7 +7,7 @@ from __future__ import annotations
 import argparse
 import base64
 from copy import deepcopy
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
 import math
@@ -55,6 +55,7 @@ MAX_MESSAGE = 32 * 1024 * 1024
 BRIDGE_SLOW_PHASE_SECONDS = .5
 BRIDGE_EVENT_LIMIT = 32
 BRIDGE_EVENT_BUDGET = .025
+
 COLLECTION_PERIOD = .2
 COLLECTION_MIN_REST = .05
 CAPTURE_STALE_SECONDS = 2.
@@ -357,6 +358,55 @@ INSPECTOR_SOURCE_FIELDS = frozenset({
     'event_coverage_complete', 'actor_uid', 'player_uid', 'player_side',
 })
 
+_PRESENTATION_UNCHANGED = object()
+
+
+@dataclass(frozen=True)
+class CollectionPresentation:
+    """One collection outcome; never a general batch or a source proof.
+
+    The producer has already completed the read/ACK decision. Scene, lifecycle,
+    rejection and its accepted sample must cross the UI queue as one item.
+    """
+    outcome: str
+    lifecycle: str | None = None
+    scene_changed: bool = False
+    scene: object = None
+    rejection_changed: bool = False
+    sampling_rejection: dict | None = None
+    sample: dict | None = None
+    error: str | None = None
+
+    def __post_init__(self):
+        if (self.outcome not in ('sample', 'retry', 'error')
+                or type(self.scene_changed) is not bool or type(self.rejection_changed) is not bool
+                or self.lifecycle is not None and not isinstance(self.lifecycle, str)
+                or self.sample is not None and (self.outcome != 'sample' or not isinstance(self.sample, dict))
+                or self.error is not None and (self.outcome != 'error' or not isinstance(self.error, str))
+                or self.outcome == 'error' and (self.error is None or self.lifecycle is not None
+                    or self.sample is not None or self.rejection_changed)
+                or self.outcome in ('sample', 'retry') and self.lifecycle is None
+                or self.outcome == 'retry' and self.sample is not None
+                or self.sampling_rejection is not None and (not self.rejection_changed
+                    or not isinstance(self.sampling_rejection, dict))):
+            raise ValueError('invalid collection presentation outcome')
+
+    def events(self):
+        """Fixed reducer order; old direct-event callers remain supported."""
+        result = []
+        if self.scene_changed:
+            result.append(('autochess_scene', self.scene))
+        if self.lifecycle is not None:
+            result.append(('lifecycle', self.lifecycle))
+        if self.rejection_changed:
+            result.append(('sampling_rejection', self.sampling_rejection))
+        if self.sample is not None:
+            result.append(('sample', self.sample))
+        if self.error is not None:
+            result.append(('error', self.error))
+        return tuple(result)
+
+
 class DesktopState:
     """Single-threaded command owner; collector input is queued by its worker."""
     def __init__(self, directory=None):
@@ -516,6 +566,18 @@ class DesktopState:
         self._materialized_views = dict(owner=self, scopes={}, views={})
 
     def accept(self, kind, value):
+        if kind == 'collection_presentation':
+            if not isinstance(value, CollectionPresentation):
+                raise ValueError('invalid collection presentation payload')
+            # This reducer runs on the stdio owner. A drain limit may stop before
+            # or after the item, never between its related presentation fields.
+            self._invalidate_presentation()
+            for event_kind, event_value in value.events():
+                self._accept_event(event_kind, event_value, invalidate=False)
+            return
+        self._accept_event(kind, value)
+
+    def _accept_event(self, kind, value, *, invalidate=True):
         if kind == 'event_capture_control':
             if (self._awaiting_source and (not isinstance(value, dict)
                     or value.get('source_revision') != self._source_request_revision)):
@@ -531,7 +593,8 @@ class DesktopState:
             return
         # Every admitted source/quality event is a revision, even at the same frame.
         # FPS is an independent overlay and is read directly from its monitor.
-        self._invalidate_presentation()
+        if invalidate:
+            self._invalidate_presentation()
         if kind == 'worker_error':
             # Setup/loop failure can precede a source marker. It is global to
             # the worker, rather than stale data from a retired session.
@@ -1960,21 +2023,29 @@ class CollectionWorker:
                     initial_config, initial_events = self.effective
                     audit('worker_started', {'platform': initial_config.platform, 'event_observation': initial_events})
 
-                    def publish_sampling_rejection(value):
-                        nonlocal last_sampling_rejection
-                        if value != last_sampling_rejection:
-                            last_sampling_rejection = value
-                            self.events.put(('sampling_rejection', value))
-
-                    def publish_autochess_scene(runtime, *, exited=False):
-                        nonlocal last_autochess_scene
-                        feed = runtime.feed
-                        scene = None if exited else getattr(feed, 'autochess_scene', None)
-                        if scene is None and not (exited or getattr(feed, 'autochess_exited', False)):
-                            return  # A short read is not an exit or a phase transition.
-                        if scene != last_autochess_scene:
-                            last_autochess_scene = scene
-                            self.events.put(('autochess_scene', scene))
+                    def publish_collection_presentation(runtime, outcome, *, sample=None,
+                            rejection=_PRESENTATION_UNCHANGED, error=None,
+                            announce_scene=True, exited=False, publish_lifecycle=True):
+                        nonlocal last_sampling_rejection, last_autochess_scene
+                        scene_changed, scene = False, None
+                        if announce_scene:
+                            feed = runtime.feed
+                            scene = None if exited else getattr(feed, 'autochess_scene', None)
+                            if scene is not None or exited or getattr(feed, 'autochess_exited', False):
+                                scene_changed = scene != last_autochess_scene
+                                if scene_changed:
+                                    last_autochess_scene = scene
+                        rejection_changed = (rejection is not _PRESENTATION_UNCHANGED
+                                             and rejection != last_sampling_rejection)
+                        if rejection_changed:
+                            last_sampling_rejection = rejection
+                        self.events.put(('collection_presentation', CollectionPresentation(
+                            outcome=outcome,
+                            lifecycle=runtime.sessions.state if publish_lifecycle else None,
+                            scene_changed=scene_changed, scene=scene,
+                            rejection_changed=rejection_changed,
+                            sampling_rejection=rejection if rejection_changed else None,
+                            sample=sample, error=error)))
 
                     def bind_observer_endpoint(target):
                         nonlocal endpoint_bound
@@ -2200,11 +2271,9 @@ class CollectionWorker:
                             try:
                                 sample = self.session.read()
                                 finished = time.monotonic()
-                                publish_autochess_scene(runtime)
-                                self.events.put(('lifecycle', runtime.sessions.state))
+                                publish_collection_presentation(runtime, 'sample', sample=sample if sample else None,
+                                    rejection=None if sample else _PRESENTATION_UNCHANGED)
                                 if sample:
-                                    publish_sampling_rejection(None)
-                                    self.events.put(('sample', sample))
                                     if sample.get('state') == 2 and sample.get('frame') is not None:
                                         frame = (sample.get('battle_id'), sample['frame'])
                                         if frame != last_live_frame:
@@ -2216,9 +2285,8 @@ class CollectionWorker:
                                     captured=sample.get('captured_monotonic') if sample else None)
                             except CaptureRetry as exc:
                                 finished = time.monotonic()
-                                publish_autochess_scene(runtime)
                                 lifecycle = runtime.sessions.state
-                                self.events.put(('lifecycle', lifecycle))
+                                rejection = _PRESENTATION_UNCHANGED
                                 # A failed read may already have consumed a native
                                 # pre-observer frame. Never accelerate that path.
                                 if (clock_retry and self.session is owner[1]
@@ -2240,18 +2308,19 @@ class CollectionWorker:
                                 current_observation = observed_feed == feed.id and observed_sequence == sessions.sequence
                                 if isinstance(exc, MappingRetry):
                                     reason = str(exc).partition('\n')[0].strip()[:200]
-                                    publish_sampling_rejection(dict(code='mapping_unavailable',
-                                                                    reason=reason or '归属证据尚未确认'))
+                                    rejection = dict(code='mapping_unavailable',
+                                                     reason=reason or '归属证据尚未确认')
                                 elif (current_config.platform == 'native_pc' and current_observation
                                         and observed_kind == 'scope_unavailable'
                                         and observed_reason == NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED):
-                                    publish_sampling_rejection(dict(code='mapping_unavailable',
+                                    rejection = dict(code='mapping_unavailable',
                                         reason='卫戍小局的阶段和玩家身份尚未确认',
-                                        scope_code=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED))
+                                        scope_code=NATIVE_PC_AUTOCHESS_SCOPE_UNVERIFIED)
                                 elif current_observation and observed_kind in ('preparing', 'waiting', 'end', 'terminal'):
                                     # _read_lifecycle reports successfully consumed non-sample
                                     # observations as retries. A gap or an old state is not proof.
-                                    publish_sampling_rejection(None)
+                                    rejection = None
+                                publish_collection_presentation(runtime, 'retry', rejection=rejection)
                                 code = _capture_retry_code(exc, observed_kind if current_observation else None,
                                                            observed_reason if current_observation else None)
                                 active = (current_revision == self._request_revision and (lifecycle == 'playing' or
@@ -2275,9 +2344,9 @@ class CollectionWorker:
                                         last_retry_audit = now
                             except BattleChanged as exc:
                                 capture_health.reset()
-                                if isinstance(exc, ProcessChanged):
-                                    publish_autochess_scene(runtime, exited=True)
-                                self.events.put(('error', str(exc)))
+                                publish_collection_presentation(runtime, 'error', error=str(exc),
+                                    announce_scene=isinstance(exc, ProcessChanged),
+                                    exited=isinstance(exc, ProcessChanged), publish_lifecycle=False)
                                 usable = False
                                 self.last_connect_attempt = time.monotonic()
                                 self._retry_connection(current_revision)
@@ -2295,7 +2364,8 @@ class CollectionWorker:
                                       'window_failure': barrier_failure_context(exc),
                                       'stream_gap_failure': getattr(exc, 'stream_gap_failure', None),
                                       'monotonic': time.monotonic()})
-                                self.events.put(('error', str(exc)))
+                                publish_collection_presentation(runtime, 'error', error=str(exc),
+                                    announce_scene=False, publish_lifecycle=False)
                                 diag = getattr(exc, 'diagnostics', None)
                                 if diag is None:
                                     diag = getattr(self.session.collector, 'diagnostics', None)

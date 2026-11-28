@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from collection_presentation_events import presentation_events
 
 import desktop_bridge as bridge
 import native_pc_collector
@@ -169,7 +170,7 @@ def run_owned_worker(tmp_path, monkeypatch, fault='healthy', *, baseline_run=Non
     worker.request(ConnectionConfig(platform='native_pc', native_pc_event_backend='native',
                                     native_game_root='owned-offline'), True)
     worker.run()
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     report = dict(trace=trace, session_count=len(instances), requested=requested[0],
         read3=('read', 3) in trace, commits=list(source.commits), queue=len(source.queue),
         held_transaction_present=bool(held and held[0] is not None), held_seen=held_seen,

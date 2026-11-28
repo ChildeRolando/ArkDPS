@@ -8,6 +8,7 @@ import hashlib
 import json
 
 import pytest
+from collection_presentation_events import presentation_events, presentation_offsets
 import desktop_bridge as bridge
 import native_pc_collector
 from collection_session import CollectionSession
@@ -184,7 +185,8 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
     if steps:
         steps[-1]['event_end'] = len(events)
     assert len(sessions) == 1 and worker.pc_runtime is None
-    assert not [(kind, value) for kind, value in events if kind in ('error', 'worker_error')]
+    assert not [(kind, value) for kind, value in presentation_events(events)
+                if kind in ('error', 'worker_error')]
     snapshots = {}
     for step in steps:
         if settings_by_action and step['action'] in settings_by_action:
@@ -194,7 +196,13 @@ def run_chain(tmp_path, monkeypatch, actions, *, multiplayer_enabled=True,
         snapshots[step['action']] = state.snapshot()
     for _, raw, original in accepted:
         assert digest(raw) == original
-    return state, battle, steps, events, snapshots, accepted
+    # Replay retains the actual atomic queue shape. Only payload assertions use
+    # a logical view, including remapped boundaries for each controlled read.
+    offsets = presentation_offsets(events)
+    for step in steps:
+        step['event_start'] = offsets[step['event_start']]
+        step['event_end'] = offsets[step['event_end']]
+    return state, battle, steps, list(presentation_events(events)), snapshots, accepted
 
 
 def view_values(snapshot):

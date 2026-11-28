@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import time
 
 import pytest
+from collection_presentation_events import presentation_events
 
 import desktop_bridge as bridge
 from battle_lifecycle import NativeAutoChessScene
@@ -259,7 +260,8 @@ def test_worker_publishes_shared_scene_and_passes_one_live_setting_getter_before
                 self.runtime.feed.autochess_exited = platform == 'native_pc'
                 raise CaptureRetry('short small-round absence without an exit witness')
             if self.reads == 3:
-                after_short.extend(value for kind, value in worker.events.queue if kind == 'autochess_scene')
+                after_short.extend(value for kind, value in presentation_events(worker.events.queue)
+                                   if kind == 'autochess_scene')
                 self.runtime.feed.current_lifecycle = dict(battle=None, state=None, target='',
                     metadata=dict(stage_id='main/1-7', evidence='accepted-stage-fixture'))
                 self.runtime.feed.autochess_exited = True
@@ -276,7 +278,7 @@ def test_worker_publishes_shared_scene_and_passes_one_live_setting_getter_before
     worker.request(config, True)
     worker.run()
     assert len(sessions) == 1 and preferences == [False, True]
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     assert not any(kind == 'worker_error' for kind, _value in events)
     published = [value for kind, value in events if kind == 'autochess_scene']
     assert published == [scene, None]
@@ -365,7 +367,7 @@ def run_android_worker(tmp_path, monkeypatch, actions):
             state.accept(kind, value)
         views[step['action']] = state.snapshot()
     assert all(sample == original for sample, original in accepted)
-    return state, views, events
+    return state, views, list(presentation_events(events))
 
 
 @pytest.mark.parametrize('assist', [False, True])

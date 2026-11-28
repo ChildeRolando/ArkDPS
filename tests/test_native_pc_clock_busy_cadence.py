@@ -2,6 +2,7 @@
 from types import SimpleNamespace
 
 import pytest
+from collection_presentation_events import presentation_events
 
 import desktop_bridge as bridge
 import native_pc_collector as native
@@ -163,7 +164,7 @@ def run_worker(tmp_path, monkeypatch, actions=(), *, platform='native_pc', enabl
                         if session_factory else Session)
     worker.request(config, enabled)
     worker.run()
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     assert not any(kind == 'worker_error' for kind, _ in events), events
     return worker, starts, waits, sessions, events
 

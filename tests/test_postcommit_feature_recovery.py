@@ -8,6 +8,7 @@ from threading import Lock
 from types import SimpleNamespace
 
 import pytest
+from collection_presentation_events import presentation_events
 
 import desktop_audit
 import desktop_bridge as bridge
@@ -368,7 +369,7 @@ def test_actual_worker_keeps_owned_source_and_reaches_next_legal_poll(tmp_path, 
     monkeypatch.setattr(bridge, 'CollectionSession', OwnedSession)
     worker.request(ConnectionConfig(platform='native_pc', native_game_root='owned-offline'), True)
     worker.run()
-    events = list(worker.events.queue)
+    events = list(presentation_events(worker.events.queue))
     assert fired[0] and len(instances) == 1 and ('read', 3) in trace, (trace, events)
     assert all(count >= 3 for op, count in trace if op == 'stop')
     assert source.commits == [0, 1, 1]
